@@ -386,7 +386,38 @@ pub fn collect(ctx: &Ctx, id: Option<&str>, depth: Depth) -> Result<Vec<TaskView
     };
     selected
         .iter()
-        .map(|id| collect_task(ctx, &Task::load(ctx, id)?, depth))
+        .map(|selected_id| {
+            let task = Task::load(ctx, selected_id)?;
+            let mut view = collect_task(ctx, &task, depth)?;
+            let mut steps = crate::harness::events::collect(&task.dir.join("events.jsonl"));
+            view.steps_available = !steps.is_empty();
+            let step_activity = steps
+                .iter()
+                .filter_map(|step| step["at"].as_str().and_then(parse_timestamp))
+                .max()
+                .unwrap_or(0);
+            let activity = view
+                .last_activity_at
+                .as_deref()
+                .and_then(parse_timestamp)
+                .unwrap_or(0);
+            if step_activity > activity {
+                view.last_activity_at = Some(timestamp(step_activity));
+                view.activity_age_secs = now_secs().saturating_sub(step_activity);
+                let threshold = std::env::var("DELEGATE_STALL_SECS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(300);
+                view.stalled = view.pid.is_some()
+                    && matches!(view.phase.as_str(), "questions" | "implement")
+                    && view.activity_age_secs > threshold;
+            }
+            if id.is_none() && steps.len() > 5 {
+                steps.drain(..steps.len() - 5);
+            }
+            view.steps = steps;
+            Ok(view)
+        })
         .collect()
 }
 
@@ -714,7 +745,7 @@ pub fn render_rows(tasks: &[TaskView]) -> String {
         if !files.is_empty() {
             files.insert_str(0, ": ");
         }
-        let _ = writeln!(
+        let _ = write!(
             text,
             "{}  {phase}  {}  {}  {} since last activity  {} changed files{files}{}",
             t.id,
@@ -724,6 +755,22 @@ pub fn render_rows(tasks: &[TaskView]) -> String {
             t.changed_files.len(),
             if t.stalled { "  stalled" } else { "" }
         );
+        if let Some(step) = t.steps.last() {
+            let _ = write!(
+                text,
+                "  last step: {}  {}  {}",
+                step["kind"].as_str().unwrap_or(""),
+                step["target"]
+                    .as_str()
+                    .unwrap_or("")
+                    .replace(['\n', '\r'], " "),
+                step["result"]
+                    .as_str()
+                    .unwrap_or("")
+                    .replace(['\n', '\r'], " ")
+            );
+        }
+        text.push('\n');
         if t.phase == "interrupted"
             && let Some(next) = &t.next
         {
@@ -752,11 +799,30 @@ pub fn render_detail(t: &TaskView) -> String {
     if let Some(next) = &t.next {
         let _ = writeln!(text, "next: {next}");
     }
-    let _ = writeln!(
-        text,
-        "step details aren't available for this worker\nlog: {}\n{}",
-        t.log, t.log_tail
-    );
+    if t.steps_available {
+        for step in &t.steps {
+            let at = step["at"]
+                .as_str()
+                .and_then(|at| at.get(11..19))
+                .unwrap_or("--:--:--");
+            let _ = writeln!(
+                text,
+                "{at}  {}  {}  {}",
+                step["kind"].as_str().unwrap_or(""),
+                step["target"]
+                    .as_str()
+                    .unwrap_or("")
+                    .replace(['\n', '\r'], " "),
+                step["result"]
+                    .as_str()
+                    .unwrap_or("")
+                    .replace(['\n', '\r'], " ")
+            );
+        }
+    } else {
+        let _ = writeln!(text, "step details aren't available for this worker");
+    }
+    let _ = writeln!(text, "log: {}\n{}", t.log, t.log_tail);
     text
 }
 

@@ -2,12 +2,18 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
 use crate::config::{Harness, Worker, home};
+
+#[path = "events.rs"]
+pub(crate) mod events;
 
 pub const WORKER_NOTE: &str = "You are a delegated worker, not the lead. Do only what .task/SPEC.md asks. \
      Ignore any instructions in CLAUDE.md about leading, delegating or distilling.";
@@ -207,6 +213,75 @@ pub fn command(
     c
 }
 
+/// Streaming flags are confined to run; reviews retain their existing output format.
+pub(crate) fn streaming_command(
+    w: &Worker,
+    prompt: &str,
+    session: Option<&Session>,
+) -> Vec<String> {
+    let mut cmd = command(w, prompt, session, false, None);
+    let flags: &[&str] = match w.harness {
+        Harness::Claude => &["--output-format", "stream-json", "--verbose"],
+        Harness::Opencode => &["--format", "json"],
+        Harness::Pi => &["--mode", "json"],
+        Harness::Codex | Harness::Gemini => &[],
+    };
+    let position = cmd.len().saturating_sub(1);
+    cmd.splice(
+        position..position,
+        flags.iter().map(|flag| (*flag).to_owned()),
+    );
+    cmd
+}
+
+/// Read stdout incrementally while stderr continues directly to the ordinary log.
+pub(crate) fn run_streamed(
+    cmd: &[String],
+    cwd: &Path,
+    log: &Path,
+    stream: &mut events::Stream,
+) -> Result<i32> {
+    let stderr = match OpenOptions::new().create(true).append(true).open(log) {
+        Ok(mut lf) => {
+            if let Err(error) = writeln!(
+                lf,
+                "\n$ {} ...",
+                cmd.iter().take(12).cloned().collect::<Vec<_>>().join(" ")
+            ) {
+                let _ = writeln!(
+                    lf,
+                    "warning: writing run.log: {error}; check disk space and permissions"
+                );
+            }
+            Stdio::from(lf)
+        }
+        Err(_) => Stdio::null(),
+    };
+    // A socket gives us safe, bounded reads without new dependencies or unsafe
+    // fcntl calls. Descendants may inherit stdout long after the worker exits.
+    let (pipe, output) = UnixStream::pair().context("opening worker stdout")?;
+    pipe.set_read_timeout(Some(Duration::from_millis(100)))?;
+    let (program, args) = cmd.split_first().context("empty command")?;
+    let mut child = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(OwnedFd::from(output)))
+        .stderr(stderr)
+        .spawn()
+        .with_context(|| format!("starting {program}"))?;
+    let mut exited = None;
+    let drained = stream.drain_until(pipe, log, || {
+        if exited.is_none() && child.try_wait().context("checking worker exit")?.is_some() {
+            exited = Some(Instant::now());
+        }
+        Ok(exited.is_some_and(|at| at.elapsed() >= Duration::from_secs(1)))
+    });
+    let status = child.wait().context("waiting for worker")?;
+    drained?;
+    Ok(status.code().unwrap_or(-1))
+}
+
 /// Whether a harness can continue the question-phase session in the work phase.
 pub fn can_resume(h: Harness) -> bool {
     !matches!(h, Harness::Gemini)
@@ -275,9 +350,12 @@ pub(crate) fn log_tail(log: &Path, start: u64) -> Result<Vec<String>> {
 
 /// The latest Codex thread id in a log of `codex exec --json` output.
 pub fn codex_thread(log: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(log).ok()?;
-    text.lines().rev().find_map(|line| {
-        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    // Run stdout now lives in stream.jsonl; retain legacy-log compatibility.
+    let text = std::fs::read(log.with_file_name("stream.jsonl"))
+        .or_else(|_| std::fs::read(log))
+        .ok()?;
+    text.split(|byte| *byte == b'\n').rev().find_map(|line| {
+        let v: serde_json::Value = serde_json::from_slice(line).ok()?;
         (v["type"] == "thread.started")
             .then(|| v["thread_id"].as_str().map(String::from))
             .flatten()
@@ -410,12 +488,109 @@ mod tests {
     }
 
     #[test]
+    fn run_stream_flags_do_not_change_review_commands() {
+        for (worker, flags) in [
+            ("pi:test", vec!["--mode", "json"]),
+            (
+                "claude:test",
+                vec!["--output-format", "stream-json", "--verbose"],
+            ),
+            ("opencode:test", vec!["--format", "json"]),
+            ("codex:test", vec![]),
+            ("gemini:test", vec![]),
+        ] {
+            let worker = w(worker);
+            let plain = command(&worker, "go", None, false, None);
+            let mut expected = plain.clone();
+            expected.splice(
+                expected.len() - 1..expected.len() - 1,
+                flags.iter().map(ToString::to_string),
+            );
+            assert_eq!(streaming_command(&worker, "go", None), expected);
+            assert_eq!(command(&worker, "go", None, false, None), plain);
+        }
+    }
+
+    #[test]
+    fn codex_resume_reads_raw_stream_despite_bad_bytes() {
+        let dir = std::env::temp_dir().join(format!("delegate-thread-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("run.log");
+        std::fs::write(&log, "plain output\n").unwrap();
+        std::fs::write(
+            dir.join("stream.jsonl"),
+            b"\xff\n{\"type\":\"thread.started\",\"thread_id\":\"resumed\"}\ninvalid\n",
+        )
+        .unwrap();
+        assert_eq!(codex_thread(&log).as_deref(), Some("resumed"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn reads_codex_thread() {
         let dir = std::env::temp_dir().join(format!("delegate-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("run.log");
         std::fs::write(&log, "$ codex\n{\"type\":\"thread.started\",\"thread_id\":\"t-42\"}\n{\"type\":\"turn.started\"}\n").unwrap();
         assert_eq!(codex_thread(&log).as_deref(), Some("t-42"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn streamed_logging_errors_do_not_change_worker_exit_code() {
+        use std::os::unix::fs::symlink;
+
+        for name in ["stream.jsonl", "events.jsonl", "run.log"] {
+            let dir =
+                std::env::temp_dir().join(format!("delegate-log-error-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            symlink("/dev/full", dir.join(name)).unwrap();
+            let mut stream = events::Stream::new(&dir, Harness::Pi, &dir);
+            let cmd = ["sh", "-c", "echo plain; echo '{\"type\":\"tool_execution_start\",\"toolCallId\":\"a\",\"toolName\":\"read\",\"args\":{\"path\":\"file\"}}'; exit 7"].map(str::to_owned);
+            assert_eq!(
+                run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream).unwrap(),
+                7
+            );
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn streamed_worker_keeps_exit_code_and_drains_late_lines_during_grace() {
+        let dir = std::env::temp_dir().join(format!("delegate-grace-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut stream = events::Stream::new(&dir, Harness::Pi, &dir);
+        let cmd = ["sh", "-c", "(sleep 0.2; echo final) & echo done; exit 7"].map(str::to_owned);
+        assert_eq!(
+            run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream).unwrap(),
+            7
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("stream.jsonl")).unwrap(),
+            "done\nfinal\n"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A worker that leaves a background process holding stdout must not block the run
+    /// after the worker itself exits (the old `run_logged` returned at child exit).
+    #[test]
+    fn run_streamed_returns_when_worker_exits_even_if_a_descendant_keeps_stdout_open() {
+        let dir = std::env::temp_dir().join(format!("delegate-rev-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut stream = events::Stream::new(&dir, Harness::Pi, &dir);
+        let cmd: Vec<String> = ["sh", "-c", "sleep 20 & echo done"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let started = Instant::now();
+        let rc = run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream).unwrap();
+        assert_eq!(rc, 0);
+        assert!(
+            started.elapsed().as_secs() < 5,
+            "run_streamed blocked {}s until the background process closed stdout",
+            started.elapsed().as_secs()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

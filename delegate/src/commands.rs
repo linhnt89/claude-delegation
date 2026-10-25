@@ -145,14 +145,11 @@ fn implement_attempt(
     operation: &Operation,
 ) -> Result<Attempt> {
     let task_dir = t.wt.join(".task");
+    let mut stream = harness::events::Stream::new(&t.dir, w.harness, &t.wt);
     let sb = harness::sandbox(Some(w.harness), &task_bounds(ctx, t)?, &t.wt)?;
-    let run = |session: Option<&Session>, prompt: &str| -> Result<i32> {
-        let cmd = [
-            sb.clone(),
-            harness::command(w, prompt, session, false, None),
-        ]
-        .concat();
-        harness::run_logged(&cmd, &t.wt, log, None)
+    let mut run = |session: Option<&Session>, prompt: &str| -> Result<i32> {
+        let cmd = [sb.clone(), harness::streaming_command(w, prompt, session)].concat();
+        harness::run_streamed(&cmd, &t.wt, log, &mut stream)
     };
     let mut session = harness::new_session(w.harness);
 
@@ -244,6 +241,12 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         )?;
         operation = Some(child_operation);
     }
+    if !a.dry_run && t.dir.is_dir() {
+        if operation.is_none() {
+            operation = Some(Operation::acquire(&t, "run")?);
+        }
+        harness::events::reset(&t.dir);
+    }
     if !a.dry_run && a.research && t.wt.is_dir() && t.worktree_dirty()? {
         bail!(
             "{}: the worktree has uncommitted changes; commit or discard them before a research run",
@@ -251,9 +254,6 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         );
     }
     let spec_text = t.spec_text()?;
-    if !a.dry_run && operation.is_none() {
-        operation = Some(Operation::acquire(&t, "run")?);
-    }
     // State may have changed between the first snapshot and obtaining the lock.
     t = Task::load(ctx, &a.id)?;
     let ask = asks_questions(&t, a);
@@ -1594,6 +1594,49 @@ mod tests {
                 "unfinished report\n"
             );
             assert_eq!(fs::read(t.dir.join("STATE.json"))?, state);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn run_clears_old_streams_before_preflight_can_fail() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        fs::write(t.wt.join("code"), "dirty research worktree\n")?;
+        for missing_spec in [false, true] {
+            fs::write(
+                t.dir.join("events.jsonl"),
+                "{\"id\":1,\"at\":\"2026-10-25T00:00:00Z\",\"kind\":\"read\",\"target\":\"old\",\"result\":null}\n",
+            )?;
+            fs::write(t.dir.join("stream.jsonl"), "old output\n")?;
+            if missing_spec {
+                fs::remove_file(&t.spec)?;
+            }
+            let args = RunArgs {
+                id: t.id.clone(),
+                tier: None,
+                worker: None,
+                questions: QuestionPhase::Never,
+                dry_run: false,
+                research: !missing_spec,
+                background: false,
+            };
+            let error = run(&ctx, &args).unwrap_err().to_string();
+            assert!(
+                error.contains(if missing_spec {
+                    "not found"
+                } else {
+                    "uncommitted changes"
+                }),
+                "{error}"
+            );
+            for name in ["events.jsonl", "stream.jsonl"] {
+                assert_eq!(fs::read(t.dir.join(name))?, Vec::<u8>::new());
+            }
+            if !missing_spec {
+                let views = status::collect(&ctx, Some(&t.id), status::Depth::Phase)?;
+                assert!(!views[0].steps_available);
+                assert_eq!(views[0].steps, Vec::<serde_json::Value>::new());
+            }
         }
         Ok(())
     }
