@@ -1,0 +1,6 @@
+{
+  "name": "delegate-pane",
+  "version": "0.1.0",
+  "description": "A pane beside the chat showing each delegate task's phase, worker and latest steps",
+  "types": "./types/index.d.ts"
+}

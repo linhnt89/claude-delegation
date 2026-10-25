@@ -34,6 +34,26 @@ const PROJECT_FILES: &[(&str, &str)] = &[
         include_str!("../templates/project/.claude/skills/evaluate/SKILL.md"),
     ),
     (
+        ".claude/skills/delegate-pane/.claude-plugin/plugin.json",
+        include_str!("../templates/project/.claude/skills/delegate-pane/.claude-plugin/plugin.json"),
+    ),
+    (
+        ".claude/skills/delegate-pane/hooks/hooks.json",
+        include_str!("../templates/project/.claude/skills/delegate-pane/hooks/hooks.json"),
+    ),
+    (
+        ".claude/skills/delegate-pane/hooks/register.tsx",
+        include_str!("../templates/project/.claude/skills/delegate-pane/hooks/register.tsx"),
+    ),
+    (
+        ".claude/skills/delegate-pane/hooks/register.test.tsx",
+        include_str!("../templates/project/.claude/skills/delegate-pane/hooks/register.test.tsx"),
+    ),
+    (
+        ".claude/skills/delegate-pane/types/index.d.ts",
+        include_str!("../templates/project/.claude/skills/delegate-pane/types/index.d.ts"),
+    ),
+    (
         "evals/README.md",
         include_str!("../templates/project/evals/README.md"),
     ),
