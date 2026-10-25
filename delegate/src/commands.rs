@@ -239,6 +239,44 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         return Ok(());
     }
 
+    if harness::needs_bwrap(
+        workers.iter().map(|w| w.harness),
+        a.research,
+        std::env::var("DELEGATE_SANDBOX").is_ok_and(|v| v == "0"),
+    ) {
+        harness::require_bwrap()?;
+    }
+    let mut available = Vec::new();
+    let mut missing = Vec::new();
+    let mut failures = String::new();
+    for w in workers {
+        if harness::on_path(w.harness.name()) {
+            available.push(w);
+        } else {
+            let reason = format!("{} is not installed (not on PATH)", w.harness.name());
+            println!("  {w} can't start: {reason}");
+            writeln!(failures, "  {w}: {reason}")?;
+            missing.push(reason);
+        }
+    }
+    if available.is_empty() {
+        let config_path = std::env::var_os("DELEGATE_WORKERS")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_file())
+            .unwrap_or_else(crate::config::user_config_path);
+        let fix = if a.worker.is_some() {
+            "install it or pick another --worker".to_string()
+        } else {
+            format!(
+                "install it or change [{}].{tier_label} in {}",
+                role.name(),
+                config_path.display()
+            )
+        };
+        missing.dedup();
+        bail!("no candidate can start: {}; {fix}", missing.join("; "));
+    }
+
     ensure_task_excluded(ctx)?;
     if !t.wt.is_dir() {
         let base = t.base(ctx)?;
@@ -274,10 +312,22 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     };
 
     let mut outcome = None;
-    for w in &workers {
+    for w in &available {
         println!("round {number}: {w} ...");
+        let log_start = match fs::metadata(&log) {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error.into()),
+        };
         match implement_attempt(ctx, &t, w, ask, a.research, &log)? {
-            Attempt::NotStarted => println!("  {w} failed to start, trying next candidate"),
+            Attempt::NotStarted => {
+                println!("  {w} failed to start, trying next candidate");
+                writeln!(failures, "  {w}:")?;
+                for line in harness::log_tail(&log, log_start)? {
+                    println!("    {line}");
+                    writeln!(failures, "    {line}")?;
+                }
+            }
             other => {
                 outcome = Some((w.clone(), other));
                 break;
@@ -287,7 +337,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     let Some((w, attempt)) = outcome else {
         t.state.rounds.push(round);
         t.save()?;
-        bail!("no candidate could start; see {}", log.display());
+        bail!("no candidate could start:\n{failures}see {}", log.display());
     };
     round.worker = Some(w.to_string());
 

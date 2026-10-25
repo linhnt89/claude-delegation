@@ -1,7 +1,7 @@
 //! Building and running worker commands, inside the bwrap sandbox.
 
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -45,9 +45,25 @@ fn state_dirs(harness: Option<Harness>) -> Vec<PathBuf> {
     dirs
 }
 
-fn on_path(program: &str) -> bool {
+pub(crate) fn on_path(program: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(program).is_file()))
+}
+
+/// Acceptance checks need bwrap even when every worker uses Codex's own sandbox.
+pub(crate) fn needs_bwrap(
+    candidates: impl IntoIterator<Item = Harness>,
+    research: bool,
+    sandbox_disabled: bool,
+) -> bool {
+    !sandbox_disabled && (!research || candidates.into_iter().any(|h| h != Harness::Codex))
+}
+
+pub(crate) fn require_bwrap() -> Result<()> {
+    if !on_path("bwrap") {
+        bail!("bwrap not found; install bubblewrap or set DELEGATE_SANDBOX=0");
+    }
+    Ok(())
 }
 
 /// bwrap prefix for a worker (or for acceptance checks when `harness` is None).
@@ -57,9 +73,7 @@ pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Resul
     {
         return Ok(vec![]);
     }
-    if !on_path("bwrap") {
-        bail!("bwrap not found; install bubblewrap or set DELEGATE_SANDBOX=0");
-    }
+    require_bwrap()?;
     let mut sb: Vec<String> = [
         "bwrap",
         "--die-with-parent",
@@ -237,6 +251,28 @@ pub fn run_logged(
     Ok(status.code().unwrap_or(-1))
 }
 
+fn last_log_lines(text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = text
+        .lines()
+        .rev()
+        // Skip the "$ <command>" header run_logged writes; only the worker's own words help.
+        .filter(|line| !line.trim().is_empty() && !line.starts_with("$ "))
+        .take(3)
+        .map(|line| line.chars().take(300).collect())
+        .collect();
+    lines.reverse();
+    lines
+}
+
+/// Last three non-empty lines written since this attempt's starting byte offset.
+pub(crate) fn log_tail(log: &Path, start: u64) -> Result<Vec<String>> {
+    let mut file = File::open(log)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(last_log_lines(&String::from_utf8_lossy(&bytes)))
+}
+
 /// The latest Codex thread id in a log of `codex exec --json` output.
 pub fn codex_thread(log: &Path) -> Option<String> {
     let text = std::fs::read_to_string(log).ok()?;
@@ -254,6 +290,59 @@ mod tests {
 
     fn w(s: &str) -> Worker {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn bwrap_is_needed_for_workers_or_acceptance_checks() {
+        for sandbox_disabled in [false, true] {
+            for research in [false, true] {
+                assert_eq!(
+                    needs_bwrap([Harness::Codex], research, sandbox_disabled),
+                    !sandbox_disabled && !research
+                );
+                for harness in [
+                    Harness::Pi,
+                    Harness::Claude,
+                    Harness::Opencode,
+                    Harness::Gemini,
+                ] {
+                    assert_eq!(
+                        needs_bwrap([Harness::Codex, harness], research, sandbox_disabled),
+                        !sandbox_disabled
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn log_tail_selects_last_three_non_empty_lines_in_order() {
+        assert_eq!(last_log_lines("\n \t\n"), Vec::<String>::new());
+        assert_eq!(last_log_lines("first\n\nsecond\n"), ["first", "second"]);
+        assert_eq!(
+            last_log_lines("old\nfirst\n \nsecond\r\n\t\nthird\n\n"),
+            ["first", "second", "third"]
+        );
+        assert_eq!(
+            last_log_lines("\n$ bwrap --die-with-parent pi -p\nError: 401 Unauthorized\n"),
+            ["Error: 401 Unauthorized"]
+        );
+    }
+
+    #[test]
+    fn log_tail_reads_only_current_attempt() {
+        let log = std::env::temp_dir().join(format!("delegate-log-{}", uuid::Uuid::new_v4()));
+        let previous = "old round\nold candidate\n";
+        std::fs::write(&log, format!("{previous}\n401 Unauthorized\n\n")).unwrap();
+        assert_eq!(
+            log_tail(&log, previous.len() as u64).unwrap(),
+            ["401 Unauthorized"]
+        );
+        assert_eq!(
+            log_tail(&log, std::fs::metadata(&log).unwrap().len()).unwrap(),
+            Vec::<String>::new()
+        );
+        std::fs::remove_file(log).unwrap();
     }
 
     #[test]
