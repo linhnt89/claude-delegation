@@ -52,7 +52,7 @@ def statusline():
     return p.stdout
 
 def watch_frame():
-    p = subprocess.Popen([DELEGATE, "watch"], cwd=PROJ, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    p = subprocess.Popen(["env", "--default-signal=INT", DELEGATE, "watch"], cwd=PROJ, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     lines, end = [], time.time() + 6
     try:
         for line in p.stdout:

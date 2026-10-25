@@ -35,7 +35,7 @@ pkill -KILL -f "model gpt-dies" 2>/dev/null
 wait_field 30 t002 phase checks || fail "setup: t002 never reached checks"
 wait_field 30 t001 phase implement || fail "setup: t001 never started"
 
-(cd "$PROJ" && exec "$DELEGATE" watch >"$EVALS_WORK/watch.out" 2>&1) & wpid=$!
+(cd "$PROJ" && exec env --default-signal=INT "$DELEGATE" watch >"$EVALS_WORK/watch.out" 2>&1) & wpid=$!
 sleep 4; flag go-t001
 wait_until 15 grep -q test_held "$EVALS_WORK/watch.out" || fail "watch didn't refresh by itself to show t001's new file"
 kill -INT "$wpid"; wait "$wpid"; wrc=$?
@@ -56,7 +56,7 @@ for view in watch status; do
   row "$text" t001 | grep -Eq '[0-9]+(s|m)' || fail "$view: t001's row shows no times"
 done
 if command -v script >/dev/null; then
-  (cd "$PROJ" && exec script -qfc "$DELEGATE watch" "$EVALS_WORK/tty.out" >/dev/null 2>&1 </dev/null) & tpid=$!
+  (cd "$PROJ" && exec env --default-signal=INT script -qfc "env --default-signal=INT $DELEGATE watch" "$EVALS_WORK/tty.out" >/dev/null 2>&1 </dev/null) & tpid=$!
   sleep 3; pkill -INT -f "$DELEGATE watch" 2>/dev/null
   wait_until 3 bash -c "! kill -0 $tpid 2>/dev/null" || fail "watch in a terminal didn't stop within 3s of Ctrl-C"
   t="$(cat "$EVALS_WORK/tty.out")"

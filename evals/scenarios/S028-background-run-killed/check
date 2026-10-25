@@ -20,9 +20,9 @@ echo "$OUT" | grep -qi interrupted || fail "status doesn't say interrupted: $OUT
 echo "$OUT" | grep -q "delegate run t001" && echo "$OUT" | grep -q "delegate discard t001" \
   || fail "status doesn't say to run again or discard: $OUT"
 echo "$OUT" | grep -Eqi "running|stalled|pass" && fail "status still calls the killed run running, stalled or passed: $OUT"
-(cd "$PROJ" && exec "$DELEGATE" watch >"$EVALS_WORK/watch.out" 2>&1) & w=$!
+(cd "$PROJ" && exec env --default-signal=INT "$DELEGATE" watch >"$EVALS_WORK/watch.out" 2>&1) & w=$!
 sleep 2.5; kill -INT "$w" 2>/dev/null; wait "$w" 2>/dev/null
-grep t001 "$EVALS_WORK/watch.out" | tail -1 | grep -qi interrupted || fail "watch doesn't show t001 interrupted: $(grep t001 "$EVALS_WORK/watch.out" | tail -1)"
+grep '^ *t001 ' "$EVALS_WORK/watch.out" | tail -1 | grep -qi interrupted || fail "watch doesn't show t001 interrupted: $(grep '^ *t001 ' "$EVALS_WORK/watch.out" | tail -1)"
 d list
 echo "$OUT" | grep '^t001' | grep -qi interrupt || fail "list doesn't show t001 interrupted: $(echo "$OUT" | grep '^t001')"
 pass "after the background run was killed, status, watch and list all said interrupted, with what to do next"
