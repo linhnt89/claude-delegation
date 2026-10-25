@@ -16,7 +16,10 @@ adapter for now (2026-10-25): its runs get the basic view, like any worker witho
 Step rules the recordings follow: one step per tool call (two edits of one file are two
 steps); a command's result starts with `ok` when it exits 0 and `failed` otherwise; a reply
 to the user is a `message`, with its first words as the target; empty (redacted) thinking
-is not a step.
+is not a step. Tools without a better kind still make one step each: search and
+listing tools (Grep, Glob, LS, find, web fetch) are `read` with the pattern, path or URL as
+target; MultiEdit is `edit`; anything else is `run` with the tool's name and main argument.
+A Codex command's target is the command without its `bash -lc` wrapper.
 
 `<harness>-fail.*` are a second recording per harness in which a command fails before it
 passes (prompt below), so a failed result is checked too.
