@@ -109,7 +109,7 @@ enum Cmd {
         #[arg(long)]
         timeout: Option<String>,
     },
-    /// Follow task progress (not built yet)
+    /// Follow every task (or one) in the terminal, refreshing every few seconds
     Watch {
         id: Option<String>,
         #[arg(long, default_value_t = 2.0)]
