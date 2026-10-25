@@ -106,7 +106,7 @@ enum Cmd {
         #[arg(long, default_value_t = 2.0)]
         interval: f64,
     },
-    /// Claude Code status line (not built yet)
+    /// Claude Code status line: one line of running tasks on stdin's project
     Statusline,
     /// Show every task's round, tier, checks and review
     List,
@@ -126,9 +126,14 @@ fn dispatch(cmd: Cmd) -> Result<()> {
         let dir = dir.clone().map_or_else(std::env::current_dir, Ok)?;
         return init::init(&dir);
     }
+    // The status line also runs outside a project, so it builds its own context.
+    if let Cmd::Statusline = &cmd {
+        statusline::run();
+        return Ok(());
+    }
     let ctx = Ctx::discover()?;
     match cmd {
-        Cmd::Init { .. } => unreachable!("handled above"),
+        Cmd::Init { .. } | Cmd::Statusline => unreachable!("handled above"),
         Cmd::New { id, prune } => commands::new(&ctx, &id, prune),
         Cmd::Run {
             id,
@@ -173,7 +178,6 @@ fn dispatch(cmd: Cmd) -> Result<()> {
         } => commands::plan_review(&ctx, &ids, tier, worker.as_deref(), dry_run),
         Cmd::Status { id, json } => status::run(&ctx, id.as_deref(), json),
         Cmd::Watch { id, interval } => watch::run(&ctx, id.as_deref(), interval),
-        Cmd::Statusline => statusline::run(&ctx),
         Cmd::List => commands::list(&ctx),
         Cmd::Merge {
             id,

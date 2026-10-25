@@ -51,6 +51,54 @@ const PROJECT_FILES: &[(&str, &str)] = &[
 /// Project files that must be executable.
 const EXECUTABLE: &[&str] = &["evals/run"];
 
+/// Claude Code's settings file and the status line command we install there.
+const CLAUDE_SETTINGS: &str = ".claude/settings.json";
+const STATUS_LINE: &str = "delegate statusline";
+
+fn status_line() -> serde_json::Value {
+    serde_json::json!({"type": "command", "command": STATUS_LINE})
+}
+
+/// Add `statusLine` to Claude Code's settings without ever replacing the user's
+/// own line or their other settings; an unreadable file is left untouched.
+fn configure_status_line(root: &Path) -> Result<()> {
+    let path = root.join(CLAUDE_SETTINGS);
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let settings = serde_json::json!({"statusLine": status_line()});
+        fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&settings)?))?;
+        println!("added    {CLAUDE_SETTINGS} (Claude Code status line)");
+        return Ok(());
+    }
+    let Ok(mut settings) = serde_json::from_slice::<serde_json::Value>(&fs::read(&path)?) else {
+        println!(
+            "kept     {CLAUDE_SETTINGS} (not valid JSON; left as is, fix it and run delegate init again)"
+        );
+        return Ok(());
+    };
+    let Some(object) = settings.as_object_mut() else {
+        println!(
+            "kept     {CLAUDE_SETTINGS} (not a JSON object; add the status line by hand)"
+        );
+        return Ok(());
+    };
+    if object.contains_key("statusLine") {
+        println!(
+            "kept     {CLAUDE_SETTINGS} (has its own status line; run `{STATUS_LINE}` from yours to show tasks)"
+        );
+        return Ok(());
+    }
+    object.insert("statusLine".into(), status_line());
+    fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(&settings)?),
+    )?;
+    println!("added    status line to {CLAUDE_SETTINGS}");
+    Ok(())
+}
+
 fn write_new(path: &Path, content: &str, label: &str) -> Result<()> {
     if path.exists() {
         println!("skipped  {label} (exists)");
@@ -75,6 +123,7 @@ pub fn init(dir: &Path) -> Result<()> {
     for (rel, content) in PROJECT_FILES {
         write_new(&root.join(rel), content, rel)?;
     }
+    configure_status_line(root)?;
     let cfg = user_config_path();
     write_new(
         &cfg,
