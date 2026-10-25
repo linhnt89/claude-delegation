@@ -9,6 +9,7 @@ mod spec;
 mod status;
 mod statusline;
 mod task;
+mod wait;
 mod watch;
 
 use std::path::PathBuf;
@@ -100,6 +101,14 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Block until a task finishes, is interrupted or stalls
+    Wait {
+        /// Tasks to watch (default: every running task)
+        ids: Vec<String>,
+        /// Give up after this long, e.g. 90s or 25m, and exit 3
+        #[arg(long)]
+        timeout: Option<String>,
+    },
     /// Follow task progress (not built yet)
     Watch {
         id: Option<String>,
@@ -121,19 +130,23 @@ enum Cmd {
     Discard { id: String },
 }
 
-fn dispatch(cmd: Cmd) -> Result<()> {
+fn dispatch(cmd: Cmd) -> Result<ExitCode> {
     if let Cmd::Init { dir } = &cmd {
         let dir = dir.clone().map_or_else(std::env::current_dir, Ok)?;
-        return init::init(&dir);
+        init::init(&dir)?;
+        return Ok(ExitCode::SUCCESS);
     }
     // The status line also runs outside a project, so it builds its own context.
     if let Cmd::Statusline = &cmd {
         statusline::run();
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
     let ctx = Ctx::discover()?;
+    if let Cmd::Wait { ids, timeout } = &cmd {
+        return wait::run(&ctx, ids, timeout.as_deref());
+    }
     match cmd {
-        Cmd::Init { .. } | Cmd::Statusline => unreachable!("handled above"),
+        Cmd::Init { .. } | Cmd::Wait { .. } | Cmd::Statusline => unreachable!("handled above"),
         Cmd::New { id, prune } => commands::new(&ctx, &id, prune),
         Cmd::Run {
             id,
@@ -184,12 +197,13 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             accept_findings,
         } => commands::merge(&ctx, &id, accept_findings),
         Cmd::Discard { id } => commands::discard(&ctx, &id),
-    }
+    }?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn main() -> ExitCode {
     match dispatch(Cli::parse().cmd) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(e) => {
             eprintln!("error: {e:#}");
             ExitCode::FAILURE

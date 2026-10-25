@@ -46,6 +46,18 @@ they change it, run in the background:
 
     delegate run --background <id> [--tier fast|standard|deep]
 
+Then start a wait as another background command, so the harness wakes you when something
+happens instead of polling:
+
+    delegate wait <id> --timeout 25m
+
+Act on what `wait` printed when it exits:
+- `<id> done, <outcome>` — review the result (steps 5 and 6).
+- `<id> interrupted` — read the run log, then `delegate run <id>` again or `delegate discard <id>`.
+- `<id> stalled in <phase> for <duration>` — check the last step, the worker's processes and
+  the log tail; then wait again, stop it and rerun, or tell the user.
+- nothing happened yet (exit 3) — it timed out; start `delegate wait <id> --timeout 25m` again.
+
 What happens:
 - **Question phase** (first round): the worker reads the spec and code and answers `READY` or
   asks blocking questions, with no edits. If it asks, the run stops and prints them. Answer
