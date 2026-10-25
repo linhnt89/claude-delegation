@@ -23,6 +23,7 @@ other models doing the implementation.
   commands, bwrap), `task.rs` (state), `spec.rs`, `prompts.rs`, `init.rs`
 - `delegate/templates/` — spec/report templates; `project/` is what `delegate init` installs
 - `evals/` — user scenarios with executable checks; `evals/lib/` shared setup and stand-in workers
+- `evals/lib/streams/` — recorded worker streams for checks; their `.steps` files are written by the lead, never by an adapter's author
 
 ## Conventions
 - Errors go through `anyhow` with `bail!`/`context`; messages say what to do next.

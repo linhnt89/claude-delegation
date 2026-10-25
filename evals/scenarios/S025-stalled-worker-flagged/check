@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# A worker goes quiet past the stall threshold, then picks up again.
+. "$EVALS_LIB/common.sh"
+setup_project
+install_stub claude
+[ -f "$EVALS_LIB/streams/claude.steps" ] || fail "no recorded claude stream yet; this check needs one for the last step (evals/lib/streams/README.md)"
+trap 'flag wake; flag end; kill_runs' EXIT
+export DELEGATE_STALL_SECS=4
+stub_worker claude-quiet <<'B'
+work() {
+  replay claude 0.05
+  printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
+  wait_flag wake
+  printf '\n# more\n' >>shop/pricing.py
+  wait_flag end
+}
+B
+write_spec t001 "Split a bill" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
+bg_run t001 --no-ask --worker claude:claude-quiet@high
+[ "$RC" -eq 0 ] || fail "run --background failed: $OUT"
+wait_until 30 grep -q pricing.py <<<"$(sj 's["tasks"][0]["changed_files"]' t001)" || fail "setup: the worker's edit never showed"
+[ "$(sj 's["tasks"][0]["stalled"]' t001)" = false ] || fail "flagged as stalled right after the worker's last edit"
+sleep 6
+[ "$(sj 's["tasks"][0]["stalled"]' t001)" = true ] || fail "not flagged as stalled after 6s of quiet with a 4s threshold"
+pid="$(sj 's["tasks"][0]["pid"]' t001)"; kill -0 "$pid" 2>/dev/null || fail "the stall flag stopped the run"
+d status t001
+echo "$OUT" | grep -qi stall || fail "status doesn't say the task is stalled: $OUT"
+echo "$OUT" | grep -Eq '[0-9]+s' || fail "status doesn't say how long it has been quiet: $OUT"
+last="$(tail -1 "$EVALS_LIB/streams/claude.steps" | cut -f3)"
+echo "$OUT" | grep -qF "$last" || fail "status doesn't show the last step ('$last'): $OUT"
+flag wake
+wait_until 5 test "$(sj 's["tasks"][0]["stalled"]' t001)" = false || fail "the stall flag didn't clear once the worker made a change again"
+pass "the quiet worker was flagged stalled with how long and its last step, wasn't stopped, and the flag cleared on new activity"

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Each harness's recorded stream, replayed by a stand-in, shows up as steps while it runs.
+. "$EVALS_LIB/common.sh"
+setup_project
+trap kill_runs EXIT
+HARNESSES="claude codex opencode gemini pi"
+missing=""
+n=0
+for h in $HARNESSES; do
+  [ -f "$EVALS_LIB/streams/$h.jsonl" ] && [ -f "$EVALS_LIB/streams/$h.steps" ] || { missing="$missing $h"; continue; }
+  n=$((n + 1)); id="$(printf 't%03d' "$n")"
+  [ "$h" = pi ] || install_stub "$h"
+  stub_worker "$h-steps" <<B
+work() {
+  printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
+  replay $h 0.5
+}
+B
+  write_spec "$id" "Split a bill ($h)" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
+  rm -f "$HOME/.cache/stub/replayed"
+  bg_run "$id" --no-ask --worker "$h:$h-steps@high"
+  [ "$RC" -eq 0 ] || fail "$h: run --background failed: $OUT"
+  # Poll status while it runs; note when each step is first seen.
+  : >"$EVALS_WORK/seen-$h"
+  end=$(( $(date +%s) + 120 ))
+  while :; do
+    (cd "$PROJ" && "$DELEGATE" status "$id" --json 2>/dev/null) >"$EVALS_WORK/now.json"
+    python3 - "$EVALS_WORK/seen-$h" "$(date +%s.%N)" "$EVALS_WORK/now.json" <<'PY'
+import json, sys
+try: steps = json.load(open(sys.argv[3]))["tasks"][0]["steps"]
+except Exception: sys.exit(0)
+seen = open(sys.argv[1]).read().split("\n")
+known = len([x for x in seen if x])
+with open(sys.argv[1], "a") as f:
+    for st in steps[known:]: f.write(f"{sys.argv[2]}\n")
+PY
+    ph="$(python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1]))["tasks"][0]["phase"])
+except Exception: pass' "$EVALS_WORK/now.json")"
+    [ "$ph" = done ] && break
+    [ "$(date +%s)" -ge "$end" ] && fail "$h: the run never finished (phase '$ph')"
+    sleep 0.3
+  done
+  (cd "$PROJ" && "$DELEGATE" status "$id" --json) >"$EVALS_WORK/final.json"
+  python3 - "$h" "$EVALS_LIB/streams/$h.steps" "$HOME/.cache/stub/replayed" "$EVALS_WORK/seen-$h" "$EVALS_WORK/final.json" <<'PY' || exit 1
+import json, sys
+h, exp_f, rep_f, seen_f, final_f = sys.argv[1:6]
+shown = json.load(open(final_f))["tasks"][0]["steps"]
+exp = [l.split("\t") for l in open(exp_f).read().splitlines() if l.strip()]
+rep = {int(a): float(b) for a, b in (l.split() for l in open(rep_f).read().splitlines())}
+seen = [float(x) for x in open(seen_f).read().split()]
+def show(st): return f'{st.get("kind")} {st.get("target")} {st.get("result") or ""}'.strip()
+if len(shown) != len(exp):
+    print(f"FAIL: {h}: status shows {len(shown)} steps, the stream has {len(exp)}: " + "; ".join(map(show, shown))); sys.exit(1)
+for i, (e, st) in enumerate(zip(exp, shown)):
+    line, kind, target = int(e[0]), e[1], e[2]
+    result = e[3] if len(e) > 3 else ""
+    ok = st.get("kind") == kind and target in (st.get("target") or "") and result.lower() in (st.get("result") or "").lower()
+    if not ok:
+        print(f"FAIL: {h}: step {i + 1} shows '{show(st)}', expected '{kind} {target} {result}'".rstrip("' ") + "'"); sys.exit(1)
+    if i < len(seen) and line in rep and seen[i] - rep[line] > 3:
+        print(f"FAIL: {h}: step {i + 1} ({kind} {target}) showed up {seen[i] - rep[line]:.1f}s after the worker did it"); sys.exit(1)
+PY
+  d status "$id"
+  last="$(tail -1 "$EVALS_LIB/streams/$h.steps" | cut -f3)"
+  echo "$OUT" | grep -qF "$last" || fail "$h: status $id (human view) doesn't show the last step's target '$last': $OUT"
+done
+[ -z "$missing" ] || fail "no recorded stream yet for:$missing (evals/lib/streams/README.md)"
+pass "steps from all $n harnesses showed up in order, each within 3s of the worker doing it"

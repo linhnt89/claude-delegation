@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Start a run in the background from a shell that then exits, and follow it with status.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-slow gpt-slow gpt-slow
+trap kill_runs EXIT
+stub_worker gpt-slow <<'B'
+work() {
+  sleep 3
+  printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
+  sleep 3
+  printf 'import unittest\nfrom shop.pricing import divide_bill\n\nclass SplitTest(unittest.TestCase):\n    def test_split(self):\n        self.assertEqual(divide_bill(10, 4), 2.5)\n' >tests/test_split.py
+  sleep 6
+}
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q" "grep -q divide_bill shop/pricing.py"
+t0=$(date +%s); bg_run t001; took=$(( $(date +%s) - t0 ))
+[ "$RC" -eq 0 ] || fail "run --background failed: $OUT"
+[ "$took" -le 5 ] || fail "run --background took ${took}s to give the shell back (or kept its output open)"
+echo "$OUT" | grep -q "t001" && echo "$OUT" | grep -q "delegate status t001" \
+  || fail "run --background didn't say how to follow the run: '$OUT'"
+pid="$(sj 's["tasks"][0]["pid"]' t001)"
+[ -n "$pid" ] && [ "$pid" != null ] && kill -0 "$pid" 2>/dev/null || fail "status --json gives no live pid for the background run"
+[ "$(ps -o sid= -p "$pid" | tr -d ' ')" != "$(ps -o sid= -p $$ | tr -d ' ')" ] \
+  || fail "the background run is in the starting terminal's session, so closing it would kill the run"
+wait_until 15 test "$(sj 's["tasks"][0]["phase"]' t001)" = implement || fail "status never showed the implement phase: $(sj 's' t001)"
+wait_until 15 grep -q pricing.py <<<"$(sj 's["tasks"][0]["changed_files"]' t001)" \
+  || fail "status didn't show the file the worker changed: $(sj 's["tasks"][0]' t001)"
+d status t001
+for want in implement gpt-slow pricing.py; do
+  echo "$OUT" | grep -q "$want" || fail "status t001 while running doesn't show '$want': $OUT"
+done
+echo "$OUT" | grep -Eq '[0-9]+(s|m)' || fail "status t001 shows no elapsed time: $OUT"
+wait_until 60 test "$(sj 's["tasks"][0]["phase"]' t001)" = done || fail "status never showed the run as done: $(sj 's' t001)"
+[ "$(sj 's["tasks"][0]["outcome"]' t001)" = pass ] || fail "status shows outcome '$(sj 's["tasks"][0]["outcome"]' t001)', expected pass"
+d status t001
+echo "$OUT" | grep -qi "pass" && echo "$OUT" | grep -q "delegate merge t001" \
+  || fail "status after the run doesn't show the outcome and the next step (delegate merge t001): $OUT"
+
+# A run that can't start fails in the foreground and leaves nothing running.
+write_spec t002 "Test discounts" "Cover discount." "python3 -m unittest -q"
+saved="$PATH"; minimal_path bwrap timeout setsid ps
+t0=$(date +%s); bg_run t002 --worker codex:gpt-x@high; took=$(( $(date +%s) - t0 )); PATH="$saved"
+[ "$RC" -ne 0 ] || fail "run --background with a missing harness reported success: $OUT"
+[ "$took" -le 5 ] || fail "a run that can't start took ${took}s to fail"
+echo "$OUT" | grep -q codex || fail "the failure doesn't name the missing harness: $OUT"
+p2="$(sj 's["tasks"][0]["pid"]' t002)"
+[ -z "$p2" ] || [ "$p2" = null ] || fail "a run that couldn't start left a process ($p2)"
+git -C "$PROJ" worktree list | grep -q t002 && fail "a run that couldn't start left a worktree"
+pass "the background run outlived its shell, status followed it to a pass with the next step, and a run that couldn't start failed in the foreground"

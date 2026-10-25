@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Four tasks in four states, seen at once with watch and status.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-quick gpt-quick gpt-quick
+wpid=""
+trap 'flag go-t001; kill $wpid 2>/dev/null; kill_runs' EXIT
+d status
+echo "$OUT" | grep -q "delegate new" || fail "status with no tasks doesn't say how to start one: '$OUT'"
+
+stub_worker gpt-quick <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; }
+B
+stub_worker gpt-held <<'B'
+work() { wait_flag go-t001; printf 'import unittest\n' >tests/test_held.py; wait_flag end-t001; }
+B
+stub_worker gpt-slowcheck <<'B'
+work() { printf '\n# checked slowly\n' >>shop/__init__.py; }
+B
+stub_worker gpt-dies <<'B'
+work() { printf '\n# about to die\n' >>README.md; sleep 120; }
+B
+write_spec t001 "Held" "Wait for the check." "true"
+write_spec t002 "Slow checks" "Checks take a while." "sleep 60"
+write_spec t003 "Quick" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
+write_spec t004 "Dies" "Gets killed." "true"
+bg_run t003 --worker pi:gpt-quick@high
+wait_until 60 test "$(sj 's["tasks"][0]["phase"]' t003)" = done || fail "setup: t003 never finished"
+bg_run t001 --worker pi:gpt-held@high
+bg_run t002 --worker pi:gpt-slowcheck@high
+bg_run t004 --worker pi:gpt-dies@high
+wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t004)" = implement || fail "setup: t004 never started"
+p4="$(sj 's["tasks"][0]["pid"]' t004)"; kill -KILL -- -"$p4" 2>/dev/null; kill -KILL "$p4" 2>/dev/null
+pkill -KILL -f "model gpt-dies" 2>/dev/null
+wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t002)" = checks || fail "setup: t002 never reached checks"
+wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t001)" = implement || fail "setup: t001 never started"
+
+(cd "$PROJ" && exec "$DELEGATE" watch >"$EVALS_WORK/watch.out" 2>&1) & wpid=$!
+sleep 4; flag go-t001
+wait_until 15 grep -q test_held "$EVALS_WORK/watch.out" || fail "watch didn't refresh by itself to show t001's new file"
+kill -INT "$wpid"; wait "$wpid"; wrc=$?
+[ "$wrc" -eq 0 ] || [ "$wrc" -eq 130 ] || fail "watch exited with $wrc on Ctrl-C"
+frames="$(grep -c '^delegate watch' "$EVALS_WORK/watch.out")"
+[ "$frames" -ge 2 ] || fail "watch printed $frames refreshes in ~5s (each starts with 'delegate watch')"
+last="$(awk '/^delegate watch/{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' "$EVALS_WORK/watch.out")"
+row() { echo "$1" | grep "^ *$2 "; }
+for view in watch status; do
+  if [ "$view" = status ]; then d status; text="$OUT"; else text="$last"; fi
+  row "$text" t001 | grep -q implement || fail "$view: t001 isn't shown implementing: $(row "$text" t001)"
+  row "$text" t001 | grep -q gpt-held || fail "$view: t001's row doesn't name its worker: $(row "$text" t001)"
+  row "$text" t002 | grep -q checks || fail "$view: t002 isn't shown running checks: $(row "$text" t002)"
+  row "$text" t003 | grep -qi "merge" || fail "$view: t003 isn't shown ready to merge: $(row "$text" t003)"
+  row "$text" t004 | grep -qi interrupted || fail "$view: t004 isn't shown interrupted: $(row "$text" t004)"
+  echo "$text" | grep -q "discard t004\|run t004" || fail "$view: nothing says what to do about interrupted t004"
+  row "$text" t001 | grep -q test_held || fail "$view: t001's row doesn't show its changed file"
+  row "$text" t001 | grep -Eq '[0-9]+(s|m)' || fail "$view: t001's row shows no times"
+done
+if command -v script >/dev/null; then
+  (cd "$PROJ" && exec script -qfc "$DELEGATE watch" "$EVALS_WORK/tty.out" >/dev/null 2>&1 </dev/null) & tpid=$!
+  sleep 3; pkill -INT -f "$DELEGATE watch" 2>/dev/null
+  wait_until 3 bash -c "! kill -0 $tpid 2>/dev/null" || fail "watch in a terminal didn't stop within 3s of Ctrl-C"
+  t="$(cat "$EVALS_WORK/tty.out")"
+  for pair in '?1049h:?1049l' '?25l:?25h'; do
+    on="${pair%%:*}"; off="${pair##*:}"
+    [[ "$t" == *$'\e['"$on"* ]] && [[ "$t" != *$'\e['"$off"* ]] && fail "watch left the terminal changed after Ctrl-C (sent ESC[$on, never ESC[$off)"
+  done
+fi
+pass "watch and status showed all four tasks with phase, worker, times and files; watch refreshed itself and exited cleanly"

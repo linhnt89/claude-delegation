@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Judged by a human: the side pane in the Claude Code desktop app.
+cat <<'T'
+In a project set up with `delegate init`, start two runs with `delegate run --background`
+(one with a worker that streams steps, one that goes quiet past the stall threshold), then
+open the delegate pane in the Claude Code desktop app and watch it for a minute.
+Look for:
+- each task with phase, worker, elapsed time and files changed; latest steps of running tasks
+- it updates by itself; the stalled task stands out
+- no tasks: it says so instead of looking broken
+- right in light and dark mode
+Pass if all hold.
+T
+exit 2

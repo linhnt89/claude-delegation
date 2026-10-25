@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/common.sh"
+setup_project
+ln -sf "$DELEGATE" "$EVALS_WORK/bin/delegate"
+trap kill_runs EXIT
+exec python3 - "$@" <<'PY'
+import json, os, re, signal, subprocess, sys, time
+sys.path.insert(0, os.environ["EVALS_LIB"])
+from kit import *
+
+# For any mix of foreground and background runs that pass, fail or get killed, in any order:
+# status, status --json, watch, the status line and list agree, and say what is true.
+workers('[defaults]\nimplement = "standard"\nresearch = "fast"\nreview = "standard"\nplan_review = "standard"\n'
+        '[implement]\nfast = ["pi:gpt-ctl@high"]\nstandard = ["pi:gpt-ctl@high"]\ndeep = ["pi:gpt-ctl@high"]\n')
+stub("gpt-ctl", r'''
+tid="$(sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md 2>/dev/null)"
+work() {
+  printf '# started\n' >"shop/split_${tid}.py"
+  m="$(wait_flag "go-$tid" 300)"
+  case "$m" in pass) printf '%s' "$GOOD_PY" >"shop/split_${tid}.py" ;; fail) printf '%s' "$BAD_PY" >"shop/split_${tid}.py" ;; esac
+}
+''')
+save_template()
+SETTINGS = os.path.join(PROJ, ".claude/settings.json")
+
+def status():
+    rc, out = d("status", "--json")
+    try: return {t["id"]: t for t in json.loads(out)["tasks"]}
+    except Exception: return None
+
+def alive(pid):
+    try: os.kill(int(pid), 0); return True
+    except Exception: return False
+
+def wait_phase(tid, want, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        s = status() or {}
+        if s.get(tid, {}).get("phase") in want: return True
+        time.sleep(0.2)
+    return False
+
+def statusline():
+    cmd = json.load(open(SETTINGS))["statusLine"]["command"]
+    p = subprocess.run(["bash", "-c", cmd], cwd=PROJ, input=json.dumps({"cwd": PROJ, "workspace": {"current_dir": PROJ}}),
+                       capture_output=True, text=True, timeout=10)
+    return p.stdout
+
+def watch_frame():
+    p = subprocess.Popen([DELEGATE, "watch"], cwd=PROJ, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    lines, end = [], time.time() + 6
+    try:
+        for line in p.stdout:
+            if line.startswith("delegate watch") and lines: break
+            lines.append(line)
+            if time.time() > end: break
+    finally:
+        p.send_signal(signal.SIGINT)
+        try: p.wait(3)
+        except Exception: p.kill()
+    return "".join(lines)
+
+def row(text, tid):
+    return " ".join(l for l in text.splitlines() if re.match(rf"^\s*{tid}\b", l))
+
+def check(model, when):
+    s = status()
+    if s is None: return f"{when}: status --json gave no valid JSON"
+    _, human = d("status"); _, lst = d("list")
+    frame, line = watch_frame(), statusline()
+    for tid, (ph, outcome) in model.items():
+        t = s.get(tid)
+        if not t: return f"{when}: status --json lacks {tid}"
+        if t["phase"] != ph: return f"{when}: status --json says {tid} is {t['phase']}, it is {ph}"
+        if ph == "done" and t.get("outcome") != outcome: return f"{when}: status --json says {tid} {t.get('outcome')}, it is {outcome}"
+        if (ph == "implement") != alive(t.get("pid") or 0): return f"{when}: {tid} is {ph} but its process is {'alive' if alive(t.get('pid') or 0) else 'gone'}"
+        for name, text in (("status", human), ("watch", frame)):
+            r = row(text, tid)
+            if ph not in r: return f"{when}: {name} shows {tid} as '{r}', it is {ph}"
+            if ph == "done" and outcome not in r.lower(): return f"{when}: {name} shows {tid} as '{r}', checks {outcome}"
+        r = row(lst, tid)
+        want = {"implement": r"running|implement", "done": rf"done, checks {'pass' if outcome == 'pass' else 'FAIL'}", "interrupted": r"interrupt"}[ph]
+        if not re.search(want, r) or "not run" in r: return f"{when}: list shows {tid} as '{r}', it is {ph} {outcome or ''}"
+        if ph == "implement" and tid not in line: return f"{when}: the status line '{line.strip()}' leaves out running {tid}"
+        if ph != "implement" and re.search(rf"{tid}\S*\s+implement", line): return f"{when}: the status line '{line.strip()}' still shows {tid} implementing"
+    return None
+
+def play(case):
+    fresh()
+    tasks, order = case
+    fg = {}
+    model = {}
+    for tid, how, _ in tasks:
+        spec(tid, (task_cmd(tid),))
+        if how == "bg": d("run", "--background", tid)
+        else: fg[tid] = subprocess.Popen([DELEGATE, "run", tid], cwd=PROJ, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        model[tid] = ("implement", None)
+    for tid, _, _ in tasks:
+        if not wait_phase(tid, {"implement"}, 30): return f"{tid} never showed as implement: {(status() or {}).get(tid)}"
+    problem = check(model, "with every run in progress")
+    if problem: return problem
+    fates = {tid: fate for tid, _, fate in tasks}
+    for tid in order:
+        fate = fates[tid]
+        if fate == "kill":
+            pid = (status() or {}).get(tid, {}).get("pid")
+            for p in filter(None, [pid, fg.get(tid) and fg[tid].pid]):
+                try: os.killpg(int(p), signal.SIGKILL)
+                except Exception: pass
+                try: os.kill(int(p), signal.SIGKILL)
+                except Exception: pass
+            model[tid] = ("interrupted", None)
+            if not wait_phase(tid, {"interrupted"}, 10): return f"10s after killing {tid}, status shows {(status() or {}).get(tid, {}).get('phase')}"
+        else:
+            flag(f"go-{tid}", fate)
+            model[tid] = ("done", fate)
+            if not wait_phase(tid, {"done"}, 60): return f"{tid} never showed as done after its worker finished: {(status() or {}).get(tid)}"
+        problem = check(model, f"after {tid} {'was killed' if fate == 'kill' else 'finished, checks ' + fate}")
+        if problem: return problem
+    for p in fg.values():
+        try: p.wait(10)
+        except Exception: p.kill()
+    return None
+
+rng, s = seed()
+IDS = ["t001", "t002", "t003"]
+for i in range(4):
+    ids = IDS[: rng.randint(1, 3)]
+    tasks = [(t, rng.choice(["fg", "bg"]), rng.choice(["pass", "fail", "kill"])) for t in ids]
+    order = rng.sample(ids, len(ids))
+    case = (tasks, order)
+    problem = play(case)
+    if problem:
+        fail(problem, case, s)
+print("4 random mixes of foreground and background runs: every view agreed and told the truth at every step")
+PY

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# init in projects that already have Claude Code settings.
+. "$EVALS_LIB/common.sh"
+setup_project --no-init
+mkdir -p "$PROJ/.claude"
+cat >"$PROJ/.claude/settings.json" <<'J'
+{
+  "statusLine": {"type": "command", "command": "~/bin/my-line"},
+  "permissions": {"allow": ["Bash(ls:*)"]}
+}
+J
+before="$(sha256sum <"$PROJ/.claude/settings.json")"
+d init
+[ "$RC" -eq 0 ] || fail "init failed with an existing settings.json: $OUT"
+[ "$(sha256sum <"$PROJ/.claude/settings.json")" = "$before" ] || fail "init changed a settings.json that already had a status line: $(cat "$PROJ/.claude/settings.json")"
+echo "$OUT" | grep -q "delegate statusline" || fail "init didn't say how to add delegate's status line to the user's own: $OUT"
+
+rm -rf "$PROJ" "$DHOME"; setup_project --no-init
+mkdir -p "$PROJ/.claude"; printf '{"permissions": {"allow": ["Bash(ls:*)"]}}\n' >"$PROJ/.claude/settings.json"
+d init
+python3 - "$PROJ/.claude/settings.json" <<'PY' || exit 1
+import json, sys
+try: s = json.load(open(sys.argv[1]))
+except Exception as e: print(f"FAIL: init left settings.json unreadable: {e}"); sys.exit(1)
+if s.get("permissions") != {"allow": ["Bash(ls:*)"]}: print(f"FAIL: init changed the user's other settings: {s}"); sys.exit(1)
+if "delegate statusline" not in (s.get("statusLine") or {}).get("command", ""): print(f"FAIL: init didn't add delegate's status line where there was none: {s}"); sys.exit(1)
+PY
+
+rm -rf "$PROJ" "$DHOME"; setup_project --no-init
+mkdir -p "$PROJ/.claude"; printf '{ "statusLine": oops\n' >"$PROJ/.claude/settings.json"
+before="$(sha256sum <"$PROJ/.claude/settings.json")"
+d init
+[ "$(sha256sum <"$PROJ/.claude/settings.json")" = "$before" ] || fail "init rewrote a settings.json it couldn't parse"
+echo "$OUT" | grep -q "settings.json" || fail "init didn't say it left an invalid settings.json alone: $OUT"
+pass "init kept an existing status line and other settings, added its own only where none existed, and left invalid JSON alone"

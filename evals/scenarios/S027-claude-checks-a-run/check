@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Claude asks status --json about a busy task and a stalled one.
+. "$EVALS_LIB/common.sh"
+setup_project
+install_stub claude
+[ -f "$EVALS_LIB/streams/claude.jsonl" ] || fail "no recorded claude stream yet (evals/lib/streams/README.md)"
+trap 'flag end; kill_runs' EXIT
+export DELEGATE_STALL_SECS=3
+stub_worker claude-busy <<'B'
+work() { replay claude 0.05; printf '\n# busy\n' >>shop/pricing.py; while ! wait_flag end 1; do touch shop/busy-$RANDOM; done; }
+B
+stub_worker gpt-quiet <<'B'
+work() { printf '\n# quiet\n' >>README.md; wait_flag end; }
+B
+write_spec t001 "Busy" "Keeps working." "true"
+write_spec t002 "Quiet" "Goes quiet." "true"
+bg_run t001 --no-ask --worker claude:claude-busy@high
+bg_run t002 --no-ask --worker pi:gpt-quiet@high
+sleep 6
+(cd "$PROJ" && "$DELEGATE" status --json) >"$EVALS_WORK/all.json" 2>&1 || fail "status --json failed: $(cat "$EVALS_WORK/all.json")"
+python3 - "$EVALS_WORK/all.json" <<'PY' || exit 1
+import json, sys
+try: s = json.load(open(sys.argv[1]))
+except Exception as e: print(f"FAIL: status --json isn't valid JSON: {e}"); sys.exit(1)
+need = ["id", "phase", "worker", "tier", "started_at", "last_activity_at", "stalled", "changed_files", "steps"]
+tasks = {t.get("id"): t for t in s.get("tasks", [])}
+for tid in ("t001", "t002"):
+    t = tasks.get(tid)
+    if not t: print(f"FAIL: status --json has no {tid}: {sorted(tasks)}"); sys.exit(1)
+    gone = [k for k in need if k not in t]
+    if gone: print(f"FAIL: {tid} in status --json lacks {gone}"); sys.exit(1)
+if not tasks["t001"]["steps"]: print("FAIL: status --json shows no recent steps for the busy task"); sys.exit(1)
+if tasks["t001"]["stalled"]: print("FAIL: the busy task shows as stalled"); sys.exit(1)
+if tasks["t002"]["stalled"] is not True: print("FAIL: the quiet task isn't flagged stalled in status --json"); sys.exit(1)
+PY
+[ "$(sj 's["tasks"][0]["id"]' t001)" = t001 ] || fail "status t001 --json doesn't give t001"
+d status
+for t in t001 t002; do
+  ph="$(sj "[x for x in s['tasks'] if x['id']=='$t'][0]['phase']")"
+  echo "$OUT" | grep "$t" | grep -q "$ph" || fail "the human view of $t doesn't match status --json (phase $ph): $OUT"
+done
+echo "$OUT" | grep t002 | grep -qi stall || fail "the human view doesn't show t002 stalled like status --json does"
+for f in "$EVALS_ROOT/.claude/skills/delegate/SKILL.md" "$EVALS_ROOT/delegate/templates/project/.claude/skills/delegate/SKILL.md"; do
+  grep -q "status.*--json" "$f" || fail "the delegate skill ($f) doesn't tell Claude to check runs with status --json"
+done
+d status t999
+[ "$RC" -ne 0 ] || fail "status of an unknown task succeeded"
+echo "$OUT" | grep -q t001 && echo "$OUT" | grep -q t002 || fail "the unknown-task error doesn't name the known tasks: $OUT"
+pass "status --json gave both tasks with every field, matched the human view, and the skill points Claude to it"

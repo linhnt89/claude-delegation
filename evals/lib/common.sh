@@ -7,14 +7,17 @@
 #   write_spec t001 "Add divide" ...       # a ready spec
 #   d run t001                             # run delegate in $PROJ; output in $OUT, code in $RC
 #
-# Stand-in workers: `pi` on PATH is a script. The model name in a candidate
-# (`pi:gpt-good@high`) picks the behaviour file $EVALS_WORK/stub/<model>; the family is still
-# inferred from the name (gpt, deepseek, claude...), so the real routing rules apply.
+# Stand-in workers: `pi` on PATH is a script (`install_stub <harness>` adds the others). The
+# model name in a candidate (`pi:gpt-good@high`) picks the behaviour file
+# $EVALS_WORK/stub/<model>; the family is still inferred from the name (gpt, deepseek,
+# claude...), so the real routing rules apply.
 # Every call is recorded under $HOME/.cache/stub/calls/<n>/ (model, phase, prompt, spec).
+# A behaviour can `replay <harness>` to print that harness's recorded event stream
+# ($EVALS_LIB/streams/), like the real worker would.
 
 set -uo pipefail
 
-fail() { echo "FAIL: $*"; exit 1; }
+fail() { echo "FAIL: $(printf "%s" "$*" | tr "\n" " " | cut -c1-400)"; exit 1; }
 pass() { echo "$*"; exit 0; }
 note() { echo "-- $*"; }
 
@@ -181,13 +184,14 @@ flag() { mkdir -p "$EVALS_WORK/flags"; printf '%s\n' "${2:-1}" >"$EVALS_WORK/fla
 unflag() { rm -f "$EVALS_WORK/flags/$1"; }
 call_field() { cat "$HOME/.cache/stub/calls/$1/$2" 2>/dev/null; }
 
-install_stub_pi() {
-  cat >"$EVALS_WORK/bin/pi" <<'STUB'
+# install_stub <harness>: put a stand-in for that harness on PATH (pi is always there).
+install_stub() {
+  cat >"$EVALS_WORK/bin/$1" <<'STUB'
 #!/usr/bin/env bash
-# Stand-in for the pi harness, driven by $EVALS_WORK/stub/<model>.
+# Stand-in for a harness, driven by $EVALS_WORK/stub/<model>. The prompt is the last argument.
 model="" prompt="${@: -1}"
 while [ $# -gt 1 ]; do
-  case "$1" in --model) model="$2"; shift ;; esac
+  case "$1" in --model|-m) model="$2"; shift ;; esac
   shift
 done
 case "$prompt" in
@@ -214,14 +218,79 @@ review() { printf 'FINDINGS: 0 high, 0 medium, 0 low\nNothing found.\n' >.task/R
 plan() { printf 'FINDINGS: 1 high, 0 medium, 0 low\nhigh, t001, acceptance checks do not prove the goal, add a test\n'; }
 research() { printf '# Report\n\nsubtotal is in shop/pricing.py:4\n' >.task/REPORT.md; }
 start() { :; }
+wait_flag() {
+  local i
+  for i in $(seq $(( ${2:-120} * 5 ))); do
+    [ -f "$EVALS_WORK/flags/$1" ] && { cat "$EVALS_WORK/flags/$1"; return 0; }
+    sleep 0.2
+  done
+  return 1
+}
+# replay <harness|file> [delay]: print a recorded stream a line at a time, noting when each
+# line went out in $HOME/.cache/stub/replayed (line number, epoch seconds).
+replay() {
+  local f="$1" n=0 line
+  [ -f "$f" ] || f="$EVALS_LIB/streams/$1.jsonl"
+  [ -f "$f" ] || { echo "no recorded stream $f" >&2; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1)); printf '%s\n' "$line"
+    printf '%s %s\n' "$n" "$(date +%s.%N)" >>"$HOME/.cache/stub/replayed"
+    sleep "${2:-0.5}"
+  done <"$f"
+}
 behaviour="$EVALS_WORK/stub/$model"
 [ -f "$behaviour" ] && . "$behaviour"
 start
 "$phase"
 STUB
-  chmod +x "$EVALS_WORK/bin/pi"
+  chmod +x "$EVALS_WORK/bin/$1"
 }
-install_stub_pi
+install_stub pi
+
+# bg_run <id>: `delegate run --background <id>` from a shell that then exits. Sets OUT and RC.
+bg_run() {
+  OUT="$(cd "$PROJ" && timeout 20 "$DELEGATE" run --background "$@" 2>&1 </dev/null)"; RC=$?
+  printf '\n$ delegate run --background %s  (exit %s)\n%s\n' "$*" "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+}
+
+# sj <expr> [id]: a value from `delegate status [id] --json`, by a Python expression over `s`
+# (the parsed output), e.g. sj 's["tasks"][0]["phase"]' t001. Empty when status fails.
+sj() {
+  (cd "$PROJ" && "$DELEGATE" status ${2:+"$2"} --json 2>/dev/null) |
+    python3 -c 'import json,sys
+try: s=json.load(sys.stdin)
+except Exception: sys.exit(0)
+try: v=eval(sys.argv[1])
+except Exception: sys.exit(0)
+print(json.dumps(v) if isinstance(v,(dict,list,bool)) or v is None else v)' "$1"
+}
+
+# wait_flag <name> [seconds]: wait (default 120s) until a check sets that flag; prints its value.
+# Defined for behaviour files too: they run inside the stand-in.
+wait_flag() {
+  local i
+  for i in $(seq $(( ${2:-120} * 5 ))); do
+    [ -f "$EVALS_WORK/flags/$1" ] && { cat "$EVALS_WORK/flags/$1"; return 0; }
+    sleep 0.2
+  done
+  return 1
+}
+
+# wait_until <seconds> <command...>: poll every 0.2s until the command succeeds.
+wait_until() {
+  local end=$(( $(date +%s) + $1 )); shift
+  until "$@"; do [ "$(date +%s)" -ge "$end" ] && return 1; sleep 0.2; done
+}
+
+# kill_runs: stop this check's background runs and stand-in workers (`trap kill_runs EXIT`).
+kill_runs() {
+  local p
+  for p in $(sj '" ".join(str(t["pid"]) for t in s["tasks"] if t.get("pid"))'); do
+    kill -KILL -- -"$p" 2>/dev/null; kill -KILL "$p" 2>/dev/null
+  done
+  pkill -KILL -f "$EVALS_WORK/bin/" 2>/dev/null
+  true
+}
 
 # minimal_path <tool>...: PATH with only the stand-ins and the named tools, so "missing" is real.
 minimal_path() {

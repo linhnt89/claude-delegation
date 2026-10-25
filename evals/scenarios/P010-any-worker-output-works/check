@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/common.sh"
+setup_project
+for h in claude codex opencode gemini; do install_stub "$h"; done
+exec python3 - "$@" <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+from kit import *
+
+# For any damage to a real recorded stream, status shows exactly the intact steps and the run is unaffected.
+LIB = os.environ["EVALS_LIB"]
+HARNESSES = ["claude", "codex", "opencode", "gemini", "pi"]
+have = [h for h in HARNESSES if os.path.exists(f"{LIB}/streams/{h}.jsonl") and os.path.exists(f"{LIB}/streams/{h}.steps")]
+missing = [h for h in HARNESSES if h not in have]
+MUT = os.path.join(W, "mut.jsonl")
+workers('[defaults]\nimplement = "standard"\nresearch = "fast"\nreview = "standard"\nplan_review = "standard"\n'
+        '[implement]\nstandard = ["pi:gpt-x@high"]\n')
+for h in have:
+    stub(f"{h}-mut", "work() {\n  printf '\\n\\ndef divide_bill(amount, people):\\n    return round(amount / people, 2)\\n' >>shop/pricing.py\n"
+                     f"  replay \"{MUT}\" 0.02\n}}\n")
+save_template()
+
+def mutate(rng, lines):
+    """Damaged stream as bytes, and which original line numbers survived intact."""
+    out, intact = [], set()
+    cut = rng.randint(len(lines) // 2, len(lines)) if rng.random() < 0.5 else len(lines)
+    for n, line in enumerate(lines[:cut], 1):
+        r = rng.random()
+        if r < 0.15:
+            i = rng.randrange(max(1, len(line)))
+            out.append(line[:i] + bytes(rng.randrange(256) for _ in range(5)) + line[i + 5:])
+        else:
+            out.append(line); intact.add(n)
+        r = rng.random()
+        if r < 0.1: out.append(b'{"type":"zz_unknown_event","payload":{"a":1}}')
+        elif r < 0.15: out.append(b'{"type":"message","text":"' + b"x" * 1_000_000 + b'"}')
+        elif r < 0.2: out.append(b"\xff\xfe not utf-8 \xc3\x28")
+    if cut < len(lines) and rng.random() < 0.7:
+        part = lines[cut][: rng.randrange(max(1, len(lines[cut])))]
+        out.append(part)
+    return b"\n".join(out) + (b"\n" if rng.random() < 0.5 else b""), intact
+
+rng, s = seed()
+n = 0
+for h in have:
+    raw = open(f"{LIB}/streams/{h}.jsonl", "rb").read().split(b"\n")
+    raw = [l for l in raw if l]
+    exp = [l.split("\t") for l in open(f"{LIB}/streams/{h}.steps").read().splitlines() if l.strip()]
+    for k in range(3):
+        fresh(); n += 1
+        data, intact = mutate(rng, raw)
+        with open(MUT, "wb") as f: f.write(data)
+        spec("t001", ("grep -q divide_bill shop/pricing.py",))
+        rc, out = d("run", "t001", "--no-ask", "--worker", f"{h}:{h}-mut@high")
+        case = f"{h} case {k + 1}: intact lines {sorted(intact)} of {len(raw)}"
+        if rc != 0: fail(f"{h}: the run failed on a damaged stream: {out[-300:]}", case, s)
+        rc, out = d("status", "t001", "--json")
+        try: t = json.loads(out)["tasks"][0]
+        except Exception: fail(f"{h}: status --json broke on a damaged stream: {out[:300]}", case, s)
+        if t.get("outcome") != "pass": fail(f"{h}: the damaged stream changed the run's outcome to {t.get('outcome')}", case, s)
+        rc2, human = d("status", "t001")
+        if rc2 != 0: fail(f"{h}: status broke on a damaged stream: {human[:300]}", case, s)
+        shown = [(st.get("kind"), st.get("target") or "") for st in t.get("steps", [])]
+        known = [(e[1], e[2]) for e in exp]
+        made_up = [x for x in shown if not any(k == x[0] and tg in x[1] for k, tg in known)]
+        if made_up: fail(f"{h}: status shows steps that aren't in the stream: {made_up[:3]}", case, s)
+        must = [(e[1], e[2]) for e in exp if int(e[0]) in intact]
+        it = iter(shown)
+        lost = [m for m in must if not any(k == m[0] and m[1] in tg for k, tg in it)]
+        if lost: fail(f"{h}: steps from intact lines are missing or out of order: {lost[:3]}", case, s)
+if missing: fail(f"no recorded stream yet for: {' '.join(missing)} (evals/lib/streams/README.md)")
+print(f"{n} damaged streams from {len(have)} harnesses: the runs passed, status showed every intact step in order and nothing else")
+PY

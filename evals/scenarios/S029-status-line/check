@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Run the status line command init configured, the way Claude Code does.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-held gpt-held gpt-held
+ln -sf "$DELEGATE" "$EVALS_WORK/bin/delegate"
+trap 'flag end; kill_runs' EXIT
+cmd="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["command"])' "$PROJ/.claude/settings.json" 2>/dev/null)"
+[ -n "$cmd" ] || fail "delegate init didn't configure a Claude Code status line in .claude/settings.json"
+line_in() { # <dir>: run the status line from that dir with Claude Code's stdin JSON; sets LINE, MS, LRC
+  local t0; t0=$(date +%s%N)
+  LINE="$(cd "$1" && printf '{"cwd":"%s","workspace":{"current_dir":"%s"}}' "$1" "$1" | bash -c "$cmd" 2>&1)"; LRC=$?
+  MS=$(( ($(date +%s%N) - t0) / 1000000 ))
+}
+line_in "$PROJ"
+[ "$LRC" -eq 0 ] && [ -z "$LINE" ] || fail "with no tasks the status line printed '$LINE' (exit $LRC)"
+mkdir -p "$EVALS_WORK/elsewhere"; line_in "$EVALS_WORK/elsewhere"
+[ "$LRC" -eq 0 ] && [ -z "$LINE" ] || fail "outside a delegate project the status line printed '$LINE' (exit $LRC)"
+stub_worker gpt-held <<'B'
+work() { printf '\n# held\n' >>README.md; wait_flag end; }
+B
+stub_worker gpt-quick <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; }
+B
+write_spec t001 "One" "Runs." "true"; write_spec t002 "Two" "Runs." "true"
+write_spec t003 "Three" "Finishes." "grep -q divide_bill shop/pricing.py"
+bg_run t003 --worker pi:gpt-quick@high
+wait_until 60 test "$(sj 's["tasks"][0]["phase"]' t003)" = done || fail "setup: t003 never finished"
+bg_run t001; bg_run t002
+wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t002)" = implement || fail "setup: t002 never started"
+line_in "$PROJ"
+[ "$LRC" -eq 0 ] || fail "the status line command failed: $LINE"
+[ "$(printf '%s' "$LINE" | wc -l)" -eq 0 ] || fail "the status line printed more than one line: $LINE"
+for want in "t001" "t002" "implement"; do echo "$LINE" | grep -q "$want" || fail "the status line doesn't show '$want': $LINE"; done
+echo "$LINE" | grep -Eq "1 .*merge|merge.*1" || fail "the status line doesn't say one task is ready to merge: $LINE"
+[ "$MS" -lt 1000 ] || fail "the status line took ${MS}ms"
+pass "the status line showed both running tasks and one ready to merge in ${MS}ms, and nothing outside a project"
