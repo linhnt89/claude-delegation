@@ -111,6 +111,9 @@ pub struct Round {
     pub tier: Option<Tier>,
     pub worker: Option<String>,
     pub status: RoundStatus,
+    /// A read-only research round: its result is the report, never a commit.
+    #[serde(default)]
+    pub research: bool,
     /// Exit code of the work phase, absent for rounds saved by older versions.
     #[serde(default)]
     pub exit: Option<i32>,
@@ -132,6 +135,7 @@ impl Round {
             RoundStatus::Running => "unfinished (interrupted, or still running)".into(),
             RoundStatus::Questions => "questions".into(),
             RoundStatus::Failed => "failed to start".into(),
+            RoundStatus::Done if self.research => "research done".into(),
             RoundStatus::Done if no_changes && self.checks.is_none() => "done, no changes".into(),
             RoundStatus::Done => format!(
                 "done, checks {}",
@@ -269,6 +273,7 @@ mod tests {
             tier: None,
             worker: Some("pi:test".into()),
             status: RoundStatus::Done,
+            research: false,
             exit: Some(0),
             checks: None,
         }
@@ -361,7 +366,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.exit, None);
+        assert!(!r.research);
         assert_eq!(r.status_label(false), "done, checks not run");
+    }
+
+    #[test]
+    fn research_round_shows_research_done() {
+        let mut r = Round {
+            status: RoundStatus::Done,
+            research: true,
+            ..round()
+        };
+        assert_eq!(r.status_label(true), "research done");
+        assert_eq!(r.status_label(false), "research done");
+        r.exit = Some(3);
+        assert_eq!(r.status_label(true), "research done, worker exited 3");
     }
 
     #[test]

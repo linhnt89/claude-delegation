@@ -193,8 +193,30 @@ fn implement_attempt(
     Ok(Attempt::Worked(rc))
 }
 
+/// Paths with uncommitted work in the worktree, tracked or untracked (ignored files excluded).
+fn worktree_changed_paths(t: &Task) -> Result<Vec<String>> {
+    let mut paths: Vec<String> = git(&t.wt, &["diff", "--name-only", "HEAD"])?
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    paths.extend(
+        git(&t.wt, &["ls-files", "--others", "--exclude-standard"])?
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string),
+    );
+    Ok(paths)
+}
+
 pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     let mut t = Task::load(ctx, &a.id)?;
+    if !a.dry_run && a.research && t.wt.is_dir() && t.worktree_dirty()? {
+        bail!(
+            "{}: the worktree has uncommitted changes; commit or discard them before a research run",
+            t.id
+        );
+    }
     let spec_text = t.spec_text()?;
     let cfg = WorkersConfig::load()?;
     let rules = ProjectRules::load(&ctx.root)?;
@@ -327,6 +349,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         tier,
         worker: None,
         status: RoundStatus::Running,
+        research: a.research,
         exit: None,
         checks: None,
     });
@@ -399,6 +422,23 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
             ),
         )?;
     }
+    if a.research {
+        let changed = worktree_changed_paths(&t)?;
+        if !changed.is_empty() {
+            git(&t.wt, &["reset", "-q", "--hard", "HEAD"])?;
+            git(&t.wt, &["clean", "-q", "-fd"])?;
+        }
+        t.state.rounds[round_index].status = RoundStatus::Done;
+        t.save()?;
+        println!("research report: {}", report.display());
+        if !changed.is_empty() {
+            println!(
+                "warning: the researcher changed files; not committed, reverted: {}",
+                changed.join(", ")
+            );
+        }
+        return Ok(());
+    }
     git(&t.wt, &["add", "-A"])?;
     if !git(&t.wt, &["diff", "--cached", "--name-only"])?.is_empty() {
         git(
@@ -410,15 +450,6 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
                 &format!("task {} round {number}", t.id),
             ],
         )?;
-    }
-    if a.research {
-        t.state.rounds[round_index].status = RoundStatus::Done;
-        t.save()?;
-        println!("research report: {}", report.display());
-        if !t.changed_paths(ctx)?.is_empty() {
-            println!("warning: the researcher changed files; review or discard them");
-        }
-        return Ok(());
     }
     if t.changed_paths(ctx)?.is_empty() {
         println!("no changes: {w} changed nothing");
@@ -996,6 +1027,7 @@ mod tests {
                 tier: Some(Tier::Standard),
                 worker: Some("pi:test".into()),
                 status: RoundStatus::Done,
+                research: false,
                 exit: Some(0),
                 checks: Some(Checks {
                     outcome: CheckOutcome::Pass,
@@ -1007,6 +1039,7 @@ mod tests {
                 tier: Some(Tier::Standard),
                 worker: Some("pi:test".into()),
                 status: RoundStatus::Running,
+                research: false,
                 exit: None,
                 checks: None,
             },
@@ -1047,6 +1080,62 @@ mod tests {
             );
             assert_eq!(fs::read(t.dir.join("STATE.json"))?, state);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn research_run_refuses_dirty_worktree() -> Result<()> {
+        let repo =
+            TestRepo(std::env::temp_dir().join(format!("delegate-test-{}", uuid::Uuid::new_v4())));
+        let root = repo.0.join("repo");
+        fs::create_dir_all(&root)?;
+        git(&root, &["init", "-q", "-b", "main"])?;
+        git(&root, &["config", "user.name", "Test"])?;
+        git(&root, &["config", "user.email", "test@example.invalid"])?;
+        fs::write(root.join("code"), "base\n")?;
+        git(&root, &["add", "code"])?;
+        git(&root, &["commit", "-qm", "base"])?;
+        let ctx = Ctx {
+            gitdir: root.join(".git"),
+            root,
+            dhome: repo.0.join("tasks"),
+        };
+        let t = Task::load(&ctx, "t001")?;
+        fs::create_dir_all(&t.dir)?;
+        git(
+            &ctx.root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &t.branch,
+                &t.wt.to_string_lossy(),
+                "main",
+            ],
+        )?;
+        fs::write(t.wt.join("code"), "unfinished work\n")?;
+        fs::write(t.wt.join("new-file"), "untracked work\n")?;
+        let head = t.head(&ctx)?;
+        let args = RunArgs {
+            id: t.id.clone(),
+            tier: None,
+            worker: None,
+            questions: QuestionPhase::Auto,
+            dry_run: false,
+            research: true,
+        };
+
+        assert_eq!(
+            run(&ctx, &args).unwrap_err().to_string(),
+            "t001: the worktree has uncommitted changes; commit or discard them before a research run"
+        );
+        assert_eq!(t.head(&ctx)?, head);
+        assert_eq!(fs::read_to_string(t.wt.join("code"))?, "unfinished work\n");
+        assert_eq!(
+            fs::read_to_string(t.wt.join("new-file"))?,
+            "untracked work\n"
+        );
         Ok(())
     }
 }
