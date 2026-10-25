@@ -848,6 +848,7 @@ pub fn list(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // Keep the merge transaction and its rollback together.
 pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
     let t = Task::load(ctx, id)?;
     ensure_finished(&t)?;
@@ -946,10 +947,56 @@ pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
     } else {
         format!("{title}\n\n{goal}")
     };
-    git(&ctx.root, &["merge", "-q", "--squash", &t.branch])?;
-    git(&ctx.root, &["commit", "-q", "-m", &msg])?;
+    let saved_head = git(&ctx.root, &["rev-parse", "HEAD"])?;
+    let merged = git(&ctx.root, &["merge", "-q", "--squash", &t.branch])
+        .and_then(|_| git(&ctx.root, &["commit", "-q", "-m", &msg]));
+    if let Err(error) = merged {
+        // A failed driver or commit hook can dirty paths beyond the conflicts.
+        // Always reset, even if enumerating the unmerged paths itself fails.
+        let paths = match git(&ctx.root, &["diff", "--name-only", "--diff-filter=U"]) {
+            Ok(paths) => paths.lines().collect::<Vec<_>>().join(", "),
+            Err(error) => format!("(could not list unmerged paths: {error:#})"),
+        };
+        let mut diagnostics = vec![format!("Git failure: {error:#}")];
+        if let Err(error) = git(&ctx.root, &["reset", "-q", "--hard", &saved_head]) {
+            diagnostics.push(format!("rollback reset failed: {error:#}"));
+        }
+        let restored_head = git(&ctx.root, &["rev-parse", "HEAD"]);
+        let remaining = git(
+            &ctx.root,
+            &["status", "--porcelain", "--untracked-files=no"],
+        );
+        if !restored_head.as_ref().is_ok_and(|head| head == &saved_head)
+            || !remaining.as_ref().is_ok_and(String::is_empty)
+        {
+            diagnostics.push(format!(
+                "rollback verification failed: expected HEAD {saved_head}; HEAD: {}; remaining tracked status:\n{}",
+                restored_head.unwrap_or_else(|error| format!("unavailable: {error:#}")),
+                remaining.unwrap_or_else(|error| format!("unavailable: {error:#}")),
+            ));
+        }
+        // Only a real conflict gets the "merge base into the task" advice; anything else
+        // (nothing to commit, a hook, an untracked file in the way) gets git's own reason.
+        if paths.is_empty() {
+            bail!(
+                "merge refused: git could not merge {} into {base}; {base} is unchanged\n{}",
+                t.branch,
+                diagnostics.join("\n"),
+            );
+        }
+        bail!(
+            "merge refused: {} conflicts with {base} in: {paths}\nmerge {base} into the task in {}, resolve, commit, then: delegate check {id}\n{}",
+            t.branch,
+            t.wt.display(),
+            diagnostics.join("\n"),
+        );
+    }
     println!("squash-merged {} into {base}: {title}", t.branch);
-    remove(ctx, &t)
+    remove(ctx, &t).map_err(|error| {
+        anyhow::anyhow!(
+            "merged, but cleaning up {id} failed: {error:#}; run: delegate discard {id}"
+        )
+    })
 }
 
 fn remove(ctx: &Ctx, t: &Task) -> Result<()> {
@@ -983,6 +1030,193 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn merge_fixture() -> Result<(TestRepo, Ctx, Task)> {
+        let repo =
+            TestRepo(std::env::temp_dir().join(format!("delegate-test-{}", uuid::Uuid::new_v4())));
+        let root = repo.0.join("repo");
+        fs::create_dir_all(&root)?;
+        git(&root, &["init", "-q", "-b", "main"])?;
+        git(&root, &["config", "user.name", "Test"])?;
+        git(&root, &["config", "user.email", "test@example.invalid"])?;
+        git(&root, &["config", "commit.gpgsign", "false"])?;
+        fs::write(root.join("code"), "base\n")?;
+        fs::write(root.join("other"), "untouched\n")?;
+        git(&root, &["add", "."])?;
+        git(&root, &["commit", "-qm", "base"])?;
+        let ctx = Ctx {
+            gitdir: root.join(".git"),
+            root,
+            dhome: repo.0.join("tasks"),
+        };
+        let mut t = Task::load(&ctx, "t001")?;
+        fs::create_dir_all(&t.dir)?;
+        fs::write(&t.spec, "# Task t001: Change code\n")?;
+        git(
+            &ctx.root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &t.branch,
+                &t.wt.to_string_lossy(),
+                "main",
+            ],
+        )?;
+        fs::write(t.wt.join("code"), "task change\n")?;
+        git(&t.wt, &["commit", "-qam", "task change"])?;
+        t.state.base = Some("main".into());
+        t.state.rounds = vec![Round {
+            number: 1,
+            tier: Some(Tier::Standard),
+            worker: Some("pi:test".into()),
+            status: RoundStatus::Done,
+            research: false,
+            exit: Some(0),
+            checks: Some(Checks {
+                outcome: CheckOutcome::Pass,
+                commit: t.head(&ctx)?,
+            }),
+        }];
+        t.save()?;
+        Ok((repo, ctx, t))
+    }
+
+    fn assert_failed_merge_restored(ctx: &Ctx, t: &Task, head: &str) -> Result<()> {
+        assert_eq!(git(&ctx.root, &["rev-parse", "HEAD"])?, head);
+        assert_eq!(
+            git(
+                &ctx.root,
+                &["status", "--porcelain", "--untracked-files=no"]
+            )?,
+            ""
+        );
+        assert_eq!(fs::read_to_string(ctx.root.join("other"))?, "untouched\n");
+        assert_eq!(fs::read_to_string(t.wt.join("code"))?, "task change\n");
+        assert_eq!(git(&ctx.root, &["rev-parse", &t.branch])?, t.head(ctx)?);
+        assert!(t.spec.is_file());
+        assert_eq!(
+            fs::read_to_string(t.dir.join("STATE.json"))?,
+            serde_json::to_string_pretty(&t.state)? + "\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn conflicting_merge_restores_main_and_keeps_task() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        fs::write(ctx.root.join("code"), "main change\n")?;
+        git(&ctx.root, &["commit", "-qam", "main change"])?;
+        let head = git(&ctx.root, &["rev-parse", "HEAD"])?;
+        let error = merge(&ctx, &t.id, false).unwrap_err().to_string();
+        assert!(error.contains(&format!(
+            "merge refused: {} conflicts with main in: code",
+            t.branch
+        )));
+        assert!(error.contains(&format!(
+            "merge main into the task in {}, resolve, commit, then: delegate check t001",
+            t.wt.display()
+        )));
+        assert_failed_merge_restored(&ctx, &t, &head)?;
+        assert_eq!(fs::read_to_string(ctx.root.join("code"))?, "main change\n");
+        Ok(())
+    }
+
+    #[test]
+    fn failing_merge_driver_restores_its_other_tracked_edits() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        fs::write(ctx.root.join(".gitattributes"), "code merge=broken\n")?;
+        fs::write(ctx.root.join("code"), "main change\n")?;
+        git(&ctx.root, &["add", "."])?;
+        git(&ctx.root, &["commit", "-qm", "main change and driver"])?;
+        git(
+            &ctx.root,
+            &[
+                "config",
+                "merge.broken.driver",
+                "printf 'driver side effect\\n' > other; printf ran > driver-ran; exit 1",
+            ],
+        )?;
+        fs::write(ctx.root.join("untracked"), "keep me\n")?;
+        let head = git(&ctx.root, &["rev-parse", "HEAD"])?;
+        let error = merge(&ctx, &t.id, false).unwrap_err().to_string();
+        assert!(error.contains("conflicts with main in: code"));
+        assert!(!error.contains("rollback verification failed"));
+        assert_failed_merge_restored(&ctx, &t, &head)?;
+        assert_eq!(fs::read_to_string(ctx.root.join("code"))?, "main change\n");
+        assert_eq!(fs::read_to_string(ctx.root.join("driver-ran"))?, "ran");
+        assert_eq!(fs::read_to_string(ctx.root.join("untracked"))?, "keep me\n");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn install_commit_hook(ctx: &Ctx, script: &str) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let hooks = ctx.gitdir.join("test-hooks");
+        fs::create_dir_all(&hooks)?;
+        git(
+            &ctx.root,
+            &["config", "core.hooksPath", &hooks.to_string_lossy()],
+        )?;
+        let hook = hooks.join("pre-commit");
+        fs::write(&hook, script)?;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failing_squash_commit_restores_main() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        install_commit_hook(
+            &ctx,
+            "#!/bin/sh\nprintf 'hook side effect\\n' > other\nexit 1\n",
+        )?;
+        let head = git(&ctx.root, &["rev-parse", "HEAD"])?;
+        let error = merge(&ctx, &t.id, false).unwrap_err().to_string();
+        assert!(error.contains("Git failure: git commit"));
+        assert!(!error.contains("rollback verification failed"));
+        assert_failed_merge_restored(&ctx, &t, &head)?;
+        assert_eq!(fs::read_to_string(ctx.root.join("code"))?, "base\n");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_rollback_reports_remaining_tracked_changes() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        install_commit_hook(
+            &ctx,
+            "#!/bin/sh\nprintf 'hook side effect\\n' > other\n: > .git/index.lock\nexit 1\n",
+        )?;
+        let error = merge(&ctx, &t.id, false).unwrap_err().to_string();
+        assert!(error.contains("rollback reset failed:"));
+        assert!(error.contains("rollback verification failed:"));
+        assert!(error.contains("remaining tracked status:"));
+        assert!(error.contains("M  code"));
+        assert!(error.contains(" M other"));
+        assert!(t.wt.is_dir());
+        assert!(t.dir.join("STATE.json").is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_failure_keeps_successful_merge() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        git(&ctx.root, &["worktree", "lock", &t.wt.to_string_lossy()])?;
+        let head = git(&ctx.root, &["rev-parse", "HEAD"])?;
+        let error = merge(&ctx, &t.id, false).unwrap_err().to_string();
+        assert!(error.starts_with("merged, but cleaning up t001 failed:"));
+        assert!(error.ends_with("; run: delegate discard t001"));
+        assert_ne!(git(&ctx.root, &["rev-parse", "HEAD"])?, head);
+        assert_eq!(fs::read_to_string(ctx.root.join("code"))?, "task change\n");
+        assert_eq!(git(&ctx.root, &["status", "--porcelain"])?, "");
+        assert!(t.wt.is_dir());
+        assert!(t.dir.join("STATE.json").is_file());
+        Ok(())
     }
 
     #[test]
