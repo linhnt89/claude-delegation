@@ -25,9 +25,9 @@ B
 write_spec t001 "One" "Runs." "true"; write_spec t002 "Two" "Runs." "true"
 write_spec t003 "Three" "Finishes." "grep -q divide_bill shop/pricing.py"
 bg_run t003 --worker pi:gpt-quick@high
-wait_until 60 test "$(sj 's["tasks"][0]["phase"]' t003)" = done || fail "setup: t003 never finished"
+wait_field 60 t003 phase done || fail "setup: t003 never finished"
 bg_run t001; bg_run t002
-wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t002)" = implement || fail "setup: t002 never started"
+wait_field 30 t002 phase implement || fail "setup: t002 never started"
 line_in "$PROJ"
 [ "$LRC" -eq 0 ] || fail "the status line command failed: $LINE"
 [ "$(printf '%s' "$LINE" | wc -l)" -eq 0 ] || fail "the status line printed more than one line: $LINE"

@@ -18,7 +18,7 @@ B
 write_spec t001 "Split a bill" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
 bg_run t001 --no-ask --worker claude:claude-quiet@high
 [ "$RC" -eq 0 ] || fail "run --background failed: $OUT"
-wait_until 30 grep -q pricing.py <<<"$(sj 's["tasks"][0]["changed_files"]' t001)" || fail "setup: the worker's edit never showed"
+wait_changed 30 t001 pricing.py || fail "setup: the worker's edit never showed"
 [ "$(sj 's["tasks"][0]["stalled"]' t001)" = false ] || fail "flagged as stalled right after the worker's last edit"
 sleep 6
 [ "$(sj 's["tasks"][0]["stalled"]' t001)" = true ] || fail "not flagged as stalled after 6s of quiet with a 4s threshold"
@@ -29,5 +29,5 @@ echo "$OUT" | grep -Eq '[0-9]+s' || fail "status doesn't say how long it has bee
 last="$(tail -1 "$EVALS_LIB/streams/claude.steps" | cut -f3)"
 echo "$OUT" | grep -qF "$last" || fail "status doesn't show the last step ('$last'): $OUT"
 flag wake
-wait_until 5 test "$(sj 's["tasks"][0]["stalled"]' t001)" = false || fail "the stall flag didn't clear once the worker made a change again"
+wait_field 5 t001 stalled false || fail "the stall flag didn't clear once the worker made a change again"
 pass "the quiet worker was flagged stalled with how long and its last step, wasn't stopped, and the flag cleared on new activity"

@@ -23,15 +23,15 @@ pid="$(sj 's["tasks"][0]["pid"]' t001)"
 [ -n "$pid" ] && [ "$pid" != null ] && kill -0 "$pid" 2>/dev/null || fail "status --json gives no live pid for the background run"
 [ "$(ps -o sid= -p "$pid" | tr -d ' ')" != "$(ps -o sid= -p $$ | tr -d ' ')" ] \
   || fail "the background run is in the starting terminal's session, so closing it would kill the run"
-wait_until 15 test "$(sj 's["tasks"][0]["phase"]' t001)" = implement || fail "status never showed the implement phase: $(sj 's' t001)"
-wait_until 15 grep -q pricing.py <<<"$(sj 's["tasks"][0]["changed_files"]' t001)" \
+wait_field 15 t001 phase implement || fail "status never showed the implement phase: $(sj 's' t001)"
+wait_changed 15 t001 pricing.py \
   || fail "status didn't show the file the worker changed: $(sj 's["tasks"][0]' t001)"
 d status t001
 for want in implement gpt-slow pricing.py; do
   echo "$OUT" | grep -q "$want" || fail "status t001 while running doesn't show '$want': $OUT"
 done
 echo "$OUT" | grep -Eq '[0-9]+(s|m)' || fail "status t001 shows no elapsed time: $OUT"
-wait_until 60 test "$(sj 's["tasks"][0]["phase"]' t001)" = done || fail "status never showed the run as done: $(sj 's' t001)"
+wait_field 60 t001 phase done || fail "status never showed the run as done: $(sj 's' t001)"
 [ "$(sj 's["tasks"][0]["outcome"]' t001)" = pass ] || fail "status shows outcome '$(sj 's["tasks"][0]["outcome"]' t001)', expected pass"
 d status t001
 echo "$OUT" | grep -qi "pass" && echo "$OUT" | grep -q "delegate merge t001" \

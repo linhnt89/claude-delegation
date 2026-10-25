@@ -15,7 +15,7 @@ B
 write_spec t001 "Split a bill" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
 bg_run t001
 [ "$RC" -eq 0 ] || fail "run --background failed: $OUT"
-wait_until 30 grep -q pricing.py <<<"$(sj 's["tasks"][0]["changed_files"]' t001)" || fail "status never showed the changed file"
+wait_changed 30 t001 pricing.py || fail "status never showed the changed file"
 [ "$(sj 's["tasks"][0]["steps_available"]' t001)" = false ] || fail "status --json claims step details for a worker it can't read"
 d status t001
 [ "$RC" -eq 0 ] || fail "status failed: $OUT"

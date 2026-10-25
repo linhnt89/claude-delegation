@@ -276,10 +276,22 @@ wait_flag() {
   return 1
 }
 
-# wait_until <seconds> <command...>: poll every 0.2s until the command succeeds.
+# wait_until <seconds> <command...>: poll every 0.2s until the command succeeds. Arguments are
+# expanded once, before polling: to poll status, use wait_field or wait_changed.
 wait_until() {
   local end=$(( $(date +%s) + $1 )); shift
   until "$@"; do [ "$(date +%s)" -ge "$end" ] && return 1; sleep 0.2; done
+}
+
+# wait_field <seconds> <id> <field> <value>: poll status --json until the task's field has that value.
+wait_field() {
+  local end=$(( $(date +%s) + $1 ))
+  until [ "$(sj "s['tasks'][0]['$3']" "$2")" = "$4" ]; do [ "$(date +%s)" -ge "$end" ] && return 1; sleep 0.2; done
+}
+# wait_changed <seconds> <id> <text>: poll until the task's changed_files mention the text.
+wait_changed() {
+  local end=$(( $(date +%s) + $1 ))
+  until sj "s['tasks'][0]['changed_files']" "$2" | grep -qF "$3"; do [ "$(date +%s)" -ge "$end" ] && return 1; sleep 0.2; done
 }
 
 # kill_runs: stop this check's background runs and stand-in workers (`trap kill_runs EXIT`).

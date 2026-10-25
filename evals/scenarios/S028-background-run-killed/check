@@ -10,10 +10,10 @@ B
 write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
 bg_run t001
 [ "$RC" -eq 0 ] || fail "run --background failed: $OUT"
-wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t001)" = implement || fail "setup: the run never reached implement"
+wait_field 30 t001 phase implement || fail "setup: the run never reached implement"
 pid="$(sj 's["tasks"][0]["pid"]' t001)"
 kill -KILL -- -"$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null; pkill -KILL -f "$EVALS_WORK/bin/" 2>/dev/null
-wait_until 5 test "$(sj 's["tasks"][0]["phase"]' t001)" = interrupted \
+wait_field 5 t001 phase interrupted \
   || fail "5s after the run was killed, status --json shows '$(sj 's["tasks"][0]["phase"]' t001)', not interrupted"
 d status t001
 echo "$OUT" | grep -qi interrupted || fail "status doesn't say interrupted: $OUT"

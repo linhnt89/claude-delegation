@@ -43,9 +43,10 @@ def mutate(rng, lines):
 rng, s = seed()
 n = 0
 for h in have:
-    raw = open(f"{LIB}/streams/{h}.jsonl", "rb").read().split(b"\n")
+    rec = h if rng.random() < 0.5 else f"{h}-fail"
+    raw = open(f"{LIB}/streams/{rec}.jsonl", "rb").read().split(b"\n")
     raw = [l for l in raw if l]
-    exp = [l.split("\t") for l in open(f"{LIB}/streams/{h}.steps").read().splitlines() if l.strip()]
+    exp = [l.split("\t") for l in open(f"{LIB}/streams/{rec}.steps").read().splitlines() if l.strip()]
     for k in range(3):
         fresh(); n += 1
         data, intact = mutate(rng, raw)

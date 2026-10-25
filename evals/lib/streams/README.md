@@ -18,6 +18,9 @@ steps); a command's result starts with `ok` when it exits 0 and `failed` otherwi
 to the user is a `message`, with its first words as the target; empty (redacted) thinking
 is not a step.
 
+`<harness>-fail.*` are a second recording per harness in which a command fails before it
+passes (prompt below), so a failed result is checked too.
+
 ## The recording script
 In the `setup_project` shop repo (`evals/lib/common.sh`), run the harness the way `delegate`
 runs a work phase, in its streaming mode, with this prompt:
@@ -31,6 +34,13 @@ Before committing a recording, scrub it: the work folder becomes `/work/shop`, t
 home `/home/user`; drop system prompts, tool descriptions, plugin, skill and MCP lists (keep
 tool names). Streams split across many events (e.g. Pi's `toolcall_delta`) must be checked
 joined up, since a path can be cut in pieces.
+
+The `-fail` recordings use this prompt instead:
+
+> First, run exactly `python3 -m unittest -q tests.test_split` on its own (no other commands
+> chained, no `echo`). It fails because tests/test_split.py does not exist yet. Then create
+> tests/test_split.py with one test that checks `subtotal([(1.0, 2)]) == 2.0` (from
+> shop.pricing), and run exactly the same command again. Reply with one line saying what you did.
 
 `<harness>.steps` is written by the lead from reading the stream, not by whoever writes the
 adapter, so the adapter can't be tailored to it.

@@ -1,0 +1,6 @@
+26	message	run the command first to confirm the failure	
+27	run	python3 -m unittest -q tests.test_split	failed
+53	run	ls; ls shop	ok
+87	edit	tests/test_split.py	
+106	run	python3 -m unittest -q tests.test_split	ok
+130	message	Confirmed the failing run	

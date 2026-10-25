@@ -29,8 +29,13 @@ def status():
     except Exception: return None
 
 def alive(pid):
-    try: os.kill(int(pid), 0); return True
+    """A live, non-zombie process. A missing pid (None, 0) is never alive."""
+    try: pid = int(pid)
     except Exception: return False
+    if pid <= 0: return False
+    try: state = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[0]
+    except Exception: return False
+    return state not in ("Z", "X")
 
 def wait_phase(tid, want, secs):
     end = time.time() + secs

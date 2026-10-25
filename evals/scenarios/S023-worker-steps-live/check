@@ -4,12 +4,15 @@
 setup_project
 trap kill_runs EXIT
 HARNESSES="claude codex opencode pi"
+# Each harness twice: the plain recording, and one where a command fails before it passes.
+STREAMS="claude claude-fail codex codex-fail opencode opencode-fail pi pi-fail"
 missing=""
 n=0
-for h in $HARNESSES; do
+for h in $STREAMS; do
   [ -f "$EVALS_LIB/streams/$h.jsonl" ] && [ -f "$EVALS_LIB/streams/$h.steps" ] || { missing="$missing $h"; continue; }
   n=$((n + 1)); id="$(printf 't%03d' "$n")"
-  [ "$h" = pi ] || install_stub "$h"
+  harness="${h%-fail}"
+  [ "$harness" = pi ] || install_stub "$harness"
   stub_worker "$h-steps" <<B
 work() {
   printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
@@ -18,7 +21,7 @@ work() {
 B
   write_spec "$id" "Split a bill ($h)" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
   rm -f "$HOME/.cache/stub/replayed"
-  bg_run "$id" --no-ask --worker "$h:$h-steps@high"
+  bg_run "$id" --no-ask --worker "$harness:$h-steps@high"
   [ "$RC" -eq 0 ] || fail "$h: run --background failed: $OUT"
   # Poll status while it runs; note when each step is first seen.
   : >"$EVALS_WORK/seen-$h"
@@ -66,4 +69,4 @@ PY
   echo "$OUT" | grep -qF "$last" || fail "$h: status $id (human view) doesn't show the last step's target '$last': $OUT"
 done
 [ -z "$missing" ] || fail "no recorded stream yet for:$missing (evals/lib/streams/README.md)"
-pass "steps from all $n harnesses showed up in order, each within 3s of the worker doing it"
+pass "steps from all $n recordings (4 harnesses, with and without a failing command) showed up in order, each within 3s of the worker doing it"

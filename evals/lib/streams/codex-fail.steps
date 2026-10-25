@@ -1,0 +1,6 @@
+3	message	run the command, add the test	
+4	run	python3 -m unittest -q tests.test_split	failed
+6	run	rg --files -g AGENTS.md	ok
+8	edit	tests/test_split.py	
+10	run	python3 -m unittest -q tests.test_split	ok
+12	message	Ran the command, confirmed	

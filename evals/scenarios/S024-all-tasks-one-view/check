@@ -25,15 +25,15 @@ write_spec t002 "Slow checks" "Checks take a while." "sleep 60"
 write_spec t003 "Quick" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
 write_spec t004 "Dies" "Gets killed." "true"
 bg_run t003 --worker pi:gpt-quick@high
-wait_until 60 test "$(sj 's["tasks"][0]["phase"]' t003)" = done || fail "setup: t003 never finished"
+wait_field 60 t003 phase done || fail "setup: t003 never finished"
 bg_run t001 --worker pi:gpt-held@high
 bg_run t002 --worker pi:gpt-slowcheck@high
 bg_run t004 --worker pi:gpt-dies@high
-wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t004)" = implement || fail "setup: t004 never started"
+wait_field 30 t004 phase implement || fail "setup: t004 never started"
 p4="$(sj 's["tasks"][0]["pid"]' t004)"; kill -KILL -- -"$p4" 2>/dev/null; kill -KILL "$p4" 2>/dev/null
 pkill -KILL -f "model gpt-dies" 2>/dev/null
-wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t002)" = checks || fail "setup: t002 never reached checks"
-wait_until 30 test "$(sj 's["tasks"][0]["phase"]' t001)" = implement || fail "setup: t001 never started"
+wait_field 30 t002 phase checks || fail "setup: t002 never reached checks"
+wait_field 30 t001 phase implement || fail "setup: t001 never started"
 
 (cd "$PROJ" && exec "$DELEGATE" watch >"$EVALS_WORK/watch.out" 2>&1) & wpid=$!
 sleep 4; flag go-t001
