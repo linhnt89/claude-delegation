@@ -1,0 +1,8 @@
+2	read	shop/pricing.py	
+4	read	tests/test_pricing.py	
+11	run	python3 -m unittest -q	ok
+13	edit	shop/pricing.py	
+15	edit	tests/test_pricing.py	
+17	edit	tests/test_pricing.py	
+19	run	python3 -m unittest -q	ok
+21	message	Added `divide_bill(amount, people)`	

@@ -1,0 +1,8 @@
+3	message	read the pricing code	
+4	run	rg --files -g AGENTS.md	ok
+6	run	cat shop/pricing.py tests/test_pricing.py	ok
+8	edit	shop/pricing.py	
+10	run	python3 -m unittest -q	ok
+12	edit	tests/test_pricing.py	
+14	run	python3 -m unittest -q	ok
+16	message	Added `divide_bill(amount, people)`	

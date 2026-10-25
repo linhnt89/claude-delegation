@@ -156,5 +156,6 @@ def shrink(case, still_fails, limit=40):
 def fail(msg, case=None, s=None):
     if case is not None:
         print(f"smallest failing case: {case}")
+    msg = " ".join(str(msg).split())[:400]
     print(f"FAIL: {msg}" + (f" (seed {s})" if s is not None else ""))
     sys.exit(1)

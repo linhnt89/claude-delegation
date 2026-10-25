@@ -1,0 +1,9 @@
+2	message	I'll read the two files first.	
+3	read	shop/pricing.py	
+4	read	tests/test_pricing.py	
+7	edit	shop/pricing.py	
+10	run	python3 -m unittest -q	ok
+13	edit	tests/test_pricing.py	
+16	edit	tests/test_pricing.py	
+19	run	python3 -m unittest -q	ok
+22	message	Added `divide_bill(amount, people)`	

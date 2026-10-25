@@ -32,7 +32,7 @@ Order: t008 + t009 → t010 + t011 → t012 → t013. t010, t011 and most of t01
 
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t008 | Record each harness's stream (script in `evals/lib/streams/README.md`), confirm its streaming flags, write the `.steps` files | todo | – | – | the five recordings exist | lead does it, not delegated: needs the user's real harness logins outside the sandbox |
+| t008 | Record each harness's stream (script in `evals/lib/streams/README.md`), confirm its streaming flags, write the `.steps` files | done except Gemini | – | – | the five recordings exist | lead does it, not delegated. Claude Code, Codex, OpenCode and Pi recorded 2026-10-25; Gemini needs the user to sign in to the Gemini CLI, then record it the same way |
 | t009 | Live status: `status.json` kept by the runner, `interrupted` for a dead run, `status [id] [--json]`, `run --background`, `list` reads the same phase; delegate skill tells Claude to use `run --background` and `status --json` | todo | t005 | standard | `evals/run S022 S026 S028` | `run()` in `commands.rs`, `task.rs`; skill in both root and `templates/project/` |
 | t010 | Step adapters: workers run with streaming flags, an adapter per harness writes `events.jsonl`, raw stream kept; `status` shows steps and the stall flag | todo | t008, t009 | standard | `evals/run S023 S025 S027 P010` | new module; `harness.rs` commands |
 | t011 | `delegate watch [id]`: refreshing terminal view, clean exit on Ctrl-C, plain frames when not a terminal | todo | t009 | standard | `evals/run S024` | reads only what `status` reads |
