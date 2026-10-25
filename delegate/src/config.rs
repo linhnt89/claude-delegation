@@ -271,6 +271,12 @@ impl WorkersConfig {
                 have.join(", ")
             )
         })?;
+        if list.is_empty() {
+            bail!(
+                "[{}].{tier} in workers.toml has no candidates; add at least one \"harness:model@effort\"",
+                role.name()
+            );
+        }
         let workers = list
             .iter()
             .map(|s| s.parse())
@@ -280,10 +286,10 @@ impl WorkersConfig {
             .filter(|w| Some(w.family().as_str()) != skip_family)
             .collect();
         if kept.is_empty() {
+            let family = skip_family.unwrap_or_default();
             bail!(
-                "every [{}].{tier} candidate is in the {} family",
-                role.name(),
-                skip_family.unwrap_or("?")
+                "every [{}].{tier} candidate is in the {family} family",
+                role.name()
             );
         }
         Ok(kept)
@@ -411,6 +417,54 @@ mod tests {
             .unwrap();
         assert!(review.iter().all(|w| w.family() != "gpt"));
         assert!(cfg.candidates(Role::Review, Tier::Fast, None).is_err());
+    }
+
+    #[test]
+    fn empty_candidate_list_names_the_role_and_tier() {
+        let cfg: WorkersConfig = toml::from_str(
+            r#"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+standard = []
+"#,
+        )
+        .unwrap();
+        let err = cfg
+            .candidates(Role::Implement, Tier::Standard, None)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "[implement].standard in workers.toml has no candidates; add at least one \"harness:model@effort\""
+        );
+    }
+
+    #[test]
+    fn family_filter_error_names_the_family() {
+        let cfg: WorkersConfig = toml::from_str(
+            r#"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[review]
+standard = ["claude:sonnet@high", "pi:github-copilot/claude-opus-5.5@high"]
+"#,
+        )
+        .unwrap();
+        let err = cfg
+            .candidates(Role::Review, Tier::Standard, Some("claude"))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "every [review].standard candidate is in the claude family"
+        );
     }
 
     #[test]
