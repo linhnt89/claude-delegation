@@ -44,7 +44,7 @@ Fix the plan for real findings; bring disagreements to the user. Skip it for one
 Tell the user the choice when showing the spec ("t007: implement @ standard"), then, unless
 they change it, run in the background:
 
-    delegate run <id> [--tier fast|standard|deep]
+    delegate run --background <id> [--tier fast|standard|deep]
 
 What happens:
 - **Question phase** (first round): the worker reads the spec and code and answers `READY` or
@@ -60,7 +60,10 @@ What happens:
   the worker's `REPORT.md` is the result. Read it, keep what matters, then `delegate discard`.
 - `delegate new <id> --prune` starts from the stale-doc pruning spec.
 
-Independent tasks with separate files can run in parallel. `delegate list` shows status.
+Independent tasks with separate files can run in parallel. Check each run with
+`delegate status <id> --json`: `phase` says what is happening, `outcome` says how it
+finished, `stalled` warns of no recent file activity, and `next` gives the next action.
+A stalled run is not automatically stopped. `delegate list` shows the batch at a glance.
 
 ## 5. Review
 Run `delegate review <id>` when the risk calls for it: `deep` tasks, public API or schema
@@ -83,7 +86,7 @@ Then:
   high-severity findings (`--accept-findings` only if the user accepts them). It squash-merges
   with the spec's title and Goal as the message and deletes all task state.
 - **Another round:** append `## Round N` to the spec with only what to fix (or apply
-  `REVIEW.patch` tests in the worktree and commit), then `delegate run <id>` again.
+  `REVIEW.patch` tests in the worktree and commit), then `delegate run --background <id>` again.
 - **Small fix:** commit it in the worktree yourself, then `delegate check <id>`.
 - **Reject:** `delegate discard <id>`; note in `PLAN.md` why if the task stays open.
 

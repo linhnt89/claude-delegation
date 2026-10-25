@@ -6,7 +6,10 @@ mod harness;
 mod init;
 mod prompts;
 mod spec;
+mod status;
+mod statusline;
 mod task;
+mod watch;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,6 +67,9 @@ enum Cmd {
         /// Read-only research task: the report is the deliverable
         #[arg(long, conflicts_with_all = ["ask", "no_ask"])]
         research: bool,
+        /// Detach the run into its own session and return immediately
+        #[arg(long)]
+        background: bool,
     },
     /// Rerun the spec's acceptance commands on the committed branch
     Check { id: String },
@@ -88,6 +94,20 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Read the current phase, progress, outcome and next action
+    Status {
+        id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Follow task progress (not built yet)
+    Watch {
+        id: Option<String>,
+        #[arg(long, default_value_t = 1.0)]
+        interval: f64,
+    },
+    /// Claude Code status line (not built yet)
+    Statusline,
     /// Show every task's round, tier, checks and review
     List,
     /// Squash-merge once checks, project rules and review pass; delete the task state
@@ -118,6 +138,7 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             no_ask,
             dry_run,
             research,
+            background,
         } => {
             let questions = match (ask, no_ask) {
                 (true, _) => QuestionPhase::Always,
@@ -133,6 +154,7 @@ fn dispatch(cmd: Cmd) -> Result<()> {
                     questions,
                     dry_run,
                     research,
+                    background,
                 },
             )
         }
@@ -149,6 +171,9 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             worker,
             dry_run,
         } => commands::plan_review(&ctx, &ids, tier, worker.as_deref(), dry_run),
+        Cmd::Status { id, json } => status::run(&ctx, id.as_deref(), json),
+        Cmd::Watch { id, interval } => watch::run(&ctx, id.as_deref(), interval),
+        Cmd::Statusline => statusline::run(&ctx),
         Cmd::List => commands::list(&ctx),
         Cmd::Merge {
             id,

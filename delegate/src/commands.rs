@@ -12,6 +12,7 @@ use crate::config::{Harness, ProjectRules, ReviewRule, Role, Tier, Worker, Worke
 use crate::harness::{self, Bounds, Session};
 use crate::prompts;
 use crate::spec;
+use crate::status::{self, Operation};
 use crate::task::{CheckOutcome, Checks, Ctx, ReviewState, Round, RoundStatus, Task, git};
 
 pub const SPEC_TEMPLATE: &str = include_str!("../templates/SPEC.md");
@@ -71,6 +72,7 @@ pub struct RunArgs {
     pub dry_run: bool,
     /// Read-only research: research tiers, no question phase, no checks; the report is the result.
     pub research: bool,
+    pub background: bool,
 }
 
 fn pick_tier(
@@ -140,6 +142,7 @@ fn implement_attempt(
     ask: bool,
     research: bool,
     log: &Path,
+    operation: &Operation,
 ) -> Result<Attempt> {
     let task_dir = t.wt.join(".task");
     let sb = harness::sandbox(Some(w.harness), &task_bounds(ctx, t)?, &t.wt)?;
@@ -186,6 +189,7 @@ fn implement_attempt(
     let resumed = session
         .filter(|_| harness::can_resume(w.harness))
         .map(|s| Session { resume: true, ..s });
+    operation.phase("implement")?;
     let rc = match &resumed {
         Some(s) => run(Some(s), prompts::WORK)?,
         None => run(None, &prompts::full(&t.id))?,
@@ -209,8 +213,37 @@ fn worktree_changed_paths(t: &Task) -> Result<Vec<String>> {
     Ok(paths)
 }
 
+fn asks_questions(t: &Task, a: &RunArgs) -> bool {
+    !a.research
+        && match a.questions {
+            QuestionPhase::Always => true,
+            QuestionPhase::Never => false,
+            QuestionPhase::Auto => !t.state.rounds.iter().any(|r| r.status == RoundStatus::Done),
+        }
+}
+
 pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     let mut t = Task::load(ctx, &a.id)?;
+    status::ensure_idle(&t)?;
+    let mut operation = None;
+    // The parent already preflighted this detached run. Publish the child's own
+    // identity before repeating even the spec and dirty-worktree checks.
+    if !a.dry_run && std::env::var("_DELEGATE_BACKGROUND_RUN").as_deref() == Ok(a.id.as_str()) {
+        let mut child_operation = Operation::acquire(&t, "run")?;
+        t = Task::load(ctx, &a.id)?;
+        child_operation.start(
+            if asks_questions(&t, a) {
+                "questions"
+            } else {
+                "implement"
+            },
+            a.worker.as_deref(),
+            &a.tier
+                .map_or_else(|| "custom".into(), |tier| tier.to_string()),
+            "0/0",
+        )?;
+        operation = Some(child_operation);
+    }
     if !a.dry_run && a.research && t.wt.is_dir() && t.worktree_dirty()? {
         bail!(
             "{}: the worktree has uncommitted changes; commit or discard them before a research run",
@@ -218,6 +251,13 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         );
     }
     let spec_text = t.spec_text()?;
+    if !a.dry_run && operation.is_none() {
+        operation = Some(Operation::acquire(&t, "run")?);
+    }
+    // State may have changed between the first snapshot and obtaining the lock.
+    t = Task::load(ctx, &a.id)?;
+    let ask = asks_questions(&t, a);
+    let phase = if ask { "questions" } else { "implement" };
     let cfg = WorkersConfig::load()?;
     let rules = ProjectRules::load(&ctx.root)?;
     let role = if a.research {
@@ -235,13 +275,6 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         let (tier, why) = pick_tier(&t, role, a.tier, &cfg, &rules, &spec_text)?;
         (Some(tier), why, cfg.candidates(role, tier, None)?)
     };
-    let implemented = t.state.rounds.iter().any(|r| r.status == RoundStatus::Done);
-    let ask = !a.research
-        && match a.questions {
-            QuestionPhase::Always => true,
-            QuestionPhase::Never => false,
-            QuestionPhase::Auto => !implemented,
-        };
     let tier_label = tier.map_or_else(|| "custom".into(), |x| x.to_string());
     println!(
         "task {}: {} @ {tier_label} ({why}), question phase: {}",
@@ -299,6 +332,17 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         bail!("no candidate can start: {}; {fix}", missing.join("; "));
     }
 
+    if a.background {
+        drop(operation);
+        return background(a, &t);
+    }
+    let operation = operation.as_mut().context("missing run operation")?;
+    operation.start(
+        phase,
+        available.first().map(ToString::to_string).as_deref(),
+        &tier_label,
+        &format!("1/{}", available.len()),
+    )?;
     ensure_task_excluded(ctx)?;
     if !t.wt.is_dir() {
         let base = t.base(ctx)?;
@@ -324,17 +368,19 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     // The last finished round: rounds after it (failed to start, unfinished) left the code as is.
     if t.last_done().is_some_and(|r| {
         r.checks
-                .as_ref()
-                .is_some_and(|c| c.outcome == CheckOutcome::Fail)
+            .as_ref()
+            .is_some_and(|c| c.outcome == CheckOutcome::Fail)
     }) {
-        fs::copy(t.dir.join("CHECKS.txt"), &checks_path)
-            .context("copying failed checks into .task/CHECKS.txt; restore the task's CHECKS.txt and retry")?;
+        fs::copy(t.dir.join("CHECKS.txt"), &checks_path).context(
+            "copying failed checks into .task/CHECKS.txt; restore the task's CHECKS.txt and retry",
+        )?;
     } else {
         match fs::remove_file(&checks_path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(error).context("removing stale .task/CHECKS.txt; check file permissions and retry");
+                return Err(error)
+                    .context("removing stale .task/CHECKS.txt; check file permissions and retry");
             }
         }
     }
@@ -355,7 +401,13 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     });
 
     let mut outcome = None;
-    for w in &available {
+    for (index, w) in available.iter().enumerate() {
+        operation.update(
+            phase,
+            Some(&w.to_string()),
+            &tier_label,
+            &format!("{}/{}", index + 1, available.len()),
+        )?;
         println!("round {number}: {w} ...");
         let log_start = match fs::metadata(&log) {
             Ok(metadata) => metadata.len(),
@@ -364,7 +416,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         };
         t.state.rounds[round_index].worker = Some(w.to_string());
         t.save()?;
-        match implement_attempt(ctx, &t, w, ask, a.research, &log)? {
+        match implement_attempt(ctx, &t, w, ask, a.research, &log, operation)? {
             Attempt::NotStarted => {
                 println!("  {w} failed to start, trying next candidate");
                 writeln!(failures, "  {w}:")?;
@@ -454,11 +506,84 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     if t.changed_paths(ctx)?.is_empty() {
         println!("no changes: {w} changed nothing");
     } else {
-        t.state.rounds[round_index].checks = Some(run_checks(ctx, &t)?);
+        t.state.rounds[round_index].checks = Some(run_checks(ctx, &t, operation)?);
     }
     t.state.rounds[round_index].status = RoundStatus::Done;
     t.save()?;
     summary(ctx, &t)
+}
+
+/// Re-exec a preflighted run through the setsid program, with no terminal descriptors.
+fn background(a: &RunArgs, t: &Task) -> Result<()> {
+    use std::process::Stdio;
+    if !harness::on_path("setsid") {
+        bail!("setsid not found; install util-linux or run without --background");
+    }
+    let output = fs::File::create(t.dir.join("run.out"))?;
+    let mut command = Command::new("setsid");
+    command
+        .arg(std::env::current_exe()?)
+        .arg("run")
+        .arg(&a.id)
+        .env("_DELEGATE_BACKGROUND_RUN", &a.id);
+    if let Some(tier) = a.tier {
+        command.arg("--tier").arg(tier.to_string());
+    }
+    if let Some(worker) = &a.worker {
+        command.arg("--worker").arg(worker);
+    }
+    match a.questions {
+        QuestionPhase::Always => {
+            command.arg("--ask");
+        }
+        QuestionPhase::Never => {
+            command.arg("--no-ask");
+        }
+        QuestionPhase::Auto => {}
+    }
+    if a.research {
+        command.arg("--research");
+    }
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(output.try_clone()?)
+        .stderr(output)
+        .spawn()
+        .context("starting detached runner with setsid")?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(live) = status::read_live(t)?
+            && live.pid == child.id()
+        {
+            // Even a very short run can finish before the parent is scheduled again.
+            println!(
+                "{} is running in the background; follow it with: delegate status {}",
+                t.id, t.id
+            );
+            return Ok(());
+        }
+        if let Some(exit) = child.try_wait()? {
+            let output = fs::read_to_string(t.dir.join("run.out")).unwrap_or_default();
+            if exit.success() {
+                println!(
+                    "{} is running in the background; follow it with: delegate status {}",
+                    t.id, t.id
+                );
+                return Ok(());
+            }
+            bail!("background run failed: {}", output.trim());
+        }
+        if std::time::Instant::now() >= deadline {
+            // Do not leave a runner behind when startup could not be confirmed.
+            child.kill()?;
+            child.wait()?;
+            bail!(
+                "background runner did not start; inspect {}; a retry may work",
+                t.dir.join("run.out").display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 // ---------------------------------------------------------------- checks
@@ -501,7 +626,8 @@ fn run_with_timeout(cmd: &[String], cwd: &Path) -> Result<(i32, String)> {
 }
 
 /// Run the spec's acceptance commands in the sandbox on the committed branch.
-fn run_checks(ctx: &Ctx, t: &Task) -> Result<Checks> {
+fn run_checks(ctx: &Ctx, t: &Task, operation: &Operation) -> Result<Checks> {
+    operation.phase("checks")?;
     let cmds = spec::acceptance_commands(&t.spec_text()?);
     let mut lines = Vec::new();
     let mut all_ok = true;
@@ -575,17 +701,28 @@ fn summary(ctx: &Ctx, t: &Task) -> Result<()> {
 
 pub fn check(ctx: &Ctx, id: &str) -> Result<()> {
     let mut t = Task::load(ctx, id)?;
+    status::ensure_idle(&t)?;
     ensure_finished(&t)?;
     if !t.wt.is_dir() || t.last_done().is_none() {
         bail!("{id} has no implemented round");
     }
+    let mut operation = Operation::acquire(&t, "checks")?;
+    t = Task::load(ctx, id)?;
+    operation.start(
+        "checks",
+        t.last_done().and_then(|r| r.worker.as_deref()),
+        &t.last_done()
+            .map_or_else(|| "custom".into(), Round::tier_label),
+        "1/1",
+    )?;
+    ensure_finished(&t)?;
     if t.worktree_dirty()? {
         bail!(
             "commit your changes in {} first; checks run on the committed branch",
             t.wt.display()
         );
     }
-    let checks = run_checks(ctx, &t)?;
+    let checks = run_checks(ctx, &t, &operation)?;
     if let Some(r) = t.last_done_mut() {
         r.checks = Some(checks);
     }
@@ -616,6 +753,25 @@ pub fn review(
     dry_run: bool,
 ) -> Result<()> {
     let mut t = Task::load(ctx, id)?;
+    status::ensure_idle(&t)?;
+    ensure_finished(&t)?;
+    if !t.dir.is_dir() {
+        bail!("{id} has no implemented round to review");
+    }
+    let mut operation = if dry_run {
+        None
+    } else {
+        Some(Operation::acquire(&t, "review")?)
+    };
+    if let Some(operation) = operation.as_mut() {
+        operation.start(
+            "review",
+            worker,
+            &tier.map_or_else(|| "custom".into(), |t| t.to_string()),
+            "0/0",
+        )?;
+    }
+    t = Task::load(ctx, id)?;
     ensure_finished(&t)?;
     let implementer = t.last_done().and_then(|r| r.worker.clone());
     let Some(implementer) = implementer.filter(|_| t.wt.is_dir()) else {
@@ -639,6 +795,13 @@ pub fn review(
         return Ok(());
     }
 
+    let operation = operation.as_mut().context("missing review operation")?;
+    operation.update(
+        "review",
+        workers.first().map(ToString::to_string).as_deref(),
+        &tier.to_string(),
+        &format!("1/{}", workers.len()),
+    )?;
     let task_dir = t.wt.join(".task");
     for f in ["REPORT.md", "QUESTIONS.md", "REVIEW.md"] {
         let _ = fs::remove_file(task_dir.join(f));
@@ -653,7 +816,13 @@ pub fn review(
     let review_file = task_dir.join("REVIEW.md");
 
     let mut used = None;
-    for w in &workers {
+    for (index, w) in workers.iter().enumerate() {
+        operation.update(
+            "review",
+            Some(&w.to_string()),
+            &tier.to_string(),
+            &format!("{}/{}", index + 1, workers.len()),
+        )?;
         println!("review: {w} ...");
         let sb = harness::sandbox(Some(w.harness), &task_bounds(ctx, &t)?, &t.wt)?;
         let rc = harness::run_logged(
@@ -823,14 +992,21 @@ pub fn list(ctx: &Ctx) -> Result<()> {
     }
     for id in ids {
         let t = Task::load(ctx, &id)?;
+        let live = status::read_live(&t)?;
+        let phase = status::phase(&t, live.as_ref());
+        let live_label = match phase.as_str() {
+            "interrupted" => Some("interrupted".to_string()),
+            "questions" | "implement" | "checks" | "review" => Some(format!("running ({phase})")),
+            _ => None,
+        };
         let Some(r) = t.last_round() else {
-            println!("{id:<10} not run");
+            println!("{id:<10} {}", live_label.as_deref().unwrap_or("not run"));
             continue;
         };
         let no_changes = r.status == RoundStatus::Done
             && r.checks.is_none()
             && t.changed_paths(ctx).is_ok_and(|p| p.is_empty());
-        let mut status = r.status_label(no_changes);
+        let mut status = live_label.unwrap_or_else(|| r.status_label(no_changes));
         if let Some(rv) = &t.state.review
             && t.wt.is_dir()
             && t.head(ctx).is_ok_and(|h| h == rv.commit)
@@ -848,97 +1024,195 @@ pub fn list(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+/// Read-only merge policy shared by the merge transaction and every status view.
+#[derive(Debug)]
+pub(crate) struct MergeReadiness {
+    pub blockers: Vec<String>,
+    pub next: Option<String>,
+    refusal: Option<String>,
+    warnings: Vec<String>,
+}
+
+pub(crate) fn merge_readiness(
+    ctx: &Ctx,
+    t: &Task,
+    accept_findings: bool,
+    owned: Option<&Operation>,
+) -> MergeReadiness {
+    let id = &t.id;
+    let mut problems = Vec::new();
+    let mut next = None;
+    let mut warnings = Vec::new();
+    let checked = (|| -> Result<()> {
+        if owned.is_none() {
+            status::ensure_idle(t)?;
+        }
+        ensure_finished(t)?;
+        let Some(implemented) = t.last_done() else {
+            bail!("{id} has no implemented round")
+        };
+        let base = t.base(ctx)?;
+        if git(&ctx.root, &["rev-parse", "--abbrev-ref", "HEAD"])? != base {
+            bail!("check out {base} first");
+        }
+        if !git(
+            &ctx.root,
+            &["status", "--porcelain", "--untracked-files=no"],
+        )?
+        .is_empty()
+        {
+            bail!("commit or stash changes in {} first", ctx.root.display());
+        }
+        let paths = t.changed_paths(ctx)?;
+        if paths.is_empty() {
+            bail!(
+                "{} has no changes to merge (use: delegate discard {id})",
+                t.branch
+            );
+        }
+
+        let head = t.head(ctx)?;
+        let mut block = |message: String, command: String| {
+            if problems.is_empty() {
+                next = Some(command);
+            }
+            problems.push(message);
+        };
+        match &implemented.checks {
+            Some(c) if c.commit != head => block(
+                "acceptance checks haven't run on the final commit (run: delegate check)".into(),
+                format!("delegate check {id}"),
+            ),
+            None => block(
+                "acceptance checks haven't run (run: delegate check)".into(),
+                format!("delegate check {id}"),
+            ),
+            Some(c) => match c.outcome {
+                CheckOutcome::Pass => {}
+                CheckOutcome::NoCommands => block(
+                    "the spec has no runnable acceptance commands (lines like: - [ ] `command`)"
+                        .into(),
+                    format!(
+                        "add acceptance commands to {}, then delegate check {id}",
+                        t.spec.display()
+                    ),
+                ),
+                CheckOutcome::Fail => block(failed_checks_problem(t), format!("delegate run {id}")),
+            },
+        }
+        let review = t.state.review.as_ref().filter(|r| r.commit == head);
+        for rule in ProjectRules::load(&ctx.root)?.matching(&paths)? {
+            let matched = rule.matching_paths(&paths)?;
+            let mut changed = matched
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            if matched.len() > 5 {
+                changed.push_str(", ...");
+            }
+            if let Some(min) = rule.min_tier
+                && implemented.tier.is_none_or(|used| used < min)
+            {
+                block(
+                    format!(
+                        "rule {} needs tier >= {min}, final round ran at {} (changed: {changed})",
+                        rule.label(),
+                        implemented.tier_label()
+                    ),
+                    format!("delegate run {id} --tier {min}"),
+                );
+            }
+            if rule.review == Some(ReviewRule::Always) && review.is_none() {
+                block(
+                    format!(
+                        "rule {} needs a review of the final commit (run: delegate review) (changed: {changed})",
+                        rule.label()
+                    ),
+                    format!("delegate review {id}"),
+                );
+            }
+            if let (Some(max), Some(used)) = (rule.max_tier, implemented.tier)
+                && used > max
+            {
+                warnings.push(format!(
+                    "warning: rule {} suggests tier <= {max}, used {used}",
+                    rule.label()
+                ));
+            }
+        }
+        if let Some(r) = review
+            && r.high != Some(0)
+            && !accept_findings
+        {
+            let n = r.high.map_or_else(|| "unknown".into(), |n| n.to_string());
+            block(
+                format!(
+                    "review found {n} high-severity issue(s); fix them in another round, or merge with --accept-findings if the user accepts them"
+                ),
+                format!("delegate run {id}"),
+            );
+        }
+        if !problems.is_empty() {
+            bail!("merge refused:\n  - {}", problems.join("\n  - "));
+        }
+
+        // A missing/unreadable spec is also a merge refusal, not a transaction failure.
+        t.spec_text()?;
+        Ok(())
+    })();
+    let refusal = checked.err().map(|e| e.to_string());
+    if problems.is_empty()
+        && let Some(error) = &refusal
+    {
+        problems.push(error.clone());
+    }
+    let next = next.or_else(|| {
+        problems.first().map(|problem| {
+            if problem.contains("delegate discard") {
+                format!("delegate discard {id}")
+            } else if let Some(base) = problem
+                .strip_prefix("check out ")
+                .and_then(|s| s.strip_suffix(" first"))
+            {
+                format!("git checkout {base}")
+            } else if problem.contains("commit or stash") {
+                "git stash".into()
+            } else {
+                format!("delegate run {id}")
+            }
+        })
+    });
+    MergeReadiness {
+        blockers: problems,
+        next,
+        refusal,
+        warnings,
+    }
+}
+
 #[allow(clippy::too_many_lines)] // Keep the merge transaction and its rollback together.
 pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
     let t = Task::load(ctx, id)?;
-    ensure_finished(&t)?;
-    let Some(implemented) = t.last_done() else {
-        bail!("{id} has no implemented round")
+    let operation = if t.dir.is_dir() {
+        Some(Operation::acquire(&t, "merge")?)
+    } else {
+        None
     };
+    let t = if operation.is_some() {
+        Task::load(ctx, id)?
+    } else {
+        t
+    };
+    let readiness = merge_readiness(ctx, &t, accept_findings, operation.as_ref());
+    for warning in readiness.warnings {
+        eprintln!("{warning}");
+    }
+    if let Some(refusal) = readiness.refusal {
+        bail!("{refusal}");
+    }
     let base = t.base(ctx)?;
-    if git(&ctx.root, &["rev-parse", "--abbrev-ref", "HEAD"])? != base {
-        bail!("check out {base} first");
-    }
-    if !git(
-        &ctx.root,
-        &["status", "--porcelain", "--untracked-files=no"],
-    )?
-    .is_empty()
-    {
-        bail!("commit or stash changes in {} first", ctx.root.display());
-    }
-    let paths = t.changed_paths(ctx)?;
-    if paths.is_empty() {
-        bail!(
-            "{} has no changes to merge (use: delegate discard {id})",
-            t.branch
-        );
-    }
-
-    let head = t.head(ctx)?;
-    let mut problems = Vec::new();
-    match &implemented.checks {
-        Some(c) if c.commit != head => problems.push(
-            "acceptance checks haven't run on the final commit (run: delegate check)".to_string(),
-        ),
-        None => problems.push("acceptance checks haven't run (run: delegate check)".to_string()),
-        Some(c) => match c.outcome {
-            CheckOutcome::Pass => {}
-            CheckOutcome::NoCommands => problems.push(
-                "the spec has no runnable acceptance commands (lines like: - [ ] `command`)".into(),
-            ),
-            CheckOutcome::Fail => problems.push(failed_checks_problem(&t)),
-        },
-    }
-    let review = t.state.review.as_ref().filter(|r| r.commit == head);
-    for rule in ProjectRules::load(&ctx.root)?.matching(&paths)? {
-        let matched = rule.matching_paths(&paths)?;
-        let mut changed = matched
-            .iter()
-            .take(5)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        if matched.len() > 5 {
-            changed.push_str(", ...");
-        }
-        if let Some(min) = rule.min_tier
-            && implemented.tier.is_none_or(|used| used < min)
-        {
-            problems.push(format!(
-                "rule {} needs tier >= {min}, final round ran at {} (changed: {changed})",
-                rule.label(),
-                implemented.tier_label()
-            ));
-        }
-        if rule.review == Some(ReviewRule::Always) && review.is_none() {
-            problems.push(format!(
-                "rule {} needs a review of the final commit (run: delegate review) (changed: {changed})",
-                rule.label()
-            ));
-        }
-        if let (Some(max), Some(used)) = (rule.max_tier, implemented.tier)
-            && used > max
-        {
-            eprintln!(
-                "warning: rule {} suggests tier <= {max}, used {used}",
-                rule.label()
-            );
-        }
-    }
-    if let Some(r) = review
-        && r.high != Some(0)
-        && !accept_findings
-    {
-        let n = r.high.map_or_else(|| "unknown".into(), |n| n.to_string());
-        problems.push(format!(
-            "review found {n} high-severity issue(s); fix them in another round, or merge with --accept-findings if the user accepts them"
-        ));
-    }
-    if !problems.is_empty() {
-        bail!("merge refused:\n  - {}", problems.join("\n  - "));
-    }
-
     let text = t.spec_text()?;
     let title = spec::title(&text, id);
     let goal = spec::goal(&text);
@@ -1016,7 +1290,14 @@ fn remove(ctx: &Ctx, t: &Task) -> Result<()> {
 }
 
 pub fn discard(ctx: &Ctx, id: &str) -> Result<()> {
-    remove(ctx, &Task::load(ctx, id)?)
+    let t = Task::load(ctx, id)?;
+    status::ensure_idle(&t)?;
+    let _operation = if t.dir.is_dir() {
+        Some(Operation::acquire(&t, "discard")?)
+    } else {
+        None
+    };
+    remove(ctx, &t)
 }
 
 #[cfg(test)]
@@ -1318,6 +1599,179 @@ mod tests {
     }
 
     #[test]
+    fn live_operation_refuses_all_competing_task_operations() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        let mut operation = Operation::acquire(&t, "implement")?;
+        operation.start("implement", Some("pi:test"), "standard", "1/1")?;
+        let args = RunArgs {
+            id: t.id.clone(),
+            tier: None,
+            worker: None,
+            questions: QuestionPhase::Auto,
+            dry_run: false,
+            research: false,
+            background: false,
+        };
+        let expected = format!(
+            "t001 is running (implement, pid {}); wait for it, or stop it with: kill {}",
+            std::process::id(),
+            std::process::id()
+        );
+        for result in [
+            run(&ctx, &args),
+            check(&ctx, &t.id),
+            review(&ctx, &t.id, None, None, false),
+            merge(&ctx, &t.id, false),
+            discard(&ctx, &t.id),
+        ] {
+            assert_eq!(result.unwrap_err().to_string(), expected);
+        }
+        let views = status::collect(&ctx, Some(&t.id), status::Depth::Phase)?;
+        assert_eq!(views[0].phase, "implement");
+        assert_eq!(views[0].pid, Some(std::process::id()));
+        assert!(!views[0].ready_to_merge);
+        assert!(views[0].next.is_none());
+        drop(operation);
+        assert_eq!(status::read_live(&t)?.unwrap().phase, "done");
+        Ok(())
+    }
+
+    #[test]
+    fn exclusive_lock_blocks_operations_before_live_state_is_written() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        let operation = Operation::acquire(&t, "review")?;
+        let error = status::ensure_idle(&t).unwrap_err().to_string();
+        assert!(error.contains(&format!("review, pid {}", std::process::id())));
+        let views = status::collect(&ctx, None, status::Depth::Phase)?;
+        assert!(!views[0].ready_to_merge);
+        drop(operation);
+        status::ensure_idle(&t)?;
+        Ok(())
+    }
+
+    #[test]
+    fn dirty_check_error_finishes_its_live_state() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        fs::write(t.wt.join("code"), "not committed\n")?;
+        assert!(
+            check(&ctx, &t.id)
+                .unwrap_err()
+                .to_string()
+                .contains("commit your changes")
+        );
+        let live = status::read_live(&t)?.unwrap();
+        assert_eq!(live.phase, "done");
+        assert!(!live.alive());
+        let _next = Operation::acquire(&t, "checks")?;
+        Ok(())
+    }
+
+    #[test]
+    fn dead_check_and_review_override_a_passing_round() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        for phase in ["checks", "review"] {
+            let mut operation = Operation::acquire(&t, phase)?;
+            operation.start(phase, Some("pi:reviewer"), "deep", "1/1")?;
+            drop(operation);
+            let mut live = status::read_live(&t)?.unwrap();
+            live.phase = phase.into();
+            live.pid_start = "0".into(); // A reused pid must never count as this operation.
+            fs::write(t.dir.join("status.json"), serde_json::to_vec(&live)?)?;
+            let views = status::collect(&ctx, None, status::Depth::Full)?;
+            assert_eq!(views[0].phase, "interrupted");
+            assert_eq!(views[0].outcome, None);
+            assert_eq!(views[0].pid, None);
+            assert!(!views[0].stalled);
+            assert!(
+                views[0]
+                    .next
+                    .as_ref()
+                    .unwrap()
+                    .contains("delegate discard t001")
+            );
+        }
+        Ok(())
+    }
+
+    fn file_snapshot(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>, std::time::SystemTime)>> {
+        let mut result = Vec::new();
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                result.extend(file_snapshot(&entry.path())?);
+            } else {
+                result.push((
+                    entry.path(),
+                    fs::read(entry.path())?,
+                    entry.metadata()?.modified()?,
+                ));
+            }
+        }
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(result)
+    }
+
+    #[test]
+    fn status_is_read_only_and_includes_committed_dirty_and_untracked_files() -> Result<()> {
+        let (repo, ctx, t) = merge_fixture()?;
+        fs::write(t.wt.join("code"), "task change\nuncommitted\n")?;
+        fs::write(t.wt.join("untracked"), "new file")?;
+        fs::create_dir(t.wt.join(".task"))?;
+        fs::write(t.wt.join(".task/private"), "not a changed file\n")?;
+        // An existing idle lock must remain byte-for-byte and mtime identical too.
+        drop(Operation::acquire(&t, "checks")?);
+        let before = file_snapshot(&repo.0)?;
+        let views = status::collect(&ctx, Some(&t.id), status::Depth::Full)?;
+        let view = &views[0];
+        assert_eq!(view.phase, "done");
+        assert_eq!(view.outcome.as_deref(), Some("pass"));
+        assert!(view.ready_to_merge);
+        assert_eq!(view.next.as_deref(), Some("delegate merge t001"));
+        assert_eq!(view.changed_files.len(), 2);
+        assert_eq!(view.changed_files[0].path, "code");
+        assert_eq!(
+            (view.changed_files[0].added, view.changed_files[0].removed),
+            (2, 1)
+        );
+        assert_eq!(view.changed_files[1].path, "untracked");
+        assert_eq!(view.changed_files[1].added, 1);
+        status::render_rows(&views);
+        status::render_detail(view);
+        let brief = status::collect(&ctx, None, status::Depth::Phase)?;
+        assert!(brief[0].changed_files.is_empty());
+        assert_eq!(brief[0].log_tail, "");
+        assert_eq!(file_snapshot(&repo.0)?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn status_and_merge_share_review_blockers_and_next_action() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        fs::write(
+            ctx.root.join(".delegate.toml"),
+            "[[rules]]\npaths = [\"code\"]\nreview = \"always\"\n",
+        )?;
+        let views = status::collect(&ctx, None, status::Depth::Full)?;
+        assert!(!views[0].ready_to_merge);
+        assert_eq!(views[0].next.as_deref(), Some("delegate review t001"));
+        let error = merge(&ctx, &t.id, false).unwrap_err().to_string();
+        for blocker in &views[0].merge_blockers {
+            assert!(error.contains(blocker));
+        }
+        assert!(status::render_rows(&views).contains("needs review"));
+        fs::write(
+            ctx.root.join(".delegate.toml"),
+            "[[rules]]\npaths = [\"code\"]\nmin_tier = \"deep\"\nreview = \"always\"\n",
+        )?;
+        let views = status::collect(&ctx, None, status::Depth::Phase)?;
+        assert_eq!(
+            views[0].next.as_deref(),
+            Some("delegate run t001 --tier deep")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn research_run_refuses_dirty_worktree() -> Result<()> {
         let repo =
             TestRepo(std::env::temp_dir().join(format!("delegate-test-{}", uuid::Uuid::new_v4())));
@@ -1358,6 +1812,7 @@ mod tests {
             questions: QuestionPhase::Auto,
             dry_run: false,
             research: true,
+            background: false,
         };
 
         assert_eq!(
@@ -1370,6 +1825,158 @@ mod tests {
             fs::read_to_string(t.wt.join("new-file"))?,
             "untracked work\n"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn corrupt_live_state_is_local_and_views_remain_read_only() -> Result<()> {
+        let (repo, ctx, t) = merge_fixture()?;
+        let other = Task::load(&ctx, "t002")?;
+        fs::create_dir_all(&other.dir)?;
+        fs::write(&other.spec, "# Task t002\n")?;
+        let operation = Operation::acquire(&other, "implement")?;
+        // Publish without a heartbeat so snapshot comparisons cannot race the test.
+        operation.update("implement", Some("pi:test"), "standard", "1/1")?;
+        for corrupt in ["", "{", "{}", r#"{"phase":"implement","pid":1}"#] {
+            fs::write(t.dir.join("status.json"), corrupt)?;
+            let before = file_snapshot(&repo.0)?;
+            for depth in [status::Depth::Phase, status::Depth::Full] {
+                let views = status::collect(&ctx, None, depth)?;
+                assert_eq!(views.len(), 2);
+                assert_eq!(views[0].phase, "done");
+                assert!(views[0].ready_to_merge);
+                assert_eq!(views[1].phase, "implement");
+            }
+            list(&ctx)?;
+            assert_eq!(
+                merge_readiness(&ctx, &t, false, None).blockers,
+                Vec::<String>::new()
+            );
+            assert_eq!(file_snapshot(&repo.0)?, before);
+        }
+        // A read error, not just invalid JSON, is also a missing live snapshot.
+        fs::remove_file(t.dir.join("status.json"))?;
+        fs::create_dir(t.dir.join("status.json"))?;
+        assert!(status::collect(&ctx, None, status::Depth::Phase).is_ok());
+        discard(&ctx, &t.id)?;
+        operation.phase("done")?;
+        Ok(())
+    }
+
+    #[test]
+    fn stale_atomic_files_are_cleaned_only_by_an_exclusive_operation() -> Result<()> {
+        let (repo, ctx, t) = merge_fixture()?;
+        for name in [
+            ".status-killed.tmp",
+            ".STATE-killed.tmp",
+            ".status-keep.txt",
+        ] {
+            fs::write(t.dir.join(name), "leftover")?;
+        }
+        fs::create_dir(t.dir.join(".status-directory.tmp"))?;
+        let before = file_snapshot(&repo.0)?;
+        status::collect(&ctx, None, status::Depth::Full)?;
+        list(&ctx)?;
+        assert_eq!(file_snapshot(&repo.0)?, before);
+        let operation = Operation::acquire(&t, "checks")?;
+        assert!(!t.dir.join(".status-killed.tmp").exists());
+        assert!(!t.dir.join(".STATE-killed.tmp").exists());
+        assert!(t.dir.join(".status-keep.txt").exists());
+        assert!(t.dir.join(".status-directory.tmp").is_dir());
+        fs::write(t.dir.join(".STATE-active.tmp"), "in flight")?;
+        assert!(Operation::acquire(&t, "review").is_err());
+        assert!(t.dir.join(".STATE-active.tmp").exists());
+        drop(operation);
+        let _next = Operation::acquire(&t, "review")?;
+        assert!(!t.dir.join(".STATE-active.tmp").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn detached_child_publishes_live_before_slow_preflight() -> Result<()> {
+        const CHILD: &str = "_DELEGATE_TEST_PREFLIGHT_ROOT";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = PathBuf::from(root);
+            let ctx = Ctx {
+                gitdir: root.join(".git"),
+                root,
+                dhome: PathBuf::from(std::env::var_os("DELEGATE_HOME").unwrap()),
+            };
+            return run(
+                &ctx,
+                &RunArgs {
+                    id: "t001".into(),
+                    tier: None,
+                    worker: Some("codex:gpt-test@high".into()),
+                    questions: QuestionPhase::Never,
+                    dry_run: false,
+                    research: false,
+                    background: false,
+                },
+            );
+        }
+        let (_repo, ctx, t) = merge_fixture()?;
+        fs::remove_file(&t.spec)?;
+        assert!(Command::new("mkfifo").arg(&t.spec).status()?.success());
+        // Block the repeated spec preflight indefinitely. The child's live state
+        // must be visible even when this takes longer than startup's deadline.
+        let mut child = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "commands::tests::detached_child_publishes_live_before_slow_preflight",
+            ])
+            .env(CHILD, &ctx.root)
+            .env("DELEGATE_HOME", &ctx.dhome)
+            .env("_DELEGATE_BACKGROUND_RUN", &t.id)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        let mut observed = None;
+        for _ in 0..200 {
+            observed = status::read_live(&t)?;
+            if observed.is_some() || child.try_wait()?.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(2100));
+        let still_running = child.try_wait()?.is_none();
+        let _ = child.kill();
+        child.wait()?;
+        assert!(
+            still_running,
+            "the repeated spec preflight should still be blocked"
+        );
+        let live = observed.context("the child must publish before reading its spec")?;
+        assert_eq!(live.pid, child.id());
+        assert_eq!(live.phase, "implement");
+        fs::remove_file(&t.spec)?;
+        fs::write(&t.spec, "# Task t001\n")?;
+        assert_eq!(
+            status::collect(&ctx, None, status::Depth::Phase)?[0].phase,
+            "interrupted"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_corrupt_status_json_does_not_break_other_views() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        fs::write(t.dir.join("status.json"), "")?;
+        assert!(status::collect(&ctx, None, status::Depth::Phase).is_ok());
+        assert!(list(&ctx).is_ok());
+        assert!(discard(&ctx, &t.id).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_status_reader_does_not_block_a_starting_operation() -> Result<()> {
+        let (_repo, _ctx, t) = merge_fixture()?;
+        drop(Operation::acquire(&t, "checks")?);
+        let reader = fs::File::open(t.dir.join("operation.lock"))?;
+        reader.try_lock_shared()?; // what ensure_idle holds, briefly, for every status poll
+        assert!(Operation::acquire(&t, "checks").is_ok());
         Ok(())
     }
 }

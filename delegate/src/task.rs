@@ -52,6 +52,8 @@ impl Ctx {
 /// Run git and return trimmed-right stdout, failing with git's stderr.
 pub fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
+        // Read-only status/diff callers must never refresh the index on disk.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -203,7 +205,9 @@ impl Task {
 
     pub fn save(&self) -> Result<()> {
         // An interrupted save must leave the previous state readable.
-        let pending = self.dir.join("STATE.json.tmp");
+        let pending = self
+            .dir
+            .join(format!(".STATE-{}.tmp", uuid::Uuid::new_v4()));
         std::fs::write(&pending, serde_json::to_string_pretty(&self.state)? + "\n")?;
         std::fs::rename(pending, self.dir.join("STATE.json"))?;
         Ok(())
