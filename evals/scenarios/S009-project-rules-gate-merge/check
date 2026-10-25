@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# A rule on payments code applies even though the spec's Scope didn't mention it.
+. "$EVALS_LIB/common.sh"
+setup_project
+cat >>"$PROJ/.delegate.toml" <<'T'
+
+[[rules]]
+paths    = ["shop/payments/**"]
+min_tier = "deep"
+review   = "always"
+T
+git -C "$PROJ" commit -qam "Payments need deep work and review"
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() {
+  grep -q divide_bill shop/pricing.py && return 0
+  printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
+  mkdir -p shop/payments && printf 'def charge_each(card_ids, share):\n    return {c: share for c in card_ids}\n' >shop/payments/split.py
+}
+B
+stub_worker deepseek-review <<'B'
+review() {
+  if [ -f "$EVALS_WORK/flags/high" ]; then printf 'FINDINGS: 1 high, 0 medium, 0 low\nhigh, shop/payments/split.py:1, charges each card the full share without checking the total\n' >.task/REVIEW.md
+  else printf 'FINDINGS: 0 high, 0 medium, 0 low\n' >.task/REVIEW.md; fi
+}
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+d run t001
+[ "$RC" -eq 0 ] || fail "run failed: $OUT"
+d merge t001
+[ "$RC" -ne 0 ] || fail "merge allowed for payments code changed at standard with no review"
+echo "$OUT" | grep -q "shop/payments/\*\*" || fail "refusal doesn't name the rule: $OUT"
+echo "$OUT" | grep -q "shop/payments/split.py" || fail "refusal doesn't name the changed path that triggered the rule: $(echo "$OUT" | tr '\n' ' ')"
+
+d run t001 --tier deep
+d merge t001
+[ "$RC" -ne 0 ] || fail "merge allowed without the required review"
+flag high
+d review t001
+d merge t001
+[ "$RC" -ne 0 ] || fail "merge allowed with a high-severity review finding"
+echo "$OUT" | grep -q "high-severity" || fail "refusal doesn't mention the high-severity finding: $OUT"
+unflag high
+d review t001
+d merge t001
+[ "$RC" -eq 0 ] || fail "merge refused after a deep round and a clean review: $OUT"
+pass "rules on changed paths held the merge until a deep round and a clean review"

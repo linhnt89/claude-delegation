@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# The configured harness, or bwrap, isn't installed.
+. "$EVALS_LIB/common.sh"
+setup_project
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+base_refs="$(git -C "$PROJ" for-each-ref --format='%(refname)')"
+
+no_mess() { # what a run that never started must leave behind: nothing
+  [ ! -d "$DHOME/t001/worktree" ] || fail "$1: a worktree was left for a run that never started"
+  git -C "$PROJ" rev-parse -q --verify refs/heads/task/t001 >/dev/null && fail "$1: a task branch was left for a run that never started"
+  d list
+  echo "$OUT" | grep -q "failed to start" && fail "$1: list shows a half-made round: $OUT"
+  return 0
+}
+
+# 1. Harness missing: the config names opencode, which isn't installed.
+workers_toml <<'T'
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+standard = ["opencode:gpt-6.1-sol@high"]
+T
+( minimal_path bwrap; d run t001; echo "$RC" >"$EVALS_WORK/rc"; echo "$OUT" >"$EVALS_WORK/out" )
+OUT="$(cat "$EVALS_WORK/out")"; RC="$(cat "$EVALS_WORK/rc")"
+[ "$RC" -ne 0 ] || fail "run with a missing harness reported success"
+echo "$OUT" | grep -q "opencode" || fail "missing harness: the message doesn't name opencode: $(echo "$OUT" | tail -1)"
+echo "$OUT" | grep -Eqi "not (found|installed)|no such file|install|PATH" \
+  || fail "missing harness: the message doesn't say opencode isn't installed: $(echo "$OUT" | tail -1)"
+no_mess "missing harness"
+
+# 2. bwrap missing.
+simple_workers
+( minimal_path; d run t001; echo "$RC" >"$EVALS_WORK/rc"; echo "$OUT" >"$EVALS_WORK/out" )
+OUT="$(cat "$EVALS_WORK/out")"; RC="$(cat "$EVALS_WORK/rc")"
+[ "$RC" -ne 0 ] || fail "run without bwrap reported success"
+echo "$OUT" | grep -q "bwrap" || fail "missing bwrap: the message doesn't name bwrap: $(echo "$OUT" | tail -1)"
+no_mess "missing bwrap"
+pass "both missing tools were named before any work, with nothing left behind"

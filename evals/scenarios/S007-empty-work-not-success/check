@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# A worker that changes nothing, and one that crashes halfway.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-idle gpt-idle gpt-idle
+# The existing tests already pass, as they usually do before a feature is added.
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+
+d run t001
+echo "$OUT" | grep -Eqi "no change|nothing (was )?(changed|done|committed)|no commit|empty" \
+  || fail "a run that changed nothing didn't say so: $(echo "$OUT" | grep -E '^(checks|task|diff)' | tr '\n' ' ')"
+d list
+echo "$OUT" | grep -q "t001.*checks pass" && fail "list shows a task where nothing was done as passed: $OUT"
+d merge t001
+[ "$RC" -ne 0 ] || fail "a task with no change was merged"
+
+# Crash halfway: partial edit, then the worker dies.
+stub_worker gpt-crash <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n' >>shop/pricing.py; echo "panic: connection reset" >&2; exit 3; }
+B
+simple_workers standard gpt-crash gpt-crash gpt-crash
+write_spec t002 "Split a bill" "Add divide_bill." "python3 -c 'import shop'"
+d run t002
+echo "$OUT" | grep -Eqi "exit(ed)? (code |with )?3|crash|error|failed" \
+  || fail "a worker that crashed (exit 3) wasn't reported: $(echo "$OUT" | grep -E '^(checks|task)' | tr '\n' ' ')"
+d list
+echo "$OUT" | grep -E "^t002 " | grep -q "checks pass$" && fail "list shows a crashed worker's task as passed with no warning: $OUT"
+pass "empty and crashed work were reported plainly and never shown as done"

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# GPT implemented it; the review list starts with GPT.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; }
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+d run t001
+d review t001
+[ "$RC" -eq 0 ] || fail "review failed: $OUT"
+[ -z "$(calls_where review gpt-review)" ] || fail "a GPT model reviewed GPT's work"
+[ -n "$(calls_where review deepseek-review)" ] || fail "the other-family reviewer wasn't used"
+d list
+echo "$OUT" | grep -q "deepseek-review" || fail "list doesn't show which model reviewed: $(echo "$OUT" | grep t001)"
+
+# Only same-family reviewers configured: refuse rather than self-review.
+sed -i 's|^standard = \["pi:gpt-review@high", "pi:deepseek-review@high"\]|standard = ["pi:gpt-review@high", "pi:gpt-5-mini@high"]|' "$HOME/.config/delegate/workers.toml"
+n_before="$(calls | wc -l)"
+d review t001
+[ "$RC" -ne 0 ] || fail "review ran with only same-family reviewers"
+echo "$OUT" | grep -qi "family" || fail "the refusal doesn't explain the family rule: $OUT"
+[ "$(calls | wc -l)" = "$n_before" ] || fail "a same-family reviewer was started"
+pass "review skipped the implementer's family, and refused when only that family was left"

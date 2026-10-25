@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-flag gpt-flag gpt-flag
+exec python3 - "$@" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+from kit import *
+
+# Any malformed spec, workers.toml, .delegate.toml or --worker gets a clear message, never a crash or mess.
+stub("gpt-flag", FLAGGED)
+stub("deepseek-review", "")
+cfg_path = os.path.join(HOME, ".config/delegate/workers.toml")
+GOOD_CFG = open(cfg_path).read()
+save_template()
+rng, s = seed()
+junk = lambda: rng.choice(["foo", "pii", "gpt", "kodex", "claud"]) + str(rng.randrange(100))
+effort = lambda: rng.choice(["ultra", "hgih", "extreme", "MAX!"])
+
+def workers_cases():
+    h, e = junk(), effort()
+    return [
+        ("workers.toml with broken TOML", GOOD_CFG.replace("[implement]", "[implement"), ["workers.toml"]),
+        ("unknown harness", GOOD_CFG.replace('"pi:gpt-flag@high"', f'"{h}:gpt-6@high"'), [h]),
+        ("unknown effort", GOOD_CFG.replace('"pi:gpt-flag@high"', f'"pi:gpt-flag@{e}"'), [e]),
+        ("no [defaults]", GOOD_CFG.replace("[defaults]", "[defaultz]"), ["defaults"]),
+        ("unknown tier in defaults", GOOD_CFG.replace('implement = "standard"', 'implement = "medium"'), ["medium"]),
+        ("candidate that isn't a string", GOOD_CFG.replace('standard = ["pi:gpt-flag@high"]', "standard = [42]"), ["workers.toml"]),
+        ("empty candidate list", GOOD_CFG.replace('standard = ["pi:gpt-flag@high"]', "standard = []"), ["standard"]),
+    ]
+
+def rules_cases():
+    return [
+        (".delegate.toml with broken TOML", "[[rules]\npaths = [\"shop/**\"]\n", [".delegate.toml"]),
+        ("unknown min_tier", f'[[rules]]\npaths = ["shop/**"]\nmin_tier = "{effort()}"\n', [".delegate.toml"]),
+        ("bad glob", '[[rules]]\npaths = ["shop/[x"]\nreview = "always"\n', ["glob"]),
+    ]
+
+def worker_flag_cases():
+    h, e = junk(), effort()
+    return [("--worker without a colon", "pi", ["harness:model"]), ("--worker with unknown harness", f"{h}:gpt-6@high", [h]),
+            ("--worker with unknown effort", f"pi:gpt-6@{e}", [e]), ("--worker with empty effort", "pi:gpt-6@", ["effort"])]
+
+def judge(name, rc, out, words, tid=None):
+    if "panicked" in out or "RUST_BACKTRACE" in out:
+        fail(f"{name}: delegate crashed: {out.strip().splitlines()[0]}", name, s)
+    if rc == 0:
+        fail(f"{name}: accepted without complaint", name, s)
+    if not all(w.lower() in out.lower() for w in words):
+        fail(f"{name}: the message doesn't name the problem ({' / '.join(words)}): {out.strip()[-160:]}", name, s)
+    if name.startswith("empty candidate list") and "family" in out:
+        fail(f"{name}: the message blames model families, not the empty list: {out.strip()[-160:]}", name, s)
+    if tid and (git("rev-parse", "-q", "--verify", f"refs/heads/task/{tid}") or os.path.isdir(os.path.join(DHOME, tid, "worktree"))):
+        fail(f"{name}: a refused run left a worktree or branch for {tid}", name, s)
+
+checked = 0
+for name, text, words in rng.sample(workers_cases(), 7):
+    fresh(); workers(GOOD_CFG); spec("t002", (task_cmd("t002"),))
+    workers(text)
+    cmd = rng.choice([["run", "t002"], ["run", "t002", "--dry-run"]])
+    rc, out = d(*cmd); judge(name + f" ({' '.join(cmd)})", rc, out, words, "t002"); checked += 1
+for name, text, words in rules_cases():
+    fresh(); workers(GOOD_CFG); spec("t001", (task_cmd("t001"),)); flag("t001", "pass")
+    d("run", "t001", "--no-ask")
+    write(os.path.join(PROJ, ".delegate.toml"), text); sh("git commit -qam rules")
+    rc, out = d("merge", "t001"); judge(name + " (merge)", rc, out, words); checked += 1
+for name, value, words in worker_flag_cases():
+    fresh(); workers(GOOD_CFG); spec("t002", (task_cmd("t002"),))
+    rc, out = d("run", "t002", "--worker", value); judge(name, rc, out, words, "t002"); checked += 1
+fresh(); workers(GOOD_CFG)
+rc, out = d("run", "t009"); judge("run with no spec", rc, out, ["delegate new"], "t009"); checked += 1
+bad = rng.choice(["../t1", "a/b", "_x", ".hidden"])
+rc, out = d("new", bad); judge(f"bad task id {bad!r}", rc, out, ["task id"]); checked += 1
+print(f"{checked} kinds of bad input: each got a message naming the problem, no crash, no leftover task")
+PY

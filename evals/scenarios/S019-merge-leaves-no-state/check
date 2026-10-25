@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# A finished, reviewed task is merged.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; printf '# Report\n' >.task/REPORT.md; }
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+d run t001; d review t001
+before="$(git -C "$PROJ" rev-parse HEAD)"
+d merge t001
+[ "$RC" -eq 0 ] || fail "merge failed: $OUT"
+[ ! -e "$DHOME/t001" ] || fail "the task folder is still there: $(ls "$DHOME/t001")"
+[ "$(git -C "$PROJ" worktree list | wc -l)" = 1 ] || fail "a worktree is left: $(git -C "$PROJ" worktree list | tail -1)"
+git -C "$PROJ" rev-parse -q --verify task/t001 >/dev/null && fail "the task/t001 branch is left"
+d list; echo "$OUT" | grep -q "t001" && fail "list still shows the merged task"
+files="$(git -C "$PROJ" diff --name-only "$before" HEAD)"
+echo "$files" | grep -Eq "(^|/)(SPEC|REPORT|STATE|CHECKS|REVIEW|QUESTIONS|SUMMARY)\.(md|json|txt)$|^\.task/" \
+  && fail "review paperwork reached git history: $(echo "$files" | tr '\n' ' ')"
+pass "after merge no folder, worktree or branch remained, and history has only the code"

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Two tasks rewrote the same line.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() {
+  if grep -q "Task t001" .task/SPEC.md; then sed -i 's|return round(amount \* (1 + rate), 2)|return round(amount + amount * rate, 2)|' shop/pricing.py
+  else sed -i 's|return round(amount \* (1 + rate), 2)|return round(amount * (1.0 + rate), 2)  # float rate|' shop/pricing.py; fi
+}
+B
+write_spec t001 "Tidy tax" "Rewrite with_tax." "python3 -m unittest -q"
+write_spec t002 "Float tax" "Make with_tax float-safe." "python3 -m unittest -q"
+d run t001; d run t002
+d merge t001; [ "$RC" -eq 0 ] || fail "first merge failed: $OUT"
+after_first="$(git -C "$PROJ" rev-parse HEAD)"
+d merge t002
+[ "$RC" -ne 0 ] || fail "the conflicting merge reported success"
+echo "$OUT" | grep -qi "conflict" || fail "the refusal doesn't mention the conflict: $OUT"
+echo "$OUT" | grep -q "shop/pricing.py" || fail "the refusal doesn't name the conflicting file: $OUT"
+cd "$PROJ"
+[ "$(git rev-parse HEAD)" = "$after_first" ] || fail "main moved during the failed merge"
+grep -q '^<<<<<<<\|^>>>>>>>' shop/pricing.py && fail "main was left with conflict markers in shop/pricing.py"
+[ -z "$(git status --porcelain)" ] || fail "main was left dirty: $(git status --porcelain | head -3 | tr '\n' ' ')"
+grep -q "amount + amount \* rate" shop/pricing.py || fail "t001's change is gone from main"
+d list
+echo "$OUT" | grep -q "^t002 " || fail "t002's work is gone"
+grep -q "float rate" "$DHOME/t002/worktree/shop/pricing.py" || fail "t002's change is gone from its worktree"
+pass "the conflict was reported, main stayed clean with t001's change, and t002's work was kept"

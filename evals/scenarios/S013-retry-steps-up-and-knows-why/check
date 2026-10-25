@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# A fast model's work fails a check; Claude runs the task again.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers fast gpt-half deepseek-fixer gpt-good
+stub_worker gpt-half <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return amount // people\n' >>shop/pricing.py; }
+B
+write_spec t001 "Split a bill" "Add divide_bill." \
+  "python3 -c 'from shop.pricing import divide_bill as d; r = d(10, 3); assert r == 3.33, \"EXPECTED-3.33-GOT-%s\" % r'"
+d run t001
+echo "$OUT" | grep -q "checks:   FAIL" || fail "setup: the first round's checks didn't fail: $(echo "$OUT" | grep checks)"
+
+d run t001
+echo "$OUT" | grep -q "@ standard (stepped up after failed checks at fast)" \
+  || fail "the retry didn't step up from fast: $(echo "$OUT" | head -1)"
+c="$(calls_where work deepseek-fixer | tail -1)"
+[ -n "$c" ] || fail "the stronger model wasn't called"
+told="$(cat "$HOME/.cache/stub/calls/$c/prompt" "$HOME/.cache/stub/calls/$c/spec" 2>/dev/null; cat "$HOME/.cache/stub/calls/$c/task/"* 2>/dev/null)"
+echo "$told" | grep -q "EXPECTED-3.33-GOT-3" \
+  || fail "the stronger model wasn't told what failed: the check output reached neither its prompt, spec nor .task/"
+pass "the retry used a stronger tier and handed it the failing check output"

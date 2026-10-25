@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# The user hits Ctrl-C while a slow worker is running.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-slow gpt-slow gpt-slow
+stub_worker gpt-slow <<'B'
+work() { printf '\n\ndef divide_bill(a, p):\n' >>shop/pricing.py; sleep 60; }
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+(cd "$PROJ" && exec setsid "$DELEGATE" run t001 >"$EVALS_WORK/run.out" 2>&1) &
+pid=$!
+for _ in $(seq 100); do [ -n "$(calls_where work)" ] && break; sleep 0.1; done
+[ -n "$(calls_where work)" ] || fail "setup: the worker never started"
+kill -INT -- -"$pid" 2>/dev/null; sleep 1; kill -KILL -- -"$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+d list
+line="$(echo "$OUT" | grep '^t001')"
+echo "$line" | grep -q "pass" && fail "list shows the interrupted run as passed: $line"
+echo "$line" | grep -Eqi "interrupt|unfinished|not finished|running|stopped" \
+  || fail "list doesn't show the run was interrupted: '$line'"
+d discard t001
+[ "$RC" -eq 0 ] || fail "discard failed after the interrupt: $OUT"
+[ ! -e "$DHOME/t001" ] && ! git -C "$PROJ" rev-parse -q --verify task/t001 >/dev/null || fail "discard left task state"
+stub_worker gpt-slow <<'B'
+work() { printf '\n\ndef divide_bill(a, p):\n    return round(a / p, 2)\n' >>shop/pricing.py; }
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+d run t001
+echo "$OUT" | grep -q "checks:   pass" || fail "a fresh run after the cleanup didn't work: $(echo "$OUT" | tail -2)"
+pass "the interrupted run showed as unfinished, discard cleaned it up, and a fresh run worked"

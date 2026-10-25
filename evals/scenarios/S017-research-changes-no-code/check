@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# A research question; the researcher also "helpfully" edits a file.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers
+stub_worker deepseek-research <<'B'
+research() {
+  printf '# Report\n\nTax is rounded once, in shop/pricing.py:11 (with_tax).\n' >.task/REPORT.md
+  sed -i 's|rounded to cents|rounded to whole cents|' shop/pricing.py
+}
+B
+write_spec t001 "Where is tax rounded?" "Find where tax is rounded and whether it can double-round."
+d run t001 --research
+[ "$RC" -eq 0 ] || fail "research run failed: $OUT"
+echo "$OUT" | grep -q "REPORT.md" || fail "the report's path wasn't shown"
+grep -q "shop/pricing.py:11" "$DHOME/t001/REPORT.md" || fail "the report isn't where the run said"
+[ "$(git -C "$PROJ" rev-parse task/t001)" = "$(git -C "$PROJ" rev-parse main)" ] \
+  || fail "the research run committed code changes: $(git -C "$PROJ" diff --stat main task/t001 | tail -1)"
+pass "the research report came back and no code was changed or committed"

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Common path: new -> run -> worker does it -> checks pass -> list -> merge.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() {
+  cat >>shop/pricing.py <<'PY'
+
+
+def divide_bill(amount, people):
+    """Each person's share, rounded to cents; people must be at least 1."""
+    if people < 1:
+        raise ValueError("people must be at least 1")
+    return round(amount / people, 2)
+PY
+  printf '# Report t001\n\n## Status\ndone\n' >.task/REPORT.md
+}
+B
+write_spec t001 "Split a bill" "Add divide_bill so the checkout can split a bill between people." \
+  "python3 -m unittest -q" \
+  "python3 -c 'from shop.pricing import divide_bill; assert divide_bill(10, 3) == 3.33'"
+
+d merge t001
+[ "$RC" -ne 0 ] || fail "merge before any run succeeded"
+before="$(git -C "$PROJ" rev-parse HEAD)"
+
+d run t001
+[ "$RC" -eq 0 ] || fail "run failed: $(echo "$OUT" | tail -3)"
+echo "$OUT" | grep -q "checks:   pass" || fail "run did not report passing checks: $(echo "$OUT" | grep checks)"
+d list
+echo "$OUT" | grep -E "^t001 .*round 1 .*standard .*done, checks pass .*gpt-good" >/dev/null \
+  || fail "list doesn't show round, tier, model and passing checks: $OUT"
+
+d merge t001
+[ "$RC" -eq 0 ] || fail "merge refused on a passing task: $OUT"
+cd "$PROJ"
+[ "$(git rev-list --count "$before"..HEAD)" = 1 ] || fail "merge did not add exactly one commit"
+subject="$(git log -1 --format=%s)"; body="$(git log -1 --format=%b)"
+[ "$subject" = "t001: Split a bill" ] || fail "commit title is '$subject', expected 't001: Split a bill'"
+echo "$body" | grep -q "split a bill between people" || fail "commit body doesn't carry the Goal: '$body'"
+grep -q "def divide_bill" shop/pricing.py || fail "the change is not on main"
+pass "task handed off, checked, listed and merged as one commit"

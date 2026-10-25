@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# A new user runs `delegate init` once in an existing repo.
+. "$EVALS_LIB/common.sh"
+setup_project --no-init
+rm -f "$HOME/.config/delegate/workers.toml"
+own="$(cd "$PROJ" && git ls-files | xargs sha256sum)"
+
+# Failure path first: outside a git repo nothing is written.
+mkdir -p "$EVALS_WORK/notes"
+DCWD="$EVALS_WORK/notes" d init
+[ "$RC" -ne 0 ] || fail "init outside a git repo succeeded"
+echo "$OUT" | grep -qi "git" || fail "init outside a git repo didn't say it needs one: $OUT"
+[ -z "$(ls -A "$EVALS_WORK/notes")" ] || fail "init outside a git repo wrote files: $(ls -A "$EVALS_WORK/notes")"
+[ ! -e "$HOME/.config/delegate/workers.toml" ] || fail "init outside a git repo still wrote workers.toml"
+
+d init
+[ "$RC" -eq 0 ] || fail "init failed: $OUT"
+for f in AGENTS.md CLAUDE.md PLAN.md .delegate.toml docs/decisions evals/run evals/README.md \
+         .claude/skills/delegate/SKILL.md .claude/skills/distill/SKILL.md .claude/skills/evaluate/SKILL.md; do
+  [ -e "$PROJ/$f" ] || fail "init didn't add $f"
+  echo "$OUT" | grep -q "added .*$f" || fail "init's output doesn't list $f"
+done
+[ -x "$PROJ/evals/run" ] || fail "evals/run is not executable"
+[ -f "$HOME/.config/delegate/workers.toml" ] || fail "init didn't create ~/.config/delegate/workers.toml"
+echo "$OUT" | grep -q "workers.toml" || fail "init's output doesn't mention workers.toml"
+[ "$own" = "$(cd "$PROJ" && git ls-files | xargs sha256sum)" ] || fail "init changed the repo's own files"
+pass "one init added every kit file and the worker config, listed them, and left the code alone"

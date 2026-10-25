@@ -1,0 +1,18 @@
+# Project rules for delegated work. Checked by the runner against the paths a task
+# actually changed, so they hold whatever tier was picked when the spec was written.
+#
+#   paths     glob patterns (** matches across folders)
+#   min_tier  merge is refused unless the final round ran at this tier or higher
+#   max_tier  a warning only: the task used a stronger model than needed
+#   review    "always": merge is refused until a review has run on the final commit
+#
+# Examples (uncomment and adapt):
+#
+# [[rules]]
+# paths    = ["src/auth/**", "migrations/**"]
+# min_tier = "deep"
+# review   = "always"
+#
+# [[rules]]
+# paths    = ["docs/**"]
+# max_tier = "fast"

@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Claude Code as lead, in a project with a ready task, is told only "get on with the plan".
+# Uses your real Claude login (and quota); workers are stand-ins, so no other model is spent.
+. "$EVALS_LIB/common.sh"
+command -v claude >/dev/null || { echo "claude is not installed"; exit 77; }
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+# A worker that does the whole job well, so the lead has no reason to take over.
+stub_worker gpt-good <<'B'
+work() {
+  grep -q divide_bill shop/pricing.py || printf '\n\ndef divide_bill(amount, people):\n    """Each share, rounded to cents."""\n    if people < 1:\n        raise ValueError("people must be at least 1")\n    return round(amount / people, 2)\n' >>shop/pricing.py
+  cat >tests/test_split.py <<'PY'
+import unittest
+
+from shop.pricing import divide_bill
+
+
+class SplitTest(unittest.TestCase):
+    def test_even(self):
+        self.assertEqual(divide_bill(12, 4), 3.0)
+
+    def test_rounds(self):
+        self.assertEqual(divide_bill(10, 3), 3.33)
+
+    def test_no_people(self):
+        for n in (0, -1):
+            with self.assertRaises(ValueError):
+                divide_bill(10, n)
+PY
+  printf '# Report t001\n\n## Status\ndone\n\n## What changed\n- divide_bill in shop/pricing.py, tests in tests/test_split.py\n' >.task/REPORT.md
+}
+B
+cd "$PROJ"
+cat >AGENTS.md <<'T'
+# Shop
+
+## What this is
+Checkout pricing for a small web shop.
+
+## Commands
+- Test: `python3 -m unittest -q`
+
+## Layout
+- `shop/` — pricing code
+- `tests/` — unittest tests
+T
+cat >PLAN.md <<'T'
+# Plan
+
+## Goal
+Let customers split a bill at checkout.
+
+## Tasks
+| id | task | status | depends on | harness | notes |
+|----|------|--------|------------|---------|-------|
+| t001 | Add `divide_bill(amount, people)` to `shop/pricing.py`: each share rounded to cents, `ValueError` when people < 1, with tests | todo | – | – | contract agreed; scenario S001 |
+T
+mkdir -p evals/scenarios/S001-split-bill
+cat >evals/scenarios/S001-split-bill/scenario.md <<'T'
+# S001 Split a bill between people
+- Job: J1
+- Tier: fast
+- Judged by: auto
+- Status: automated
+
+## Passes when
+- `divide_bill(10, 3)` is 3.33 and `divide_bill(10, 0)` raises ValueError.
+T
+printf '#!/usr/bin/env bash\npython3 -c "from shop.pricing import divide_bill as d; assert d(10, 3) == 3.33"\n' >evals/scenarios/S001-split-bill/check
+chmod +x evals/scenarios/S001-split-bill/check
+git add -A && git commit -qm "Plan: bill splitting"
+code_before="$(sha256sum shop/*.py tests/*.py)"
+
+# `delegate` as Claude sees it: the real binary, with the stand-in workers' home; every call logged.
+cat >"$EVALS_WORK/bin/delegate" <<W
+#!/usr/bin/env bash
+echo "\$*" >>"$EVALS_WORK/delegate-calls"
+HOME="$HOME" exec "$DELEGATE" "\$@"
+W
+chmod +x "$EVALS_WORK/bin/delegate"
+
+HOME="$REAL_HOME" timeout 1100 env -u EVALS_HIDDEN -u EVALS_ROOT -u EVALS_DIR -u EVALS_LIB -u EVALS_SCENARIO claude -p "Get on with the plan." \
+  --setting-sources project --permission-mode acceptEdits \
+  --allowedTools "Bash Read Write Edit Glob Grep" --add-dir "$DHOME" \
+  >"$EVALS_WORK/claude.out" 2>&1
+said="$(cat "$EVALS_WORK/claude.out")"
+calls="$(cat "$EVALS_WORK/delegate-calls" 2>/dev/null)"
+echo "--- Claude said:"; echo "$said" | tail -20; echo "--- delegate calls:"; echo "$calls"
+
+[ "$code_before" = "$(sha256sum shop/*.py tests/*.py)" ] && ! git -C "$PROJ" log --format=%s main | grep -qi divide \
+  || fail "Claude implemented the task itself instead of delegating it"
+own="$(git -C "$PROJ" log --format=%s main..refs/heads/task/t001 2>/dev/null | grep -v '^task t001 round ')"
+[ -z "$own" ] || fail "Claude committed work on the task branch itself: $(echo "$own" | head -1)"
+echo "$calls" | grep -q "^new t" || fail "Claude didn't create a spec with delegate new"
+echo "$calls" | grep -q "^run t" || fail "Claude didn't start the task with delegate run"
+spec="$(ls "$DHOME"/t*/SPEC.md 2>/dev/null | head -1)"
+[ -n "$spec" ] && grep -q '^- \[ \] `.*`' "$spec" || fail "the spec has no runnable acceptance commands"
+grep -q 'evals/run S001' "$spec" || fail "the spec's Acceptance doesn't include the user scenario (evals/run S001)"
+echo "$said" | grep -Eqi "t[0-9]+.{0,40}(@ ?|tier[: ]+)(fast|standard|deep)|(fast|standard|deep).{0,10}tier" \
+  || fail "Claude didn't tell the user which tier it picked"
+echo "$said" | grep -Eqi "(shall|should|may) I (start|run|go ahead)|want me to (start|run)|waiting for your" \
+  && fail "Claude stopped to ask instead of starting the run"
+pass "Claude wrote the spec with the scenario, said the tier, and started the run on its own"

@@ -1,0 +1,74 @@
+# Worker models per role and tier. User-level: copy to ~/.config/delegate/workers.toml
+# (install.sh does this if it's missing). Models, quotas and accounts are yours, not the
+# project's, so this file doesn't live in the repo.
+#
+# Candidate format: "harness:model@effort", tried in order. The next one is used only when
+# a candidate fails to start (quota, auth, unknown model).
+#   harness: pi | codex | claude | opencode | gemini
+#   effort:  low | medium | high | xhigh | max   (mapped to each harness's own flag)
+#
+# Picks follow the Artificial Analysis intelligence-vs-cost Pareto line (checked 2026-10-24):
+#   GPT-6 Luna 38 @ $0.07 · DeepSeek V4.1 Flash 1017 45 @ $0.26 · GPT-6.1 Sol 52 @ $0.72
+#   Gemini 4 Argon 53 @ $1.99 · Claude Sonnet 5.5 56 @ $5.46 · Claude Opus 5.5 58 @ $5.98
+# GitHub Copilot is always the last resort.
+
+# Family of the model that plans (the lead session). Plan review never uses this family.
+planner_family = "claude"
+
+[defaults]
+implement   = "standard"
+research    = "fast"
+review      = "standard"
+plan_review = "standard"
+
+[implement]
+fast = [
+  "pi:hyper/deepseek-v4.1-flash-1017@high",
+  "pi:openai-codex/gpt-6-luna@high",
+  "pi:github-copilot/gpt-6-luna@high",
+]
+standard = [
+  "pi:openai-codex/gpt-6.1-sol@high",
+  "pi:hyper/deepseek-v4.1-flash-1017@max",
+  "claude:sonnet@high",
+  "pi:github-copilot/gpt-6.1-sol@high",
+]
+deep = [
+  "claude:opus@high",
+  "pi:openai-codex/gpt-6.1-sol@xhigh",
+  "pi:github-copilot/claude-opus-5.5@high",
+]
+
+[research]
+fast = [
+  "pi:hyper/deepseek-v4.1-flash-1017@medium",
+  "pi:openai-codex/gpt-6-luna@medium",
+  "pi:github-copilot/gemini-3.8-flash@medium",
+]
+standard = [
+  "pi:openai-codex/gpt-6.1-sol@medium",
+  "claude:sonnet@medium",
+  "pi:github-copilot/gemini-4-argon@medium",
+]
+
+# The runner skips any candidate from the implementer's model family.
+[review]
+standard = [
+  "claude:sonnet@high",
+  "pi:openai-codex/gpt-6.1-sol@high",
+  "pi:hyper/deepseek-v4.1-flash-1017@max",
+  "pi:github-copilot/gemini-4-argon@high",
+]
+deep = [
+  "claude:opus@high",
+  "pi:openai-codex/gpt-6.1-sol@xhigh",
+  "pi:github-copilot/gemini-4-argon@high",
+]
+
+# The runner skips any candidate from planner_family.
+[plan_review]
+standard = [
+  "pi:openai-codex/gpt-6.1-sol@xhigh",
+  "pi:hyper/deepseek-v4.1-flash-1017@max",
+  "pi:github-copilot/gemini-4-argon@high",
+]

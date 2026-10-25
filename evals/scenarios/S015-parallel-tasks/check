@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Two tasks on different files run at the same time.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() {
+  sleep 2
+  if grep -q "Task t001" .task/SPEC.md; then
+    [ -e tests/test_discount.py ] && echo "t001 saw t002's file" >"$HOME/.cache/leak"
+    printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
+  else
+    grep -q divide_bill shop/pricing.py && echo "t002 saw t001's change" >"$HOME/.cache/leak"
+    printf 'import unittest\nfrom shop.pricing import discount\n\nclass DiscountTest(unittest.TestCase):\n    def test_ten_percent(self):\n        self.assertEqual(discount(20.0, 10), 18.0)\n' >tests/test_discount.py
+  fi
+}
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q" "grep -q divide_bill shop/pricing.py"
+SCOPE='`tests/test_discount.py`' write_spec t002 "Test discounts" "Cover discount with a test." "python3 -m unittest -q tests.test_discount"
+(cd "$PROJ" && "$DELEGATE" run t001 >"$EVALS_WORK/t001.out" 2>&1; echo $? >"$EVALS_WORK/t001.rc") &
+(cd "$PROJ" && "$DELEGATE" run t002 >"$EVALS_WORK/t002.out" 2>&1; echo $? >"$EVALS_WORK/t002.rc") &
+wait
+for t in t001 t002; do
+  [ "$(cat "$EVALS_WORK/$t.rc")" = 0 ] || fail "$t failed when run in parallel: $(tail -2 "$EVALS_WORK/$t.out" | tr '\n' ' ')"
+  grep -q "checks:   pass" "$EVALS_WORK/$t.out" || fail "$t's checks didn't pass in parallel"
+done
+[ ! -f "$HOME/.cache/leak" ] || fail "tasks saw each other's work: $(cat "$HOME/.cache/leak")"
+d list
+for t in t001 t002; do echo "$OUT" | grep -q "^$t .*done, checks pass" || fail "list is wrong for $t: $OUT"; done
+d merge t001; [ "$RC" -eq 0 ] || fail "merging t001 failed: $OUT"
+d merge t002; [ "$RC" -eq 0 ] || fail "merging t002 after t001 failed: $OUT"
+grep -q divide_bill "$PROJ/shop/pricing.py" && [ -f "$PROJ/tests/test_discount.py" ] || fail "main doesn't have both changes"
+pass "both parallel tasks finished separately, showed correctly in list, and merged"

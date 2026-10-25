@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-flag gpt-flag gpt-flag
+exec python3 - "$@" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+from kit import *
+
+# Reviews never come from the implementer's family; plan review never from the planner's.
+import re
+MODELS = {  # candidate text -> family, by construction
+  "gpt": ["pi:openai-codex/gpt-6.1-sol@high", "pi:gpt-6-luna@medium", "codex:gpt-6.1-sol@xhigh", "pi:github-copilot/gpt-6.1-sol@high"],
+  "claude": ["claude:sonnet@high", "claude:opus@max", "pi:github-copilot/claude-opus-5.5@high", "pi:anthropic/sonnet-5.5@high"],
+  "deepseek": ["pi:hyper/deepseek-v4.1-flash-1017@max", "opencode:deepseek/deepseek-v4@high"],
+  "gemini": ["gemini:gemini-4-argon@high", "pi:github-copilot/gemini-4-argon@high"],
+  "qwen": ["pi:qwen3-coder-plus@high"],
+}
+FAM = {c: f for f, cs in MODELS.items() for c in cs}
+rng, s = seed()
+for i in range(15):
+    fams = rng.sample(sorted(MODELS), rng.randint(1, 4))
+    review = [rng.choice(MODELS[f]) for f in fams for _ in range(rng.randint(1, 2))]
+    plan = [rng.choice(MODELS[f]) for f in rng.sample(sorted(MODELS), rng.randint(1, 3))]
+    planner = rng.choice(sorted(MODELS))
+    impl_fam = rng.choice(["gpt", "deepseek", "qwen", "gemini"])
+    impl = {"gpt": "gpt-6.1-sol", "deepseek": "deepseek-v4.1", "qwen": "qwen3-coder", "gemini": "gemini-4-argon"}[impl_fam]
+    q = lambda xs: "[" + ", ".join(f'"{x}"' for x in xs) + "]"
+    workers(f'planner_family = "{planner}"\n[defaults]\nimplement = "standard"\nresearch = "fast"\nreview = "standard"\nplan_review = "standard"\n'
+            f'[implement]\nstandard = ["pi:{impl}@high"]\n[review]\nstandard = {q(review)}\n[plan_review]\nstandard = {q(plan)}\n')
+    stub(impl, FLAGGED)
+    if i == 0: save_template()
+    fresh(); spec("t001", (task_cmd("t001"),)); flag("t001", "pass")
+    d("run", "t001", "--no-ask")
+    case = {"implementer": impl_fam, "review": review, "planner": planner, "plan_review": plan}
+    for cmd, cands, skip in (("review", review, impl_fam), ("plan-review", plan, planner)):
+        rc, out = d(cmd, *(["t001"] if cmd == "review" else []), "--dry-run")
+        listed = re.findall(r"candidate: (\S+)", out)
+        expected = [c for c in cands if FAM[c] != skip]
+        if any(FAM.get(c) == skip for c in listed):
+            fail(f"{cmd} offered a {skip} model for {skip} work: {listed}", case, s)
+        if expected and listed != expected:
+            fail(f"{cmd} candidates {listed}, expected {expected}", case, s)
+        if not expected and (rc == 0 or "family" not in out):
+            fail(f"{cmd} with only {skip} models didn't refuse clearly: {out.strip()[:120]}", case, s)
+print("15 random worker configs: no review or plan review ever came from the family it checks")
+PY

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# The first model's login has expired.
+. "$EVALS_LIB/common.sh"
+setup_project
+workers_toml <<'T'
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+standard = ["pi:gpt-noauth@high", "pi:deepseek-good@high"]
+T
+stub_worker gpt-noauth <<'B'
+start() { echo "Error: 401 Unauthorized: your login has expired, run pi login" >&2; exit 1; }
+B
+stub_worker deepseek-good <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; }
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+d run t001
+[ "$RC" -eq 0 ] || fail "run failed although the second candidate works: $OUT"
+echo "$OUT" | grep -q "gpt-noauth.*\(failed\|couldn't\|could not\)" || fail "the run doesn't say the first candidate couldn't start"
+echo "$OUT" | grep -Eqi "401|unauthorized|login" || fail "the run doesn't say why the first candidate couldn't start: $(echo "$OUT" | grep noauth | tr '\n' ' ')"
+d list
+echo "$OUT" | grep "^t001" | grep -q "deepseek-good" || fail "list doesn't show the model that did the work: $OUT"
+pass "the expired model was skipped with its reason shown, and the next one did the work"

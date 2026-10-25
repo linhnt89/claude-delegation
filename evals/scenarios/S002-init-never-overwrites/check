@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Running init again on a project the owner has made their own.
+. "$EVALS_LIB/common.sh"
+setup_project
+cd "$PROJ"
+printf '# Shop\n\n## Commands\n- Test: `python3 -m unittest -q`\n' >AGENTS.md
+printf '# Plan\n\n## Goal\nBill splitting at checkout.\n' >PLAN.md
+printf 'planner_family = "claude"\n# my own picks\n' >>"$HOME/.config/delegate/workers.toml"
+rm evals/run
+git add -A && git commit -qm "Own the kit files"
+before="$(git ls-files | grep -v '^evals/run$' | xargs sha256sum; sha256sum "$HOME/.config/delegate/workers.toml")"
+
+d init
+[ "$RC" -eq 0 ] || fail "second init failed: $OUT"
+cd "$PROJ"
+after="$(git ls-files | grep -v '^evals/run$' | xargs sha256sum; sha256sum "$HOME/.config/delegate/workers.toml")"
+[ "$before" = "$after" ] || fail "init changed existing files: $(diff <(echo "$before") <(echo "$after") | grep '^[<>]' | head -3)"
+for f in AGENTS.md PLAN.md workers.toml; do
+  echo "$OUT" | grep -q "skipped .*$f" || fail "init's output doesn't say it skipped $f"
+done
+[ -x evals/run ] || fail "init didn't add back the missing evals/run"
+echo "$OUT" | grep -q "added .*evals/run" || fail "init didn't say it added evals/run"
+pass "second init kept every existing file and only restored the missing one"

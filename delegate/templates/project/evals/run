@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Run the evaluation set: scenarios as the user would use the product.
+#
+#   evals/run [fast|full|benchmark|all] [ID...]
+#
+# fast runs fast scenarios; full runs fast + full; benchmark runs benchmark only; all runs
+# everything. IDs (E003, P001, ...) run just those, whatever their tier.
+#
+# A scenario is a folder evals/scenarios/<ID>-<slug>/ with scenario.md (what it checks, the
+# part people approve) and an executable `check`. Exit codes of `check`:
+#   0 pass   1 fail   2 needs a human (prints what to look at)   77 skipped
+# Its last output line is shown as the reason. Each check runs in a fresh, empty directory
+# with these variables set:
+#   EVALS_ROOT      project root            EVALS_DIR    this evals/ folder
+#   EVALS_LIB       evals/lib (helpers)     EVALS_WORK   the fresh directory (also cwd)
+#   EVALS_SCENARIO  the scenario's folder   EVALS_HIDDEN hidden material, or empty
+#
+# Hidden scenarios live outside the repo in <delegate home>/_evals/hidden/scenarios/, where
+# workers can't read them. Results go to <delegate home>/_evals/results/ (override with
+# EVALS_RESULTS). Per-check timeout: "- Timeout: <seconds>" in scenario.md, else
+# EVALS_TIMEOUT, else 900.
+set -uo pipefail
+
+evals="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(dirname "$evals")"
+
+# Delegate home: same rule as the delegate binary, from the main checkout even in a worktree.
+if [ -n "${DELEGATE_HOME:-}" ]; then
+  dhome="$DELEGATE_HOME"
+elif common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+  main="$(dirname "$common")"
+  dhome="$(dirname "$main")/$(basename "$main").delegate"
+else
+  dhome="$(dirname "$root")/$(basename "$root").delegate"
+fi
+hidden="${EVALS_HIDDEN:-$dhome/_evals/hidden}"
+[ -d "$hidden" ] || hidden=""
+results="${EVALS_RESULTS:-$dhome/_evals/results}"
+mkdir -p "$results" 2>/dev/null || results="$(mktemp -d)"
+
+selection="fast"
+ids=()
+for a in "$@"; do
+  case "$a" in
+    fast|full|benchmark|all) selection="$a" ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) ids+=("$a") ;;
+  esac
+done
+[ "${#ids[@]}" -gt 0 ] && selection="selected"
+
+field() { sed -n "s/^- $2: *//p" "$1/scenario.md" | head -n1 | tr -d '\r'; }
+# Title from the "# <ID> <title>" heading; meaning from the "## If this fails" section.
+title() { sed -n '1s/^# *[^ ]* *//p' "$1/scenario.md" | tr -d '\r'; }
+meaning() {
+  sed -n '/^## If this fails/,/^## /{/^## /d;p}' "$1/scenario.md" | tr -d '\r' \
+    | sed '/^[[:space:]]*$/d' | tr '\n' ' ' | sed 's/ *$//'
+}
+
+wanted() { # dir id tier
+  if [ "${#ids[@]}" -gt 0 ]; then
+    for i in "${ids[@]}"; do [ "$i" = "$2" ] && return 0; done
+    return 1
+  fi
+  case "$selection:$3" in
+    fast:fast|full:fast|full:full|benchmark:benchmark|all:*) return 0 ;;
+  esac
+  return 1
+}
+
+dirs=()
+for base in "$evals/scenarios" ${hidden:+"$hidden/scenarios"}; do
+  [ -d "$base" ] || continue
+  for d in "$base"/*/; do
+    d="${d%/}"
+    case "$(basename "$d")" in _*) continue ;; esac
+    [ -f "$d/scenario.md" ] && dirs+=("$d")
+  done
+done
+
+mkdir -p "$results/logs" "$results/work"
+out="$results/$selection.txt"
+: >"$out"
+pass=0 fail=0 human=0 skip=0 nocheck=0
+# report <id> <verdict> <scenario dir> <detail>: one line; failures add what happened and
+# what it means for the user, so nobody needs to remember what an id stands for.
+report() {
+  local t; t="$(title "$3")"
+  printf '%-8s %s  (%s)\n' "$2" "${t:-$(basename "$3")}" "$1" | tee -a "$out"
+  case "$2" in
+    FAIL|HUMAN)
+      [ -n "$4" ] && printf '         what happened: %s\n' "$4" | tee -a "$out"
+      local m; m="$(meaning "$3")"
+      [ -n "$m" ] && printf '%s\n' "$m" | fold -s -w 82 | sed 's/^/         /;1s/^         /         what it means: /' | tee -a "$out"
+      ;;
+    "no check") printf '         not automated yet (%s)\n' "$4" | tee -a "$out" ;;
+  esac
+}
+echo "evals: $selection  ($(date '+%Y-%m-%d %H:%M'))" | tee -a "$out"
+
+IFS=$'\n' sorted=($(for d in "${dirs[@]}"; do echo "$(basename "$d")|$d"; done | sort))
+unset IFS
+for entry in "${sorted[@]}"; do
+  d="${entry#*|}"
+  name="$(basename "$d")"
+  id="${name%%-*}"
+  tier="$(field "$d" Tier)"
+  status="$(field "$d" Status)"
+  wanted "$d" "$id" "$tier" || continue
+  [ "$status" = retired ] && continue
+  case "$d" in "$evals"/*) label="$id" ;; *) label="$id, hidden" ;; esac
+  if [ ! -e "$d/check" ]; then
+    nocheck=$((nocheck + 1)); report "$label" "no check" "$d" "status: ${status:-?}"; continue
+  fi
+  if [ ! -x "$d/check" ]; then
+    fail=$((fail + 1)); report "$label" "FAIL" "$d" "check is not executable (chmod +x)"; continue
+  fi
+  work="$results/work/$id"
+  chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"; mkdir -p "$work"
+  log="$results/logs/$id.log"
+  limit="$(field "$d" Timeout)"; limit="${limit:-${EVALS_TIMEOUT:-900}}"
+  start=$(date +%s)
+  (cd "$work" && EVALS_ROOT="$root" EVALS_DIR="$evals" EVALS_LIB="$evals/lib" \
+    EVALS_WORK="$work" EVALS_SCENARIO="$d" EVALS_HIDDEN="$hidden" \
+    timeout "$limit" "$d/check") >"$log" 2>&1 </dev/null
+  rc=$?
+  secs=$(( $(date +%s) - start ))
+  reason="$(grep -v '^[[:space:]]*$' "$log" | tail -n1 | sed 's/^FAIL: //' | cut -c1-160)"
+  case "$rc" in
+    0) pass=$((pass + 1)); report "$label" "pass" "$d" "${secs}s" ;;
+    2) human=$((human + 1)); report "$label" "HUMAN" "$d" "$reason" ;;
+    77) skip=$((skip + 1)); report "$label" "skip" "$d" "$reason" ;;
+    124) fail=$((fail + 1)); report "$label" "FAIL" "$d" "timed out after ${limit}s" ;;
+    *) fail=$((fail + 1)); report "$label" "FAIL" "$d" "$reason" ;;
+  esac
+done
+
+echo "-- $pass passed, $fail failed, $human need a human, $skip skipped, $nocheck not automated yet" | tee -a "$out"
+echo "   results: $out   logs: $results/logs/" | tee -a "$out"
+[ -z "$hidden" ] && echo "   (no hidden scenarios found)"
+[ "$fail" -eq 0 ]

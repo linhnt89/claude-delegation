@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# The user rejects a task's work.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() { printf '\n\ndef divide_bill(a, p):\n    return a / p\n' >>shop/pricing.py; }
+B
+before="$(snapshot_main)"
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+d run t001
+d discard t001
+[ "$RC" -eq 0 ] || fail "discard failed: $OUT"
+[ ! -e "$DHOME/t001" ] || fail "the task folder is still there"
+[ "$(git -C "$PROJ" worktree list | wc -l)" = 1 ] || fail "a worktree is left"
+git -C "$PROJ" rev-parse -q --verify task/t001 >/dev/null && fail "the task branch is left"
+same_main "$before" "main is not as it was before the task"
+pass "discard removed the task completely and main is as before"

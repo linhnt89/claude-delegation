@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# The worker's change fails an acceptance check.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-sloppy gpt-sloppy gpt-sloppy
+stub_worker gpt-sloppy <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return amount // people\n' >>shop/pricing.py; }
+B
+check_cmd="python3 -c 'from shop.pricing import divide_bill; assert divide_bill(10, 3) == 3.33'"
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q" "$check_cmd"
+d run t001
+main_before="$(snapshot_main)"
+d merge t001
+[ "$RC" -ne 0 ] || fail "a task with a failing acceptance check was merged"
+echo "$OUT" | grep -q "divide_bill(10, 3)" || fail "merge refusal doesn't name the failing check: $(echo "$OUT" | tr '\n' ' ')"
+same_main "$main_before" "a refused merge changed main"
+d list
+echo "$OUT" | grep -q "^t001 " || fail "the task disappeared after a refused merge"
+
+# The user fixes it in the worktree, commits, reruns the checks: now merge is allowed.
+wt="$DHOME/t001/worktree"
+sed -i 's|return amount // people|return round(amount / people, 2)|' "$wt/shop/pricing.py"
+git -C "$wt" commit -qam "Round shares to cents"
+d check t001
+d merge t001
+[ "$RC" -eq 0 ] || fail "merge after a fix and passing check was refused: $OUT"
+pass "merge was refused naming the failing check, and allowed after the fix passed"
