@@ -34,7 +34,9 @@ Then, in each project (a git repo):
 delegate init
 ```
 `init` adds the project files (templates are built into the binary) and creates
-`~/.config/delegate/workers.toml` if missing; it never overwrites. Then fill in `AGENTS.md`
+`~/.config/delegate/workers.toml` if missing; it never overwrites. It also sets up Claude
+Code's status line (unless you have your own) and the `/delegate-pane` side pane, which show
+running tasks live. Then fill in `AGENTS.md`
 (commands first) and any `.delegate.toml` rules.
 
 Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
@@ -49,6 +51,11 @@ Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
 | `delegate check <id>` | Rerun acceptance checks after a fix committed in the worktree |
 | `delegate review <id>` | Adversarial review; failing tests come back as `REVIEW.patch` |
 | `delegate plan-review [ids]` | Review `PLAN.md` and specs against the code before work starts |
+| `delegate run --background <id>` | Same, detached: returns at once, keeps going after the shell or Claude turn ends |
+| `delegate status [id] [--json]` | Where each task stands now: phase, worker, changed files, latest steps, stalled, next step |
+| `delegate watch [id]` | `status`, refreshing in a terminal |
+| `delegate wait [ids] [--timeout D]` | Block until a task finishes, is interrupted or stalls (Claude runs it in the background) |
+| `delegate statusline` | One line for Claude Code's status line (`init` configures it) |
 | `delegate list` | Status of every task: round, tier, checks, review |
 | `delegate merge <id>` | Squash-merge if the gates pass, then delete all task state |
 | `delegate discard <id>` | Delete all task state without merging |
