@@ -303,13 +303,15 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     }
     let log = t.dir.join("run.log");
     let number = u32::try_from(t.state.rounds.len())? + 1;
-    let mut round = Round {
+    let round_index = t.state.rounds.len();
+    t.state.rounds.push(Round {
         number,
         tier,
         worker: None,
-        status: RoundStatus::Failed,
+        status: RoundStatus::Running,
+        exit: None,
         checks: None,
-    };
+    });
 
     let mut outcome = None;
     for w in &available {
@@ -319,6 +321,8 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
             Err(error) => return Err(error.into()),
         };
+        t.state.rounds[round_index].worker = Some(w.to_string());
+        t.save()?;
         match implement_attempt(ctx, &t, w, ask, a.research, &log)? {
             Attempt::NotStarted => {
                 println!("  {w} failed to start, trying next candidate");
@@ -335,17 +339,15 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         }
     }
     let Some((w, attempt)) = outcome else {
-        t.state.rounds.push(round);
+        t.state.rounds[round_index].fail_to_start();
         t.save()?;
         bail!("no candidate could start:\n{failures}see {}", log.display());
     };
-    round.worker = Some(w.to_string());
 
     if let Attempt::Questions = attempt {
         let questions = t.dir.join("QUESTIONS.md");
         fs::copy(task_dir.join("QUESTIONS.md"), &questions)?;
-        round.status = RoundStatus::Questions;
-        t.state.rounds.push(round);
+        t.state.rounds[round_index].status = RoundStatus::Questions;
         t.save()?;
         println!(
             "\n{w} has questions before starting ({}):\n",
@@ -360,6 +362,12 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     } else {
         -1
     };
+
+    t.state.rounds[round_index].exit = Some(rc);
+    t.save()?;
+    if rc != 0 {
+        println!("warning: {w} exited with code {rc}; its work may be incomplete");
+    }
 
     let report = t.dir.join("REPORT.md");
     if task_dir.join("REPORT.md").exists() {
@@ -385,17 +393,22 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
             ],
         )?;
     }
-    round.status = RoundStatus::Done;
-    t.state.rounds.push(round);
-    t.save()?;
     if a.research {
+        t.state.rounds[round_index].status = RoundStatus::Done;
+        t.save()?;
         println!("research report: {}", report.display());
         if !t.changed_paths(ctx)?.is_empty() {
             println!("warning: the researcher changed files; review or discard them");
         }
         return Ok(());
     }
-    run_checks(ctx, &mut t)?;
+    if t.changed_paths(ctx)?.is_empty() {
+        println!("no changes: {w} changed nothing");
+    } else {
+        t.state.rounds[round_index].checks = Some(run_checks(ctx, &t)?);
+    }
+    t.state.rounds[round_index].status = RoundStatus::Done;
+    t.save()?;
     summary(ctx, &t)
 }
 
@@ -439,7 +452,7 @@ fn run_with_timeout(cmd: &[String], cwd: &Path) -> Result<(i32, String)> {
 }
 
 /// Run the spec's acceptance commands in the sandbox on the committed branch.
-fn run_checks(ctx: &Ctx, t: &mut Task) -> Result<CheckOutcome> {
+fn run_checks(ctx: &Ctx, t: &Task) -> Result<Checks> {
     let cmds = spec::acceptance_commands(&t.spec_text()?);
     let mut lines = Vec::new();
     let mut all_ok = true;
@@ -473,12 +486,8 @@ fn run_checks(ctx: &Ctx, t: &mut Task) -> Result<CheckOutcome> {
     };
     fs::write(t.dir.join("CHECKS.txt"), lines.join("\n") + "\n")?;
     let commit = t.head(ctx)?;
-    if let Some(r) = t.last_done_mut() {
-        r.checks = Some(Checks { outcome, commit });
-    }
-    t.save()?;
     println!("{}", lines.join("\n"));
-    Ok(outcome)
+    Ok(Checks { outcome, commit })
 }
 
 fn summary(ctx: &Ctx, t: &Task) -> Result<()> {
@@ -517,6 +526,7 @@ fn summary(ctx: &Ctx, t: &Task) -> Result<()> {
 
 pub fn check(ctx: &Ctx, id: &str) -> Result<()> {
     let mut t = Task::load(ctx, id)?;
+    ensure_finished(&t)?;
     if !t.wt.is_dir() || t.last_done().is_none() {
         bail!("{id} has no implemented round");
     }
@@ -526,11 +536,28 @@ pub fn check(ctx: &Ctx, id: &str) -> Result<()> {
             t.wt.display()
         );
     }
-    run_checks(ctx, &mut t)?;
+    let checks = run_checks(ctx, &t)?;
+    if let Some(r) = t.last_done_mut() {
+        r.checks = Some(checks);
+    }
+    t.save()?;
     summary(ctx, &t)
 }
 
 // ---------------------------------------------------------------- review
+
+fn ensure_finished(t: &Task) -> Result<()> {
+    if let Some(r) = t.last_round()
+        && r.status == RoundStatus::Running
+    {
+        bail!(
+            "{}: round {} did not finish; run it again or discard it",
+            t.id,
+            r.number
+        );
+    }
+    Ok(())
+}
 
 pub fn review(
     ctx: &Ctx,
@@ -540,6 +567,7 @@ pub fn review(
     dry_run: bool,
 ) -> Result<()> {
     let mut t = Task::load(ctx, id)?;
+    ensure_finished(&t)?;
     let implementer = t.last_done().and_then(|r| r.worker.clone());
     let Some(implementer) = implementer.filter(|_| t.wt.is_dir()) else {
         bail!("{id} has no implemented round to review");
@@ -737,14 +765,9 @@ pub fn list(ctx: &Ctx) -> Result<()> {
             println!("{id:<10} not run");
             continue;
         };
-        let mut status = match r.status {
-            RoundStatus::Questions => "questions".to_string(),
-            RoundStatus::Failed => "failed to start".to_string(),
-            RoundStatus::Done => format!(
-                "done, checks {}",
-                r.checks.as_ref().map_or("not run", |c| c.outcome.label())
-            ),
-        };
+        let no_changes =
+            r.status == RoundStatus::Done && r.checks.is_none() && t.changed_paths(ctx).is_ok_and(|p| p.is_empty());
+        let mut status = r.status_label(no_changes);
         if let Some(rv) = &t.state.review
             && t.wt.is_dir()
             && t.head(ctx).is_ok_and(|h| h == rv.commit)
@@ -764,6 +787,7 @@ pub fn list(ctx: &Ctx) -> Result<()> {
 
 pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
     let t = Task::load(ctx, id)?;
+    ensure_finished(&t)?;
     let Some(implemented) = t.last_done() else {
         bail!("{id} has no implemented round")
     };
@@ -876,4 +900,114 @@ fn remove(ctx: &Ctx, t: &Task) -> Result<()> {
 
 pub fn discard(ctx: &Ctx, id: &str) -> Result<()> {
     remove(ctx, &Task::load(ctx, id)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    struct TestRepo(PathBuf);
+
+    impl Drop for TestRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn unfinished_round_blocks_merge_and_review_without_touching_work() -> Result<()> {
+        let repo =
+            TestRepo(std::env::temp_dir().join(format!("delegate-test-{}", uuid::Uuid::new_v4())));
+        let root = repo.0.join("repo");
+        fs::create_dir_all(&root)?;
+        git(&root, &["init", "-q", "-b", "main"])?;
+        git(&root, &["config", "user.name", "Test"])?;
+        git(&root, &["config", "user.email", "test@example.invalid"])?;
+        fs::write(root.join("code"), "base\n")?;
+        git(&root, &["add", "code"])?;
+        git(&root, &["commit", "-qm", "base"])?;
+        let ctx = Ctx {
+            gitdir: root.join(".git"),
+            root,
+            dhome: repo.0.join("tasks"),
+        };
+        let mut t = Task::load(&ctx, "t001")?;
+        fs::create_dir_all(&t.dir)?;
+        fs::write(&t.spec, "# Task t001\n")?;
+        git(
+            &ctx.root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &t.branch,
+                &t.wt.to_string_lossy(),
+                "main",
+            ],
+        )?;
+        fs::write(t.wt.join("code"), "completed work\n")?;
+        git(&t.wt, &["commit", "-qam", "completed work"])?;
+        let checked_commit = t.head(&ctx)?;
+        t.state.base = Some("main".into());
+        t.state.rounds = vec![
+            Round {
+                number: 1,
+                tier: Some(Tier::Standard),
+                worker: Some("pi:test".into()),
+                status: RoundStatus::Done,
+                exit: Some(0),
+                checks: Some(Checks {
+                    outcome: CheckOutcome::Pass,
+                    commit: checked_commit.clone(),
+                }),
+            },
+            Round {
+                number: 2,
+                tier: Some(Tier::Standard),
+                worker: Some("pi:test".into()),
+                status: RoundStatus::Running,
+                exit: None,
+                checks: None,
+            },
+        ];
+        t.save()?;
+        fs::write(t.wt.join("code"), "unfinished work\n")?;
+        fs::write(t.wt.join("new-file"), "untracked work\n")?;
+        let task_dir = t.wt.join(".task");
+        fs::create_dir_all(&task_dir)?;
+        fs::write(task_dir.join("REPORT.md"), "unfinished report\n")?;
+        let state = fs::read(t.dir.join("STATE.json"))?;
+        let main = git(&ctx.root, &["rev-parse", "HEAD"])?;
+        let dirty = git(&t.wt, &["status", "--porcelain"])?;
+        let expected = "t001: round 2 did not finish; run it again or discard it";
+
+        for option in [false, true] {
+            assert_eq!(
+                merge(&ctx, &t.id, option).unwrap_err().to_string(),
+                expected
+            );
+            assert_eq!(
+                review(&ctx, &t.id, None, None, option)
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+            assert_eq!(git(&ctx.root, &["rev-parse", "HEAD"])?, main);
+            assert_eq!(t.head(&ctx)?, checked_commit);
+            assert_eq!(git(&t.wt, &["status", "--porcelain"])?, dirty);
+            assert_eq!(fs::read_to_string(t.wt.join("code"))?, "unfinished work\n");
+            assert_eq!(
+                fs::read_to_string(t.wt.join("new-file"))?,
+                "untracked work\n"
+            );
+            assert_eq!(
+                fs::read_to_string(task_dir.join("REPORT.md"))?,
+                "unfinished report\n"
+            );
+            assert_eq!(fs::read(t.dir.join("STATE.json"))?, state);
+        }
+        Ok(())
+    }
 }

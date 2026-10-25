@@ -69,9 +69,11 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<String> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RoundStatus {
+    /// A candidate started, but the run (including checks) has not finished.
+    Running,
     /// The worker stopped with blocking questions; nothing was built.
     Questions,
-    /// The work phase ran and its changes are committed on the task branch.
+    /// The work phase finished and any acceptance checks completed.
     Done,
     /// No candidate could start.
     Failed,
@@ -109,12 +111,39 @@ pub struct Round {
     pub tier: Option<Tier>,
     pub worker: Option<String>,
     pub status: RoundStatus,
+    /// Exit code of the work phase, absent for rounds saved by older versions.
+    #[serde(default)]
+    pub exit: Option<i32>,
     pub checks: Option<Checks>,
 }
 
 impl Round {
+    pub fn fail_to_start(&mut self) {
+        self.status = RoundStatus::Failed;
+        self.worker = None;
+    }
+
     pub fn tier_label(&self) -> String {
         self.tier.map_or_else(|| "custom".into(), |t| t.to_string())
+    }
+
+    pub fn status_label(&self, no_changes: bool) -> String {
+        let label = match self.status {
+            RoundStatus::Running => "unfinished (interrupted, or still running)".into(),
+            RoundStatus::Questions => "questions".into(),
+            RoundStatus::Failed => "failed to start".into(),
+            RoundStatus::Done if no_changes && self.checks.is_none() => "done, no changes".into(),
+            RoundStatus::Done => format!(
+                "done, checks {}",
+                self.checks
+                    .as_ref()
+                    .map_or("not run", |c| c.outcome.label())
+            ),
+        };
+        match self.exit.filter(|&exit| exit != 0) {
+            Some(exit) => format!("{label}, worker exited {exit}"),
+            None => label,
+        }
     }
 }
 
@@ -169,10 +198,10 @@ impl Task {
     }
 
     pub fn save(&self) -> Result<()> {
-        std::fs::write(
-            self.dir.join("STATE.json"),
-            serde_json::to_string_pretty(&self.state)? + "\n",
-        )?;
+        // An interrupted save must leave the previous state readable.
+        let pending = self.dir.join("STATE.json.tmp");
+        std::fs::write(&pending, serde_json::to_string_pretty(&self.state)? + "\n")?;
+        std::fs::rename(pending, self.dir.join("STATE.json"))?;
         Ok(())
     }
 
@@ -227,5 +256,130 @@ impl Task {
 
     pub fn worktree_dirty(&self) -> Result<bool> {
         Ok(!git(&self.wt, &["status", "--porcelain"])?.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round() -> Round {
+        Round {
+            number: 1,
+            tier: None,
+            worker: Some("pi:test".into()),
+            status: RoundStatus::Done,
+            exit: Some(0),
+            checks: None,
+        }
+    }
+
+    #[test]
+    fn failed_to_start_clears_attempted_worker() {
+        let mut r = Round {
+            status: RoundStatus::Running,
+            exit: None,
+            ..round()
+        };
+        assert_eq!(r.worker.as_deref(), Some("pi:test"));
+
+        r.fail_to_start();
+
+        assert_eq!(r.status, RoundStatus::Failed);
+        assert_eq!(r.worker, None);
+        assert_eq!(
+            format!(
+                "{}  [{}]",
+                r.status_label(false),
+                r.worker.as_deref().unwrap_or("-")
+            ),
+            "failed to start  [-]"
+        );
+    }
+
+    #[test]
+    fn round_status_labels() {
+        for (status, expected) in [
+            (
+                RoundStatus::Running,
+                "unfinished (interrupted, or still running)",
+            ),
+            (RoundStatus::Questions, "questions"),
+            (RoundStatus::Failed, "failed to start"),
+            (RoundStatus::Done, "done, checks not run"),
+        ] {
+            let r = Round { status, ..round() };
+            assert_eq!(r.status_label(false), expected);
+            if status != RoundStatus::Done {
+                assert_eq!(r.status_label(true), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn done_labels_preserve_checks_and_warn_about_worker_exit() {
+        for (outcome, expected) in [
+            (CheckOutcome::Pass, "pass"),
+            (CheckOutcome::Fail, "FAIL"),
+            (CheckOutcome::NoCommands, "none in spec"),
+        ] {
+            let mut r = Round {
+                checks: Some(Checks {
+                    outcome,
+                    commit: "abc".into(),
+                }),
+                ..round()
+            };
+            for no_changes in [false, true] {
+                assert_eq!(
+                    r.status_label(no_changes),
+                    format!("done, checks {expected}")
+                );
+            }
+            r.exit = Some(3);
+            assert_eq!(
+                r.status_label(false),
+                format!("done, checks {expected}, worker exited 3")
+            );
+        }
+    }
+
+    #[test]
+    fn no_changes_label_and_exit_warning() {
+        let mut r = round();
+        assert_eq!(r.status_label(true), "done, no changes");
+        r.exit = Some(3);
+        assert_eq!(r.status_label(true), "done, no changes, worker exited 3");
+        r.exit = Some(-1);
+        assert_eq!(r.status_label(true), "done, no changes, worker exited -1");
+    }
+
+    #[test]
+    fn old_round_without_exit_still_loads() {
+        let r: Round = serde_json::from_str(
+            r#"{"number":1,"tier":null,"worker":"pi:test","status":"done","checks":null}"#,
+        )
+        .unwrap();
+        assert_eq!(r.exit, None);
+        assert_eq!(r.status_label(false), "done, checks not run");
+    }
+
+    #[test]
+    fn running_round_with_exit_round_trips() {
+        let r = Round {
+            status: RoundStatus::Running,
+            exit: Some(3),
+            ..round()
+        };
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["status"], "running");
+        assert_eq!(json["exit"], 3);
+        let restored: Round = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.status, RoundStatus::Running);
+        assert_eq!(restored.exit, Some(3));
+        assert_eq!(
+            restored.status_label(false),
+            "unfinished (interrupted, or still running), worker exited 3"
+        );
     }
 }
