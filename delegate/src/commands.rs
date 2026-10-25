@@ -764,6 +764,19 @@ pub fn plan_review(
 
 // ---------------------------------------------------------------- list, merge, discard
 
+fn failed_checks_problem(t: &Task) -> String {
+    let checks = t.dir.join("CHECKS.txt");
+    let text = fs::read_to_string(&checks).unwrap_or_default();
+    let mut message = String::from("acceptance checks failed:");
+    for line in text.lines().filter(|line| line.starts_with("FAIL  ")) {
+        message.push_str("\n    ");
+        message.push_str(line);
+    }
+    message.push_str("\n    ");
+    message.push_str(&checks.display().to_string());
+    message
+}
+
 pub fn list(ctx: &Ctx) -> Result<()> {
     let mut ids: Vec<String> = fs::read_dir(&ctx.dhome)
         .map(|rd| {
@@ -783,15 +796,16 @@ pub fn list(ctx: &Ctx) -> Result<()> {
             println!("{id:<10} not run");
             continue;
         };
-        let no_changes =
-            r.status == RoundStatus::Done && r.checks.is_none() && t.changed_paths(ctx).is_ok_and(|p| p.is_empty());
+        let no_changes = r.status == RoundStatus::Done
+            && r.checks.is_none()
+            && t.changed_paths(ctx).is_ok_and(|p| p.is_empty());
         let mut status = r.status_label(no_changes);
         if let Some(rv) = &t.state.review
             && t.wt.is_dir()
             && t.head(ctx).is_ok_and(|h| h == rv.commit)
         {
             let high = rv.high.map_or_else(|| "?".into(), |n| n.to_string());
-            write!(status, ", reviewed ({high} high)")?;
+            write!(status, ", reviewed by {} ({high} high)", rv.worker)?;
         }
         println!(
             "{id:<10} round {}  {:<8} {status}  [{}]",
@@ -841,26 +855,33 @@ pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
             CheckOutcome::NoCommands => problems.push(
                 "the spec has no runnable acceptance commands (lines like: - [ ] `command`)".into(),
             ),
-            CheckOutcome::Fail => problems.push(format!(
-                "acceptance checks failed ({})",
-                t.dir.join("CHECKS.txt").display()
-            )),
+            CheckOutcome::Fail => problems.push(failed_checks_problem(&t)),
         },
     }
     let review = t.state.review.as_ref().filter(|r| r.commit == head);
     for rule in ProjectRules::load(&ctx.root)?.matching(&paths)? {
+        let matched = rule.matching_paths(&paths)?;
+        let mut changed = matched
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if matched.len() > 5 {
+            changed.push_str(", ...");
+        }
         if let Some(min) = rule.min_tier
             && implemented.tier.is_none_or(|used| used < min)
         {
             problems.push(format!(
-                "rule {} needs tier >= {min}, final round ran at {}",
+                "rule {} needs tier >= {min}, final round ran at {} (changed: {changed})",
                 rule.label(),
                 implemented.tier_label()
             ));
         }
         if rule.review == Some(ReviewRule::Always) && review.is_none() {
             problems.push(format!(
-                "rule {} needs a review of the final commit (run: delegate review)",
+                "rule {} needs a review of the final commit (run: delegate review) (changed: {changed})",
                 rule.label()
             ));
         }

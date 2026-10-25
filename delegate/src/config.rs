@@ -319,16 +319,26 @@ pub struct Rule {
 }
 
 impl Rule {
+    /// Changed paths that match any of this rule's path globs, in the order given.
+    pub fn matching_paths(&self, paths: &[String]) -> Result<Vec<String>> {
+        let matchers = self
+            .paths
+            .iter()
+            .map(|pattern| {
+                Glob::new(pattern)
+                    .with_context(|| format!("bad glob '{pattern}' in .delegate.toml"))
+                    .map(|glob| glob.compile_matcher())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(paths
+            .iter()
+            .filter(|path| matchers.iter().any(|matcher| matcher.is_match(path)))
+            .cloned()
+            .collect())
+    }
+
     pub fn matches_any(&self, paths: &[String]) -> Result<bool> {
-        for pattern in &self.paths {
-            let glob = Glob::new(pattern)
-                .with_context(|| format!("bad glob '{pattern}' in .delegate.toml"))?;
-            let matcher = glob.compile_matcher();
-            if paths.iter().any(|p| matcher.is_match(p)) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(!self.matching_paths(paths)?.is_empty())
     }
 
     pub fn label(&self) -> String {
@@ -494,6 +504,30 @@ standard = ["claude:sonnet@high", "pi:github-copilot/claude-opus-5.5@high"]
         assert_eq!(m[0].min_tier, Some(Tier::Deep));
         assert_eq!(m[0].review, Some(ReviewRule::Always));
         assert!(rules.matching(&["src/main.rs".into()]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rule_lists_only_matching_changed_paths() {
+        let rules: ProjectRules = toml::from_str(
+            "[[rules]]\npaths = [\"src/auth/**\", \"src/secret.rs\"]\nmin_tier = \"deep\"\n",
+        )
+        .unwrap();
+        let paths = vec![
+            "README.md".to_string(),
+            "src/auth/login.rs".to_string(),
+            "src/auth/db/pool.rs".to_string(),
+            "src/secret.rs".to_string(),
+        ];
+        assert_eq!(
+            rules.rules[0].matching_paths(&paths).unwrap(),
+            vec!["src/auth/login.rs", "src/auth/db/pool.rs", "src/secret.rs"]
+        );
+        assert_eq!(
+            rules.rules[0]
+                .matching_paths(&["src/main.rs".to_string()])
+                .unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
