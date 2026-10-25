@@ -8,6 +8,7 @@ then a numbered list of the questions that block you, each with the options you 
 Then stop.";
 
 pub const WORK: &str = "Now do the task.
+If .task/CHECKS.txt exists, the previous round failed those acceptance checks; read it first, before changing anything, and make them pass.
 Code and tests are the source of truth; if a doc disagrees with the code, follow the code and note it in the report.
 If something turns out to be ambiguous, stop and write the question in the report instead of guessing.
 Do not commit, push, or change git branches.
@@ -77,6 +78,15 @@ mod tests {
         assert!(p.starts_with("You are a delegated worker on task t1."));
         assert!(p.contains("Do not commit"));
         assert!(!p.contains("Now do the task"));
+    }
+
+    #[test]
+    fn work_prompts_point_to_failed_checks() {
+        for prompt in [WORK.to_string(), full("t1")] {
+            assert!(prompt.contains("If .task/CHECKS.txt exists"));
+            assert!(prompt.contains("the previous round failed those acceptance checks"));
+            assert!(prompt.contains("read it first, before changing anything, and make them pass"));
+        }
     }
 
     #[test]

@@ -298,6 +298,24 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     fs::create_dir_all(&task_dir)?;
     fs::write(task_dir.join("SPEC.md"), &spec_text)?;
     fs::write(task_dir.join("REPORT.template.md"), REPORT_TEMPLATE)?;
+    let checks_path = task_dir.join("CHECKS.txt");
+    // The last finished round: rounds after it (failed to start, unfinished) left the code as is.
+    if t.last_done().is_some_and(|r| {
+        r.checks
+                .as_ref()
+                .is_some_and(|c| c.outcome == CheckOutcome::Fail)
+    }) {
+        fs::copy(t.dir.join("CHECKS.txt"), &checks_path)
+            .context("copying failed checks into .task/CHECKS.txt; restore the task's CHECKS.txt and retry")?;
+    } else {
+        match fs::remove_file(&checks_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).context("removing stale .task/CHECKS.txt; check file permissions and retry");
+            }
+        }
+    }
     for f in ["REPORT.md", "QUESTIONS.md", "REVIEW.md", "DIFF.patch"] {
         let _ = fs::remove_file(task_dir.join(f));
     }
