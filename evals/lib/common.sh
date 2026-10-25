@@ -226,7 +226,7 @@ install_stub_pi
 # minimal_path <tool>...: PATH with only the stand-ins and the named tools, so "missing" is real.
 minimal_path() {
   local dir="$EVALS_WORK/minbin" t
-  mkdir -p "$dir"
+  rm -rf "$dir" && mkdir -p "$dir"   # fresh each call: a tool linked earlier must not linger
   for t in "$@" git bash sh env cat ls mkdir cp rm wc date grep sed sort tail head printf python3 dirname basename; do
     [ -e "$dir/$t" ] || ln -s "$(command -v "$t")" "$dir/$t" 2>/dev/null
   done
