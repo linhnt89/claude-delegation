@@ -701,9 +701,22 @@ pub fn render_rows(tasks: &[TaskView]) -> String {
                 });
             }
         }
+        let mut files = t
+            .changed_files
+            .iter()
+            .take(3)
+            .map(|file| format!("{} +{}−{}", file.path, file.added, file.removed))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if t.changed_files.len() > 3 {
+            let _ = write!(files, ", +{} more", t.changed_files.len() - 3);
+        }
+        if !files.is_empty() {
+            files.insert_str(0, ": ");
+        }
         let _ = writeln!(
             text,
-            "{}  {phase}  {}  {}  {} since last activity  {} changed files{}",
+            "{}  {phase}  {}  {}  {} since last activity  {} changed files{files}{}",
             t.id,
             t.worker.as_deref().unwrap_or("-"),
             duration(t.elapsed_secs),

@@ -103,7 +103,7 @@ enum Cmd {
     /// Follow task progress (not built yet)
     Watch {
         id: Option<String>,
-        #[arg(long, default_value_t = 1.0)]
+        #[arg(long, default_value_t = 2.0)]
         interval: f64,
     },
     /// Claude Code status line (not built yet)
