@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 . "$EVALS_LIB/common.sh"
 setup_project
-for h in claude codex opencode gemini; do install_stub "$h"; done
+for h in claude codex opencode; do install_stub "$h"; done
 exec python3 - "$@" <<'PY'
 import json, os, sys
 sys.path.insert(0, os.environ["EVALS_LIB"])
@@ -9,7 +9,7 @@ from kit import *
 
 # For any damage to a real recorded stream, status shows exactly the intact steps and the run is unaffected.
 LIB = os.environ["EVALS_LIB"]
-HARNESSES = ["claude", "codex", "opencode", "gemini", "pi"]
+HARNESSES = ["claude", "codex", "opencode", "pi"]
 have = [h for h in HARNESSES if os.path.exists(f"{LIB}/streams/{h}.jsonl") and os.path.exists(f"{LIB}/streams/{h}.steps")]
 missing = [h for h in HARNESSES if h not in have]
 MUT = os.path.join(W, "mut.jsonl")

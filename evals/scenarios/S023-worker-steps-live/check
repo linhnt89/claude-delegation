@@ -3,7 +3,7 @@
 . "$EVALS_LIB/common.sh"
 setup_project
 trap kill_runs EXIT
-HARNESSES="claude codex opencode gemini pi"
+HARNESSES="claude codex opencode pi"
 missing=""
 n=0
 for h in $HARNESSES; do

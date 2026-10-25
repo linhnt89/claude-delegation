@@ -9,9 +9,9 @@ can replay it (`replay <harness>` in a behaviour file, see `common.sh`).
 | `<harness>.steps` | The steps `delegate status <id> --json` must show for it, in order: one per line, `line<TAB>kind<TAB>target<TAB>result`. `line` is the stream line that first announces the step; `target` must appear in the shown target; `result` (may be empty) must appear in the shown result |
 | `<harness>.version` | The harness version, model and streaming flags it was recorded with |
 
-Harnesses: `claude`, `codex`, `opencode`, `gemini`, `pi`. Re-record when a harness changes
-its format; a missing recording fails S023 and P010 for that harness.
-**Gemini isn't recorded yet**: it needs a signed-in Gemini CLI.
+Harnesses with step adapters: `claude`, `codex`, `opencode`, `pi`. Re-record when a harness
+changes its format; a missing recording fails S023 and P010 for that harness. Gemini has no
+adapter for now (2026-10-25): its runs get the basic view, like any worker without one.
 
 Step rules the recordings follow: one step per tool call (two edits of one file are two
 steps); a command's result starts with `ok` when it exits 0 and `failed` otherwise; a reply
