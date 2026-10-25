@@ -24,5 +24,6 @@ d run t002
 echo "$OUT" | grep -Eqi "exit(ed)? (code |with )?3|crash|error|failed" \
   || fail "a worker that crashed (exit 3) wasn't reported: $(echo "$OUT" | grep -E '^(checks|task)' | tr '\n' ' ')"
 d list
-echo "$OUT" | grep -E "^t002 " | grep -q "checks pass$" && fail "list shows a crashed worker's task as passed with no warning: $OUT"
+line="$(echo "$OUT" | grep -E "^t002 " | sed 's/ *\[.*\]$//')"
+echo "$line" | grep -Eqi "exit|crash|error" || fail "list shows a crashed worker's task with no warning: $line"
 pass "empty and crashed work were reported plainly and never shown as done"

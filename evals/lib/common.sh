@@ -22,7 +22,8 @@ note() { echo "-- $*"; }
 # real HOME, before checks point HOME at a scratch folder.
 delegate_bin() {
   local manifest="$EVALS_ROOT/delegate/Cargo.toml"
-  if ! (cd "$EVALS_ROOT/delegate" && mise exec -- cargo build -q --release --offline) >"$EVALS_WORK/build.log" 2>&1; then
+  if ! (cd "$EVALS_ROOT/delegate" && export MISE_STATE_DIR="${MISE_STATE_DIR:-$HOME/.cache/mise-state}" \
+          MISE_TRUSTED_CONFIG_PATHS="$PWD" && mise exec -- cargo build -q --release --offline) >"$EVALS_WORK/build.log" 2>&1; then
     cat "$EVALS_WORK/build.log"
     fail "could not build delegate from $manifest (see build.log)"
   fi

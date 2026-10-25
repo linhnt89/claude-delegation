@@ -1,35 +1,37 @@
-# <Project name>
-
-<!-- Read by every agent (Claude, Codex, Pi, OpenCode, Gemini) on every run.
-     Keep it under ~150 lines. Only facts the code can't express, plus pointers.
-     If a line here becomes false, fix or delete it in the same change. -->
+# Multi-model cooperation kit
 
 ## What this is
-<One or two sentences: what the project does and for whom.>
+`delegate`, a Rust CLI that hands task specs to worker models (Pi, Codex, Claude Code,
+OpenCode, Gemini) in sandboxed git worktrees, checks and merges their work; plus the project
+templates and skills it installs. Users: developers who lead with Claude Code and want their
+other models doing the implementation.
 
 ## Source of truth
 - **Code and tests are the truth.** If any doc conflicts with the code, follow the code
   and list the conflict under "Doc conflicts" in your REPORT.md.
 - Why things are the way they are: `docs/decisions/` (append-only, newest wins).
 - What we're working on now: `PLAN.md`.
+- What users need: `evals/jobs.md` and `evals/scenarios/`.
 
 ## Commands
-<!-- Exact, verified commands. Prefer one script per purpose. -->
-- Setup:  `<e.g. make setup>`
-- Test:   `<e.g. make test>`
-- Lint:   `<e.g. make lint>`
-- Check all before finishing: `<e.g. make check>`
+- Check all before finishing: `scripts/check` (clippy, all + pedantic as errors; unit tests)
+- User scenarios: `evals/run S004` (one), `evals/run fast` (all fast ones)
+- Rust is pinned in `delegate/mise.toml`; run cargo through `mise exec --`.
 
 ## Layout
-<!-- Only the top-level map. Module details belong in module READMEs/docstrings. -->
-- `src/` — <...>
-- `tests/` — <...>
+- `delegate/src/` — the CLI: `commands.rs` (subcommands), `config.rs`, `harness.rs` (worker
+  commands, bwrap), `task.rs` (state), `spec.rs`, `prompts.rs`, `init.rs`
+- `delegate/templates/` — spec/report templates; `project/` is what `delegate init` installs
+- `evals/` — user scenarios with executable checks; `evals/lib/` shared setup and stand-in workers
 
 ## Conventions
-<!-- Only what linters/formatters can't enforce. -->
-- <e.g. errors are returned, never thrown, in the domain layer>
+- Errors go through `anyhow` with `bail!`/`context`; messages say what to do next.
+- `unsafe` is forbidden; no `unwrap()` outside tests.
+- `delegate/templates/project/` mirrors the kit files at the repo root (skills, `evals/run`,
+  templates): change both together.
 
 ## Never
 - Add dependencies without the spec saying so.
 - Change public APIs, schemas or migrations outside the spec's scope.
+- Change a scenario's `scenario.md` or `check` to make it pass.
 - Commit secrets, push, deploy, or touch CI config unless the spec says so.

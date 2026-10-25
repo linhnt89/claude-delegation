@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Project gate: clippy (all + pedantic are errors) and the unit tests for the delegate crate.
+# Works inside a task's sandbox too, where mise can't write its usual state folder.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/../delegate"
+export MISE_STATE_DIR="${MISE_STATE_DIR:-$HOME/.cache/mise-state}" MISE_TRUSTED_CONFIG_PATHS="$PWD"
+mise exec -- cargo clippy --all-targets -q
+mise exec -- cargo test -q

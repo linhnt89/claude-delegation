@@ -29,8 +29,8 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 - Claude delegates a ready task on its own: it announces the spec and tier and starts, no yes needed.
 - The sandbox is a job requirement, not an extra: a worktree alone doesn't stop a worker
   editing the main checkout, moving branches or reading hidden checks.
-- Open: a retry after failed checks gets a stronger model, but it isn't given the failing
-  check output unless Claude writes it into the spec. Expected to fail its scenario today.
+- A retry after failed checks gets a stronger model, and the runner hands it the failing
+  check output (decision 001). Fails today; planned as t003.
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->
