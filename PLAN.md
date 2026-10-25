@@ -13,7 +13,7 @@ Let the user and Claude see, any time, each task's phase, its worker's steps, an
 stalled or died (J8; `docs/decisions/002-live-task-view.md`). Baseline 2026-10-25: S022–S029,
 S031, P009, P010 and hidden P011 fail; S030 is judged by hand.
 
-Order: t008 + t009 → t010 + t011 → t012 → t013. t010, t011 and most of t012 can run in parallel.
+Order: t008 + t009 → t010 + t011 → t012 + t014 → t013. t010, t011 and most of t012 can run in parallel.
 
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
@@ -22,6 +22,7 @@ Order: t008 + t009 → t010 + t011 → t012 → t013. t010, t011 and most of t01
 | t010 | Step adapters: workers run with streaming flags, an adapter for Claude Code, Codex, OpenCode and Pi (not Gemini) writes `events.jsonl`, raw stream kept; `status` shows steps and the stall flag | todo | t008, t009 | standard | `evals/run S023 S025 S027 P010` | new module; `harness.rs` commands |
 | t011 | `delegate watch [id]`: refreshing terminal view, clean exit on Ctrl-C, plain frames when not a terminal | todo | t009 | standard | `evals/run S024` | reads only what `status` reads |
 | t012 | `delegate statusline`, installed by `init` into `.claude/settings.json` without replacing the user's own | todo | t009, t011 | fast | `evals/run S029 S031 P009` | `init.rs`; P009 needs `watch` too |
+| t014 | `delegate wait [<id>...] [--timeout]`: returns on finish, interrupt or stall; skill tells Claude to run it in the background after `run --background` | todo | t010 | fast | `evals/run S032 S033 S034` | `docs/decisions/003-claude-waits-on-runs.md`; new `wait.rs` |
 | t013 | Side pane mod in Claude Code, installed by `init` | todo | t012 | standard | `evals/run S030` (by hand) | blocked on the open question below |
 
 ## Open questions

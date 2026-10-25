@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# wait stays put while a worker is busy, and --timeout ends it cleanly.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-busy gpt-busy gpt-busy
+trap kill_runs EXIT
+export DELEGATE_STALL_SECS=6
+stub_worker gpt-busy <<'B'
+work() { for i in $(seq 30); do printf '# %s\n' "$i" >>shop/__init__.py; sleep 1; done; }
+B
+write_spec t001 "Busy" "Keeps changing files." "true"
+bg_run t001; [ "$RC" -eq 0 ] || fail "run --background failed: $OUT"
+wait_field 30 t001 phase implement || fail "setup: the run never reached implement"
+(cd "$PROJ" && "$DELEGATE" wait t001 >"$EVALS_WORK/w.out" 2>&1; echo done >"$EVALS_WORK/w.at") & w=$!
+sleep 15
+[ ! -f "$EVALS_WORK/w.at" ] || fail "wait returned while the worker was busy: $(cat "$EVALS_WORK/w.out")"
+kill "$w" 2>/dev/null
+t0=$(date +%s); d wait t001 --timeout 5; took=$(( $(date +%s) - t0 ))
+[ "$RC" -eq 3 ] || fail "wait --timeout 5 exited $RC, expected 3 (timed out): $OUT"
+[ "$took" -ge 4 ] && [ "$took" -le 8 ] || fail "wait --timeout 5 took ${took}s"
+echo "$OUT" | grep -qi "nothing\|still\|timed out\|timeout" || fail "wait --timeout doesn't say nothing happened yet: $OUT"
+pass "wait stayed put for 15s while the worker was busy, and --timeout 5 returned after ${took}s with exit 3"

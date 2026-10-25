@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# wait returns when a run is killed and when one stalls.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-slow gpt-slow gpt-slow
+trap 'flag end; kill_runs' EXIT
+export DELEGATE_STALL_SECS=6
+stub_worker gpt-slow <<'B'
+work() { printf '\n# slow\n' >>README.md; sleep 120; }
+B
+stub_worker gpt-quiet <<'B'
+work() { printf '\n# quiet\n' >>shop/__init__.py; wait_flag end; }
+B
+write_spec t001 "Dies" "Gets killed." "true"
+write_spec t002 "Quiet" "Goes quiet." "true"
+bg_run t001 --worker pi:gpt-slow@high; bg_run t002 --worker pi:gpt-quiet@high
+wait_field 30 t001 phase implement && wait_field 30 t002 phase implement || fail "setup: the runs never reached implement"
+# Killed run
+(cd "$PROJ" && "$DELEGATE" wait t001 >"$EVALS_WORK/w1.out" 2>&1; date +%s >"$EVALS_WORK/w1.at") &
+sleep 2; [ ! -f "$EVALS_WORK/w1.at" ] || fail "wait t001 returned while t001 was busy: $(cat "$EVALS_WORK/w1.out")"
+pid="$(sj 's["tasks"][0]["pid"]' t001)"; killed=$(date +%s)
+kill -KILL -- -"$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null; pkill -KILL -f "model gpt-slow" 2>/dev/null
+wait_until 6 test -f "$EVALS_WORK/w1.at" || fail "wait didn't return within 5s of t001 being killed"
+grep -q "t001" "$EVALS_WORK/w1.out" && grep -qi "interrupted" "$EVALS_WORK/w1.out" || fail "wait doesn't say t001 was interrupted: $(cat "$EVALS_WORK/w1.out")"
+grep -q "delegate run t001\|delegate discard t001" "$EVALS_WORK/w1.out" || fail "wait doesn't say what to run next for t001: $(cat "$EVALS_WORK/w1.out")"
+# Stall
+(cd "$PROJ" && "$DELEGATE" wait t002 >"$EVALS_WORK/w2.out" 2>&1; date +%s >"$EVALS_WORK/w2.at") &
+wait_field 30 t002 stalled true || fail "setup: t002 was never flagged stalled"
+wait_until 6 test -f "$EVALS_WORK/w2.at" || fail "wait didn't return within 5s of t002 being flagged stalled"
+out="$(cat "$EVALS_WORK/w2.out")"
+echo "$out" | grep -q t002 && echo "$out" | grep -qi stall && echo "$out" | grep -q implement || fail "wait doesn't say t002 stalled in implement: $out"
+echo "$out" | grep -Eq '[0-9]+(s|m)' || fail "wait doesn't say how long t002 has been quiet: $out"
+# No ids: returns on the first event among running tasks (t002 is still stalled)
+t0=$(date +%s); d wait; took=$(( $(date +%s) - t0 ))
+[ "$took" -le 5 ] && echo "$OUT" | grep -q t002 || fail "wait without ids didn't return at once on stalled t002 (${took}s): $OUT"
+pass "wait woke within seconds on a killed run and on a stall, said what happened, and covered all tasks without ids"

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# wait returns when a background run finishes, not before.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-ten gpt-ten gpt-ten
+trap kill_runs EXIT
+d wait
+[ "$RC" -eq 0 ] || fail "wait with nothing running failed: $OUT"
+echo "$OUT" | grep -qi "nothing is running\|no task is running\|nothing running" || fail "wait with nothing running doesn't say so: $OUT"
+stub_worker gpt-ten <<'B'
+work() { sleep 4; printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; sleep 6; }
+B
+write_spec t001 "Split a bill" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
+bg_run t001; [ "$RC" -eq 0 ] || fail "run --background failed: $OUT"
+(cd "$PROJ" && "$DELEGATE" wait t001 >"$EVALS_WORK/wait.out" 2>&1; echo $? >"$EVALS_WORK/wait.rc"; date +%s >"$EVALS_WORK/wait.at") &
+wait_field 90 t001 phase done || fail "setup: the run never finished"
+done_at=$(date +%s)
+wait_until 6 test -f "$EVALS_WORK/wait.at" || fail "wait didn't return within 5s of the run finishing"
+[ "$(cat "$EVALS_WORK/wait.at")" -ge $((done_at - 2)) ] || fail "wait returned before the run finished: $(cat "$EVALS_WORK/wait.out")"
+[ "$(cat "$EVALS_WORK/wait.rc")" = 0 ] || fail "wait exited $(cat "$EVALS_WORK/wait.rc") on a finished run"
+out="$(cat "$EVALS_WORK/wait.out")"
+for want in t001 done pass "delegate merge t001"; do echo "$out" | grep -q "$want" || fail "wait's line doesn't say '$want': $out"; done
+d wait t999
+[ "$RC" -ne 0 ] && echo "$OUT" | grep -q t001 || fail "wait on an unknown task didn't fail naming the known ones: $OUT"
+for f in "$EVALS_ROOT/.claude/skills/delegate/SKILL.md" "$EVALS_ROOT/delegate/templates/project/.claude/skills/delegate/SKILL.md"; do
+  grep -q "delegate wait" "$f" || fail "the delegate skill ($f) doesn't tell Claude to use delegate wait"
+done
+pass "wait returned right after the run finished with the outcome and next step, and the skill points Claude to it"
