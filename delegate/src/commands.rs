@@ -13,7 +13,7 @@ use crate::harness::{self, Bounds, Session};
 use crate::prompts;
 use crate::spec;
 use crate::status::{self, Operation};
-use crate::task::{CheckOutcome, Checks, Ctx, ReviewState, Round, RoundStatus, Task, git};
+use crate::task::{CheckOutcome, Checks, Ctx, Owner, ReviewState, Round, RoundStatus, Task, git};
 
 pub const SPEC_TEMPLATE: &str = include_str!("../templates/SPEC.md");
 pub const PRUNE_TEMPLATE: &str = include_str!("../templates/PRUNE.md");
@@ -56,16 +56,38 @@ fn first_line(path: &Path) -> Option<String> {
         .map(String::from)
 }
 
+/// Attribute an unowned task to the calling session, never to a later runner.
+fn claim_owner(ctx: &Ctx, t: &mut Task) -> Result<()> {
+    if t.state.owner.is_none()
+        && let Ok(session) = std::env::var("CLAUDE_CODE_SESSION_ID")
+        && !session.is_empty()
+    {
+        t.state.owner = Some(Owner {
+            session,
+            dir: ctx.root.to_string_lossy().into_owned(),
+        });
+        t.save().with_context(|| {
+            format!(
+                "saving {}'s session owner; check permissions on {} and retry",
+                t.id,
+                t.dir.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------- new
 
 pub fn new(ctx: &Ctx, id: &str, prune: bool) -> Result<()> {
-    let t = Task::load(ctx, id)?;
+    let mut t = Task::load(ctx, id)?;
     if t.spec.exists() {
         bail!("{} already exists", t.spec.display());
     }
     fs::create_dir_all(&t.dir)?;
     let template = if prune { PRUNE_TEMPLATE } else { SPEC_TEMPLATE };
     fs::write(&t.spec, template.replace("<id>", &t.id))?;
+    claim_owner(ctx, &mut t)?;
     println!("{}", t.spec.display());
     Ok(())
 }
@@ -350,6 +372,9 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         bail!("no candidate can start: {}; {fix}", missing.join("; "));
     }
 
+    // Persist before either the foreground worker or detached child can start.
+    // The run lock is held, and dry runs have already returned without claiming.
+    claim_owner(ctx, &mut t)?;
     if a.background {
         drop(operation);
         return background(a, &t);
@@ -1384,6 +1409,106 @@ mod tests {
         }];
         t.save()?;
         Ok((repo, ctx, t))
+    }
+
+    fn owner_command(ctx: &Ctx, id: &str, action: &str, session: Option<&str>) -> Result<()> {
+        let path = std::env::join_paths(std::iter::once(ctx.root.join("bin")).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))?;
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .args([
+                "--exact",
+                "commands::tests::session_owner_is_set_by_new_or_first_run_and_never_moves",
+            ])
+            .current_dir(ctx.root.join("subdir"))
+            .env("_DELEGATE_TEST_OWNER_ACTION", action)
+            .env("_DELEGATE_TEST_OWNER_ID", id)
+            .env("DELEGATE_HOME", &ctx.dhome)
+            .env("DELEGATE_WORKERS", ctx.root.join("workers.toml"))
+            .env("DELEGATE_SANDBOX", "0")
+            .env("XDG_DATA_HOME", ctx.root.join("data"))
+            .env("PATH", path)
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("_DELEGATE_BACKGROUND_RUN");
+        if let Some(session) = session {
+            command.env("CLAUDE_CODE_SESSION_ID", session);
+        }
+        let output = command.output()?;
+        assert!(
+            output.status.success(),
+            "{action} {id} as {session:?}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn session_owner_is_set_by_new_or_first_run_and_never_moves() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if let Ok(action) = std::env::var("_DELEGATE_TEST_OWNER_ACTION") {
+            let ctx = Ctx::discover()?;
+            let id = std::env::var("_DELEGATE_TEST_OWNER_ID")?;
+            return if action == "new" {
+                new(&ctx, &id, false)
+            } else {
+                run(
+                    &ctx,
+                    &RunArgs {
+                        id,
+                        tier: None,
+                        worker: Some("codex:gpt-test@high".into()),
+                        questions: QuestionPhase::Never,
+                        dry_run: action == "dry-run",
+                        research: false,
+                        background: false,
+                    },
+                )
+            };
+        }
+        let (_repo, ctx, _) = merge_fixture()?;
+        fs::create_dir_all(ctx.root.join("subdir"))?;
+        fs::create_dir_all(ctx.root.join("bin"))?;
+        let worker = ctx.root.join("bin/codex");
+        fs::write(&worker, "#!/bin/sh\nexit 0\n")?;
+        fs::set_permissions(worker, fs::Permissions::from_mode(0o755))?;
+        fs::write(
+            ctx.root.join("workers.toml"),
+            crate::config::WORKERS_EXAMPLE,
+        )?;
+        for (id, initial_session) in [
+            ("t010", None),
+            ("t011", Some("")),
+            ("t012", Some("original")),
+        ] {
+            owner_command(&ctx, id, "new", initial_session)?;
+            let initial_owner = initial_session
+                .filter(|s| !s.is_empty())
+                .map(|session| Owner {
+                    session: session.into(),
+                    dir: ctx.root.to_string_lossy().into_owned(),
+                });
+            assert_eq!(Task::load(&ctx, id)?.state.owner, initial_owner);
+            owner_command(&ctx, id, "dry-run", Some("other"))?;
+            assert_eq!(Task::load(&ctx, id)?.state.owner, initial_owner);
+            for session in [None, Some("")] {
+                owner_command(&ctx, id, "run", session)?;
+                assert_eq!(Task::load(&ctx, id)?.state.owner, initial_owner);
+            }
+            owner_command(&ctx, id, "run", Some("first-runner"))?;
+            let expected = initial_owner.or_else(|| {
+                Some(Owner {
+                    session: "first-runner".into(),
+                    dir: ctx.root.to_string_lossy().into_owned(),
+                })
+            });
+            assert_eq!(Task::load(&ctx, id)?.state.owner, expected);
+            owner_command(&ctx, id, "run", Some("another-runner"))?;
+            assert_eq!(Task::load(&ctx, id)?.state.owner, expected);
+        }
+        Ok(())
     }
 
     fn assert_failed_merge_restored(ctx: &Ctx, t: &Task, head: &str) -> Result<()> {

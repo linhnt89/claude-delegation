@@ -161,8 +161,16 @@ pub struct ReviewState {
     pub high: Option<u32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Owner {
+    pub session: String,
+    pub dir: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default)]
+    pub owner: Option<Owner>,
     pub base: Option<String>,
     pub rounds: Vec<Round>,
     pub review: Option<ReviewState>,
@@ -348,6 +356,38 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr),
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn owner_round_trips_and_old_state_loads() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-owner-{}", uuid::Uuid::new_v4()));
+        let ctx = Ctx {
+            root: root.clone(),
+            dhome: root.join("tasks"),
+            gitdir: root.join(".git"),
+        };
+        let mut task = Task::load(&ctx, "t001")?;
+        assert_eq!(task.state.owner, None);
+        std::fs::create_dir_all(&task.dir)?;
+        std::fs::write(
+            task.dir.join("STATE.json"),
+            r#"{"base":null,"rounds":[],"review":null}"#,
+        )?;
+        task = Task::load(&ctx, "t001")?;
+        assert_eq!(task.state.owner, None);
+        let owner = Owner {
+            session: "session-a".into(),
+            dir: "/projects/pane-polish".into(),
+        };
+        task.state.owner = Some(owner.clone());
+        task.save()?;
+        assert_eq!(Task::load(&ctx, "t001")?.state.owner, Some(owner));
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(task.dir.join("STATE.json"))?)?;
+        assert_eq!(json["owner"]["session"], "session-a");
+        assert_eq!(json["owner"]["dir"], "/projects/pane-polish");
+        std::fs::remove_dir_all(root)?;
         Ok(())
     }
 

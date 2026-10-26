@@ -18,8 +18,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::commands;
 use crate::task::{CheckOutcome, Ctx, RoundStatus, Task, git};
+use crate::{commands, spec};
 
 /// How much work a view collector may do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +35,10 @@ pub enum Depth {
 #[derive(Debug, Serialize)]
 pub struct TaskView {
     pub id: String,
+    pub title: String,
+    pub goal: String,
+    pub session: Option<String>,
+    pub session_name: String,
     pub phase: String,
     pub outcome: Option<String>,
     pub worker: Option<String>,
@@ -506,8 +510,28 @@ fn collect_task(ctx: &Ctx, t: &Task, depth: Depth) -> Result<TaskView> {
     } else {
         String::new()
     };
+    let spec_text = fs::read_to_string(&t.spec).unwrap_or_default();
+    let owner = t.state.owner.as_ref();
     Ok(TaskView {
         id: t.id.clone(),
+        title: spec::display_title(&spec_text, &t.id),
+        goal: spec::goal(&spec_text)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+            .to_string(),
+        session: owner.map(|owner| owner.session.clone()),
+        session_name: owner.map_or_else(
+            || "by hand".into(),
+            |owner| {
+                Path::new(&owner.dir)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            },
+        ),
         phase,
         outcome,
         worker: active
@@ -977,6 +1001,10 @@ mod tests {
     fn view(id: &str, phase: &str, outcome: Option<&str>) -> TaskView {
         TaskView {
             id: id.into(),
+            title: id.into(),
+            goal: String::new(),
+            session: None,
+            session_name: "by hand".into(),
             phase: phase.into(),
             outcome: outcome.map(str::to_owned),
             worker: Some("pi:test@high".into()),
@@ -996,6 +1024,58 @@ mod tests {
             elapsed_secs: 65,
             activity_age_secs: 425,
         }
+    }
+
+    #[test]
+    fn purpose_and_session_are_read_at_every_depth_with_safe_fallbacks() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-purpose-{}", uuid::Uuid::new_v4()));
+        // No git repository is needed to read these fields, including the folder name.
+        let ctx = Ctx {
+            root: root.clone(),
+            dhome: root.join("tasks"),
+            gitdir: root.join(".git"),
+        };
+        let mut task = Task::load(&ctx, "t005")?;
+        fs::create_dir_all(&task.dir)?;
+        fs::write(
+            &task.spec,
+            "# Task t005: Add divide\n\n## Goal\n<placeholder>\n\n  Divide the bill.  \nSecond line.\n",
+        )?;
+        task.state.owner = Some(crate::task::Owner {
+            session: "session-a".into(),
+            dir: "/work/wt/pane-polish".into(),
+        });
+        task.save()?;
+        for depth in [Depth::Phase, Depth::Full] {
+            let views = collect(&ctx, Some(&task.id), depth)?;
+            let json = serde_json::to_value(&views[0])?;
+            assert_eq!(json["title"], "Add divide");
+            assert_eq!(json["goal"], "Divide the bill.");
+            assert_eq!(json["session"], "session-a");
+            assert_eq!(json["session_name"], "pane-polish");
+        }
+        task.state.owner = None;
+        task.save()?;
+        fs::write(
+            &task.spec,
+            commands::SPEC_TEMPLATE.replace("<id>", &task.id),
+        )?;
+        for depth in [Depth::Phase, Depth::Full] {
+            let views = collect(&ctx, Some(&task.id), depth)?;
+            let json = serde_json::to_value(&views[0])?;
+            assert_eq!(json["title"], "t005");
+            assert_eq!(json["goal"], "");
+            assert!(json["session"].is_null());
+            assert_eq!(json["session_name"], "by hand");
+        }
+        fs::remove_file(&task.spec)?;
+        for depth in [Depth::Phase, Depth::Full] {
+            let view = collect_task(&ctx, &task, depth)?;
+            assert_eq!(view.title, "t005");
+            assert_eq!(view.goal, "");
+        }
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]

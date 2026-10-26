@@ -70,6 +70,10 @@ mod tests {
     fn task_view() -> TaskView {
         TaskView {
             id: "t001".into(),
+            title: "t001".into(),
+            goal: String::new(),
+            session: None,
+            session_name: "by hand".into(),
             phase: "interrupted".into(),
             outcome: None,
             worker: Some("pi:test".into()),

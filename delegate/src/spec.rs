@@ -63,6 +63,20 @@ pub fn title(text: &str, id: &str) -> String {
     }
 }
 
+/// User-facing title without the task id, or the id for an unfilled spec.
+pub fn display_title(text: &str, id: &str) -> String {
+    let heading = title(text, id);
+    let name = heading
+        .strip_prefix(&format!("{id}:"))
+        .unwrap_or(&heading)
+        .trim();
+    if name.is_empty() || name == "<name>" {
+        id.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 /// Goal section text, without template placeholder lines.
 pub fn goal(text: &str) -> String {
     section(text, "Goal")
@@ -99,6 +113,25 @@ mod tests {
             acceptance_commands("## Acceptance\n- [ ] ``\n"),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn display_titles_omit_the_id_and_fall_back_for_empty_or_template_specs() {
+        assert_eq!(display_title(SPEC, "t005"), "Add divide");
+        for text in [
+            "",
+            "\n## Goal\nSomething\n",
+            "   \n",
+            "# Task t005: <name>\n",
+            "# Task t005:   <name>  \n",
+            "# Task t005: \n",
+            "# Task t005\n",
+        ] {
+            assert_eq!(display_title(text, "t005"), "t005", "{text:?}");
+        }
+        assert_eq!(display_title("# Task t005: Foo: bar\n", "t005"), "Foo: bar");
+        // The commit-subject helper deliberately retains the id and colon.
+        assert_eq!(title(SPEC, "t005"), "t005: Add divide");
     }
 
     #[test]

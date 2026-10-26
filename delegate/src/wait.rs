@@ -236,6 +236,10 @@ mod tests {
         };
         let view = TaskView {
             id: "t001".into(),
+            title: "t001".into(),
+            goal: String::new(),
+            session: None,
+            session_name: "by hand".into(),
             phase: "implement".into(),
             outcome: None,
             worker: None,
