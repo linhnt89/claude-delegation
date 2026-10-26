@@ -37,8 +37,8 @@ Environment/Context isn't possible: the mod API has no such slot). Criteria in S
 
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t016 | Pane: status-first cards, attention order, opens/closes by itself | running | – | standard | `claude plugin test`, mirror identical; S030 by hand | `.claude/skills/delegate-pane/` + template |
-| t017 | `watch`/`status`: aligned table, attention order, colour in a terminal | running | – | standard | `evals/run S035 S024 S025 P009` | `status.rs`, `watch.rs` |
+| t016 | Pane: status-first cards, attention order, opens/closes by itself | done | – | standard | `claude plugin test`, mirror identical; S030 by hand | `.claude/skills/delegate-pane/` + template |
+| t017 | `watch`/`status`: aligned table, attention order, colour in a terminal | done | – | standard | `evals/run S035 S024 S025 P009` | `status.rs`, `watch.rs` |
 
 ## Open questions
 - None.
