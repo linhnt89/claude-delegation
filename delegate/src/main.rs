@@ -5,10 +5,12 @@ mod config;
 mod harness;
 mod init;
 mod prompts;
+mod sha256;
 mod spec;
 mod status;
 mod statusline;
 mod task;
+mod upgrade;
 mod wait;
 mod watch;
 
@@ -40,6 +42,11 @@ enum Cmd {
     Init {
         /// Project directory (default: current)
         dir: Option<PathBuf>,
+    },
+    /// Update the project's kit, preserving edits (paths explicitly take current versions)
+    Upgrade {
+        /// Kit paths to take; omit to upgrade all pristine files
+        paths: Vec<String>,
     },
     /// Create a task spec from the template
     New {
@@ -136,6 +143,10 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         init::init(&dir)?;
         return Ok(ExitCode::SUCCESS);
     }
+    if let Cmd::Upgrade { paths } = &cmd {
+        upgrade::upgrade(&std::env::current_dir()?, paths)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     // The status line also runs outside a project, so it builds its own context.
     if let Cmd::Statusline = &cmd {
         statusline::run();
@@ -146,7 +157,9 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         return wait::run(&ctx, ids, timeout.as_deref());
     }
     match cmd {
-        Cmd::Init { .. } | Cmd::Wait { .. } | Cmd::Statusline => unreachable!("handled above"),
+        Cmd::Init { .. } | Cmd::Upgrade { .. } | Cmd::Wait { .. } | Cmd::Statusline => {
+            unreachable!("handled above")
+        }
         Cmd::New { id, prune } => commands::new(&ctx, &id, prune),
         Cmd::Run {
             id,

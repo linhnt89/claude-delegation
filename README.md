@@ -40,12 +40,19 @@ running tasks live; while the pane is closed, a row above the prompt sums the ta
 opens it. Then fill in `AGENTS.md`
 (commands first) and any `.delegate.toml` rules.
 
+After rebuilding `delegate`, run `delegate upgrade` in an existing project to update its
+kit. Edited kit files are kept, deleted files are reported missing, and the output gives
+commands to compare or take the current version with `delegate upgrade <path>`. Project-owned
+files are never overwritten: changed templates are shown as diffs to carry over by hand.
+Review with `git diff`, then commit the changes, including `.delegate-kit.toml`.
+
 Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
 
 ## Commands
 | Command | What it does |
 |---|---|
 | `delegate init [dir]` | Add project files and your worker config, never overwriting |
+| `delegate upgrade [<path>...]` | Update pristine kit files, preserving edits; paths explicitly take current versions |
 | `delegate new <id> [--prune]` | Create a spec from the template (or the stale-doc pruning spec) |
 | `delegate run <id> [--tier T]` | Question phase, work phase, commit, acceptance checks |
 | `delegate run <id> --research` | Read-only research; the report is the result |
@@ -156,6 +163,7 @@ sessions in `~/.pi`, Claude workers in `~/.claude/projects/`.
 | `PLAN.md` | living, pruned | Current goal, task table, open questions |
 | `docs/decisions/` | append-only | Why X over Y; superseded, never edited |
 | `.delegate.toml` | living | Project rules: minimum tiers and required reviews by path |
+| `.delegate-kit.toml` | committed | Installed kit id and file hashes, used by `delegate upgrade` |
 | `.claude/skills/delegate` | – | `/delegate`: plan review → spec → run → review → merge or discard |
 | `.claude/skills/distill` | – | `/distill`: end a discussion, save only decisions and plan changes |
 | `.claude/skills/evaluate` | – | `/evaluate`: build and keep runnable user scenarios, before the code they check |

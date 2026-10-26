@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Regenerate the embedded kit catalog from git history and the working tree.
+
+Only init's include_str! file list defines a kit, not every file in project/.
+First occurrence wins for historical kits; the working kit is always last.
+"""
+import hashlib
+import json
+import pathlib
+import re
+import subprocess
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+TEMPLATES = "delegate/templates/project/"
+OWNED = {"AGENTS.md", "CLAUDE.md", "PLAN.md", ".delegate.toml", "evals/jobs.md"}
+
+
+def git(*args):
+    return subprocess.run(["git", "-C", str(ROOT), *args],
+                          capture_output=True, check=True).stdout
+
+
+def kit(commit=None):
+    def read(path):
+        return git("show", f"{commit}:{path}") if commit else (ROOT / path).read_bytes()
+
+    try:
+        source = read("delegate/src/init.rs").decode()
+    except subprocess.CalledProcessError:
+        return None
+    paths = re.findall(r'include_str!\("\.\./templates/project/([^"]+)"\)', source)
+    if not paths:
+        return None
+    bodies = {p: read(TEMPLATES + p) for p in sorted(paths)}
+    files = {p: hashlib.sha256(b).hexdigest() for p, b in bodies.items()}
+    lines = "".join(f"{p} {h}\n" for p, h in files.items())
+    return {"id": hashlib.sha256(lines.encode()).hexdigest()[:12], "files": files,
+            "templates": {p: b.decode() for p, b in bodies.items() if p in OWNED}}
+
+
+def main():
+    commits = git("log", "--reverse", "--format=%H", "--", TEMPLATES,
+                  "delegate/src/init.rs").decode().split()
+    history = {}
+    for commit in commits:
+        entry = kit(commit)
+        if entry:
+            history.setdefault(entry["id"], entry)
+    current = kit()
+    if current is None:
+        raise SystemExit("init has no embedded project templates; update scripts/kit-history")
+    history.pop(current["id"], None)
+    history[current["id"]] = current
+    output = json.dumps(list(history.values()), indent=2, ensure_ascii=False) + "\n"
+    (ROOT / "delegate/templates/kit-history.txt").write_text(output)
+
+
+if __name__ == "__main__":
+    main()

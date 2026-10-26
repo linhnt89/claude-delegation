@@ -9,7 +9,9 @@ use anyhow::{Result, bail};
 use crate::config::{WORKERS_EXAMPLE, user_config_path};
 use crate::task::git;
 
-const PROJECT_FILES: &[(&str, &str)] = &[
+// Keep include_str! calls on one line: historical kit readers parse this list.
+#[rustfmt::skip]
+pub(crate) const PROJECT_FILES: &[(&str, &str)] = &[
     ("AGENTS.md", include_str!("../templates/project/AGENTS.md")),
     ("CLAUDE.md", include_str!("../templates/project/CLAUDE.md")),
     ("PLAN.md", include_str!("../templates/project/PLAN.md")),
@@ -69,7 +71,7 @@ const PROJECT_FILES: &[(&str, &str)] = &[
 ];
 
 /// Project files that must be executable.
-const EXECUTABLE: &[&str] = &["evals/run"];
+pub(crate) const EXECUTABLE: &[&str] = &["evals/run"];
 
 /// Claude Code's settings file and the status line command we install there.
 const CLAUDE_SETTINGS: &str = ".claude/settings.json";
@@ -140,9 +142,22 @@ pub fn init(dir: &Path) -> Result<()> {
         bail!("{} is not inside a git repository", dir.display());
     };
     let root = Path::new(&root);
+    let mut record = crate::upgrade::Record::new();
     for (rel, content) in PROJECT_FILES {
-        write_new(&root.join(rel), content, rel)?;
+        let path = root.join(rel);
+        if !path.exists() {
+            record
+                .files
+                .insert((*rel).into(), crate::sha256::hex(content.as_bytes()));
+        }
+        write_new(&path, content, rel)?;
     }
+    // Like every other init file, an existing record is never overwritten.
+    write_new(
+        &root.join(crate::upgrade::RECORD),
+        &toml::to_string(&record)?,
+        crate::upgrade::RECORD,
+    )?;
     configure_status_line(root)?;
     let cfg = user_config_path();
     write_new(
