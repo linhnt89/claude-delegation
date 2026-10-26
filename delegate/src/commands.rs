@@ -1258,8 +1258,9 @@ pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
                 diagnostics.join("\n"),
             );
         }
+        // The worker resolves; the runner's round commit then concludes the merge (decision 004).
         bail!(
-            "merge refused: {} conflicts with {base} in: {paths}\nmerge {base} into the task in {}, resolve, commit, then: delegate check {id}\n{}",
+            "merge refused: {} conflicts with {base} in: {paths}\nstart the merge in the worktree without committing: git -C {} merge --no-commit {base}\nthen add a round to the spec saying to resolve the conflicts, and run: delegate run {id} --background\n{}",
             t.branch,
             t.wt.display(),
             diagnostics.join("\n"),
@@ -1397,7 +1398,7 @@ mod tests {
             t.branch
         )));
         assert!(error.contains(&format!(
-            "merge main into the task in {}, resolve, commit, then: delegate check t001",
+            "git -C {} merge --no-commit main\nthen add a round to the spec saying to resolve the conflicts, and run: delegate run t001 --background",
             t.wt.display()
         )));
         assert_failed_merge_restored(&ctx, &t, &head)?;

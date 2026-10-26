@@ -41,10 +41,13 @@ Fix the plan for real findings; bring disagreements to the user. Skip it for one
 | Implementation with clear contracts and tests | `standard` (default) |
 | Algorithms, concurrency, cross-module refactors, security-sensitive | `deep` |
 
-Tell the user the choice when showing the spec ("t007: implement @ standard"), then, unless
-they change it, run in the background:
+When showing the spec, tell the user the task and tier on a line of its own, in exactly this
+form: `t007: implement @ standard` (role `implement`, `research` or `review`). Repeat that line
+in every later update on the task (started, round N, done): the user may read only the last
+message. Then, without waiting for a yes, run it in the background (the user can still change
+the tier):
 
-    delegate run --background <id> [--tier fast|standard|deep]
+    delegate run <id> --background [--tier fast|standard|deep]
 
 Then start a wait as another background command, so the harness wakes you when something
 happens instead of polling:
@@ -94,21 +97,32 @@ Read in this order and stop when you can decide:
 3. `REPORT.md`, and `REVIEW.md` if reviewed
 4. `git diff <base>...task/<id> -- <file>` only for files that matter
 
+You never commit on a task branch, not even a one-line fix or a doc: everything on it is
+the worker's, so the record shows what each model did. Judge by the spec's Acceptance and
+contract, not taste: a choice that works, passes the checks and keeps the contract (a test
+file named differently, other wording) is accepted and mentioned to the user, not reworked.
+
 Then:
-- **Accept:** ask the user, then `delegate merge <id>`. Merge is refused unless checks pass on
+- **Accept:** ask the user, naming the action ("Merge t007?", not "shall I go ahead?"), then
+  `delegate merge <id>`. Merge is refused unless checks pass on
   the final commit, project rules are met, and any review on the final commit has no
   high-severity findings (`--accept-findings` only if the user accepts them). It squash-merges
   with the spec's title and Goal as the message and deletes all task state.
-- **Another round:** append `## Round N` to the spec with only what to fix (or apply
-  `REVIEW.patch` tests in the worktree and commit), then `delegate run --background <id>` again.
-- **Small fix:** commit it in the worktree yourself, then `delegate check <id>`.
+- **Merge conflict** with the base branch: run `git -C <worktree> merge --no-commit <base>`,
+  append a `## Round N` saying to resolve the conflicts, then `delegate run <id> --background`.
+  The runner's round commit concludes the merge.
+- **Another round:** for anything that breaks the spec or the contract, however small, append
+  `## Round N` to the spec with only what to fix, then `delegate run <id> --background` again.
+  For `REVIEW.patch` tests, copy the patch to `<worktree>/.task/REVIEW.patch` and have the
+  round say to apply it first.
 - **Reject:** `delegate discard <id>`; note in `PLAN.md` why if the task stays open.
 
 Before ending a session, run `delegate list`: merge, discard, or tell the user what's open.
 
 ## 7. Close the loop (part of merging, not later)
 - Did this change make any statement in `AGENTS.md`, a module README or `PLAN.md` false?
-  Fix it in the same branch before merging.
+  Fix it, and mark the task done in `PLAN.md`, in your own commit on the base branch right
+  after the merge, never on the task branch.
 - Anything worth keeping from the report or review goes into a decision or `AGENTS.md`
   before merge; the task folder, report included, is deleted.
 - Write the spec's Goal as a good commit body: it becomes the permanent record of why.

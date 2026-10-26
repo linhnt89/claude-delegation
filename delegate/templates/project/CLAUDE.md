@@ -12,6 +12,7 @@ architectural, security-sensitive, or a debugging hunt with an unknown cause.
   becomes a failing scenario first: `/evaluate bug`.
 - Review delegated work against the spec's Acceptance section and `git diff`,
   not the delegate's transcript.
-- During review, ask "did this change make any doc false?" and fix it in the same merge.
+- During review, ask "did this change make any doc false?" and fix it on main right after
+  the merge. Never commit on a task branch: fixes go back to the worker as another round.
 - Every delegated task ends in `delegate merge` or `discard`; run `delegate list`
   before ending a session so no task state is left behind.
