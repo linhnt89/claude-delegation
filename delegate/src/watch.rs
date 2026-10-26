@@ -53,9 +53,9 @@ fn draw_frame(
         seconds % 60
     )?;
     let text = if detail && let Some(view) = views.first() {
-        status::render_detail(view)
+        status::render_detail(view, status::use_color(terminal))
     } else {
-        status::render_rows(views)
+        status::render_rows(views, status::use_color(terminal))
     };
     write!(output, "{text}")?;
     // Pipes must see each frame immediately, even when the process is killed.
@@ -142,9 +142,9 @@ mod tests {
             let mut output = Vec::new();
             draw_frame(&mut output, false, &views, detail, 0)?;
             let expected = if detail {
-                status::render_detail(&views[0])
+                status::render_detail(&views[0], false)
             } else {
-                status::render_rows(&views)
+                status::render_rows(&views, false)
             };
             assert_eq!(
                 String::from_utf8(output)?,
@@ -166,8 +166,13 @@ mod tests {
                 removed: 0,
             });
         }
-        let text = status::render_rows(&[view]);
-        assert!(text.contains("shop/pricing.py +3−1, file0.rs +0−0, file1.rs +0−0, +2 more"));
-        assert!(!text.contains("file2.rs"));
+        let text = status::render_rows(&[view], false);
+        let row = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("t001 "))
+            .unwrap();
+        assert!(row.contains("5  shop/pricing.py"));
+        assert!(row.contains("more"));
+        assert!(row.chars().count() <= 100);
     }
 }

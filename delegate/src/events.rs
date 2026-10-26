@@ -837,13 +837,14 @@ mod tests {
         let recent = status::collect(&ctx, None, Depth::Phase).unwrap();
         assert_eq!(recent[0].steps.len(), 5);
         assert_eq!(recent[0].steps[0]["id"], 3);
-        let rows = status::render_rows(&recent);
+        let rows = status::render_rows(&recent, false);
+        assert!(rows.contains("t001"));
         assert!(
             rows.lines()
-                .any(|line| line.contains("t001") && line.contains("file6"))
+                .any(|line| line.trim_start().starts_with("└ read  file6"))
         );
-        assert!(status::render_detail(&views[0]).contains("file0"));
-        assert!(!status::render_detail(&views[0]).contains("aren't available"));
+        assert!(status::render_detail(&views[0], false).contains("file0"));
+        assert!(!status::render_detail(&views[0], false).contains("aren't available"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -1779,8 +1779,8 @@ mod tests {
         );
         assert_eq!(view.changed_files[1].path, "untracked");
         assert_eq!(view.changed_files[1].added, 1);
-        status::render_rows(&views);
-        status::render_detail(view);
+        status::render_rows(&views, false);
+        status::render_detail(view, false);
         let brief = status::collect(&ctx, None, status::Depth::Phase)?;
         assert!(brief[0].changed_files.is_empty());
         assert_eq!(brief[0].log_tail, "");
@@ -1802,7 +1802,7 @@ mod tests {
         for blocker in &views[0].merge_blockers {
             assert!(error.contains(blocker));
         }
-        assert!(status::render_rows(&views).contains("needs review"));
+        assert!(status::render_rows(&views, false).contains("needs review"));
         fs::write(
             ctx.root.join(".delegate.toml"),
             "[[rules]]\npaths = [\"code\"]\nmin_tier = \"deep\"\nreview = \"always\"\n",

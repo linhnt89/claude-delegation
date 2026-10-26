@@ -2,14 +2,14 @@
 //!
 //! `collect(Depth::Full)` includes diffs and the log tail; `Depth::Phase` omits
 //! those expensive details. Neither depth writes files or refreshes live state.
-//! Renderers return plain text without terminal control sequences. `is_alive`
+//! Renderers use colour only when explicitly enabled for terminal output. `is_alive`
 //! verifies a Linux process identity, not just the existence of its pid.
 //! Readers never lock files: `operation.guard` is writer-only exclusion, while
 //! `operation.lock` is an atomic owner record (marked done before unlocking).
 
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{IsTerminal, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
@@ -713,75 +713,197 @@ fn duration(seconds: u64) -> String {
     }
 }
 
-pub fn render_rows(tasks: &[TaskView]) -> String {
+/// Colour is a property of the output destination, never of collected state.
+pub fn use_color(terminal: bool) -> bool {
+    terminal && std::env::var_os("NO_COLOR").is_none()
+}
+
+// Priority, label, ANSI SGR. Keep completed non-check outcomes visible as before.
+fn table_state(t: &TaskView) -> (u8, String, &'static str) {
+    if t.stalled {
+        (0, format!("⚠ STALLED · {}", t.phase), "1;33")
+    } else if t.phase == "interrupted" {
+        (1, "✗ interrupted".into(), "31")
+    } else if t.phase == "done" {
+        match t.outcome.as_deref() {
+            Some(outcome @ ("fail" | "failed_to_start")) => {
+                (1, format!("✗ done · {outcome}"), "31")
+            }
+            Some("pass") => {
+                let label = if t.ready_to_merge {
+                    "ready to merge"
+                } else if t.merge_blockers.iter().any(|b| b.contains("review")) {
+                    "needs review"
+                } else {
+                    "merge blocked"
+                };
+                (2, format!("✓ done · pass · {label}"), "32")
+            }
+            Some(outcome) => (2, format!("done, {outcome}"), ""),
+            None => (2, "done".into(), ""),
+        }
+    } else if t.phase == "not_started" {
+        (4, "not started".into(), "")
+    } else {
+        (3, format!("● {}", t.phase), "36")
+    }
+}
+
+fn one_line(text: &str) -> String {
+    text.replace(['\n', '\r', '\t'], " ")
+}
+
+fn cut(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        text.into()
+    } else {
+        let mut text: String = text.chars().take(width.saturating_sub(1)).collect();
+        text.push('…');
+        text
+    }
+}
+
+fn styled(text: &str, sgr: &str, color: bool) -> String {
+    if color && !sgr.is_empty() {
+        format!("\x1b[{sgr}m{text}\x1b[0m")
+    } else {
+        text.into()
+    }
+}
+
+fn file_summary(files: &[ChangedFile], width: usize) -> String {
+    if files.is_empty() {
+        return "0".into();
+    }
+    let mut prefix = files.len().to_string();
+    let suffix = if files.len() > 1 {
+        format!(", +{} more", files.len() - 1)
+    } else {
+        String::new()
+    };
+    let path_width = width.saturating_sub(prefix.len() + 2 + suffix.len());
+    let path = one_line(&files[0].path);
+    let path_len = path.chars().count();
+    // Always show the first path, keeping its identifying tail when space is tight.
+    let path = if path_len > path_width {
+        let tail: String = path
+            .chars()
+            .skip(path_len.saturating_sub(path_width.saturating_sub(1)))
+            .collect();
+        format!("…{tail}")
+    } else {
+        path
+    };
+    let mut summary = format!("{prefix}  {path}{suffix}");
+    for (index, file) in files.iter().enumerate() {
+        let _ = write!(
+            prefix,
+            "{}{}",
+            if index == 0 { "  " } else { ", " },
+            one_line(&file.path)
+        );
+        if prefix.chars().count() > width {
+            break;
+        }
+        let remaining = files.len() - index - 1;
+        let candidate = if remaining == 0 {
+            prefix.clone()
+        } else {
+            format!("{prefix}, +{remaining} more")
+        };
+        // A final short path can fit even when the preceding '+N more' did not.
+        if candidate.chars().count() <= width {
+            summary = candidate;
+        }
+    }
+    summary
+}
+
+pub fn render_rows(tasks: &[TaskView], color: bool) -> String {
     if tasks.is_empty() {
         return "no tasks; start one with: delegate new <id>\n".into();
     }
-    let mut text = String::new();
-    for t in tasks {
-        let mut phase = t.phase.clone();
-        if let Some(outcome) = &t.outcome {
-            let _ = write!(phase, ", {outcome}");
-            if outcome == "pass" {
-                phase.push_str(if t.ready_to_merge {
-                    ", ready to merge"
-                } else if t.merge_blockers.iter().any(|b| b.contains("review")) {
-                    ", needs review"
-                } else {
-                    ", merge blocked"
-                });
-            }
+    let mut tasks: Vec<_> = tasks.iter().collect();
+    tasks.sort_by(|a, b| {
+        table_state(a)
+            .0
+            .cmp(&table_state(b).0)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let rows: Vec<_> = tasks
+        .iter()
+        .map(|t| {
+            [
+                one_line(&t.id),
+                table_state(t).1,
+                one_line(t.worker.as_deref().unwrap_or("-")),
+                duration(t.elapsed_secs),
+                duration(t.activity_age_secs),
+            ]
+        })
+        .collect();
+    let headers = ["ID", "STATE", "WORKER", "TIME", "QUIET"];
+    let mut widths = headers.map(str::len);
+    for row in &rows {
+        for (width, value) in widths.iter_mut().zip(row) {
+            *width = (*width).max(value.chars().count());
         }
-        let mut files = t
-            .changed_files
-            .iter()
-            .take(3)
-            .map(|file| format!("{} +{}−{}", file.path, file.added, file.removed))
-            .collect::<Vec<_>>()
-            .join(", ");
-        if t.changed_files.len() > 3 {
-            let _ = write!(files, ", +{} more", t.changed_files.len() - 3);
+    }
+    // Two-space indent and separators; reserve room for counts and file names.
+    let other_widths = widths[0] + widths[1] + widths[3] + widths[4];
+    widths[2] = widths[2].min(100_usize.saturating_sub(12 + other_widths + 20).max(6));
+    let files_width = 100_usize.saturating_sub(12 + widths.iter().sum::<usize>());
+    let mut text = String::from("  ");
+    for (header, width) in headers.iter().zip(widths) {
+        let _ = write!(text, "{header:<width$}  ");
+    }
+    text.push_str("FILES\n");
+    for (t, row) in tasks.iter().zip(rows) {
+        text.push_str("  ");
+        for (index, (value, width)) in row.iter().zip(widths).enumerate() {
+            let value = cut(value, width);
+            let padded = format!("{value:<width$}");
+            text.push_str(&styled(
+                &padded,
+                if index == 1 { table_state(t).2 } else { "" },
+                color,
+            ));
+            text.push_str("  ");
         }
-        if !files.is_empty() {
-            files.insert_str(0, ": ");
-        }
-        let _ = write!(
-            text,
-            "{}  {phase}  {}  {}  {} since last activity  {} changed files{files}{}",
-            t.id,
-            t.worker.as_deref().unwrap_or("-"),
-            duration(t.elapsed_secs),
-            duration(t.activity_age_secs),
-            t.changed_files.len(),
-            if t.stalled { "  stalled" } else { "" }
-        );
-        if let Some(step) = t.steps.last() {
-            let _ = write!(
-                text,
-                "  last step: {}  {}  {}",
-                step["kind"].as_str().unwrap_or(""),
-                step["target"]
-                    .as_str()
-                    .unwrap_or("")
-                    .replace(['\n', '\r'], " "),
-                step["result"]
-                    .as_str()
-                    .unwrap_or("")
-                    .replace(['\n', '\r'], " ")
-            );
-        }
-        text.push('\n');
-        if t.phase == "interrupted"
-            && let Some(next) = &t.next
-        {
-            let _ = writeln!(text, "  next: {next}");
+        let _ = writeln!(text, "{}", file_summary(&t.changed_files, files_width));
+        let hint = if t.stalled {
+            Some(format!(
+                "→ {}",
+                t.next.clone().unwrap_or_else(|| format!(
+                    "delegate status {}  ·  delegate discard {}",
+                    t.id, t.id
+                ))
+            ))
+        } else if table_state(t).0 == 1 {
+            t.next.as_ref().map(|next| format!("→ {next}"))
+        } else if table_state(t).0 == 3 {
+            t.steps.last().map(|step| {
+                let step = format!(
+                    "└ {}  {}  {}",
+                    step["kind"].as_str().unwrap_or(""),
+                    step["target"].as_str().unwrap_or(""),
+                    step["result"].as_str().unwrap_or("")
+                );
+                // Include the eight-character indent in the 100-column budget.
+                cut(&one_line(&step), 92)
+            })
+        } else {
+            None
+        };
+        if let Some(hint) = hint {
+            let _ = writeln!(text, "        {}", styled(&one_line(&hint), "2", color));
         }
     }
     text
 }
 
-pub fn render_detail(t: &TaskView) -> String {
-    let mut text = render_rows(std::slice::from_ref(t));
+pub fn render_detail(t: &TaskView, color: bool) -> String {
+    let mut text = render_rows(std::slice::from_ref(t), color);
     let _ = writeln!(
         text,
         "tier: {}\noutcome: {}\nstarted: {}\nlast activity: {}",
@@ -828,14 +950,15 @@ pub fn render_detail(t: &TaskView) -> String {
 
 pub fn run(ctx: &Ctx, id: Option<&str>, json: bool) -> Result<()> {
     let views = collect(ctx, id, Depth::Full)?;
+    let color = use_color(std::io::stdout().is_terminal());
     if json {
         println!("{}", serde_json::json!({"tasks": views}));
     } else if id.is_some() {
         if let Some(view) = views.first() {
-            print!("{}", render_detail(view));
+            print!("{}", render_detail(view, color));
         }
     } else {
-        print!("{}", render_rows(&views));
+        print!("{}", render_rows(&views, color));
     }
     Ok(())
 }
@@ -844,6 +967,226 @@ pub fn run(ctx: &Ctx, id: Option<&str>, json: bool) -> Result<()> {
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};
+
+    fn view(id: &str, phase: &str, outcome: Option<&str>) -> TaskView {
+        TaskView {
+            id: id.into(),
+            phase: phase.into(),
+            outcome: outcome.map(str::to_owned),
+            worker: Some("pi:test@high".into()),
+            tier: "standard".into(),
+            pid: None,
+            started_at: None,
+            last_activity_at: None,
+            stalled: false,
+            changed_files: vec![],
+            steps: vec![],
+            steps_available: false,
+            ready_to_merge: true,
+            merge_blockers: vec![],
+            next: Some(format!("delegate run {id}")),
+            log: "run.log".into(),
+            log_tail: String::new(),
+            elapsed_secs: 65,
+            activity_age_secs: 425,
+        }
+    }
+
+    #[test]
+    fn trouble_first_then_finished_running_and_not_started_in_id_order() {
+        let mut stalled = view("t009", "implement", None);
+        stalled.stalled = true;
+        let tasks = [
+            view("t001", "not_started", None),
+            view("t008", "implement", None),
+            view("t007", "done", Some("pass")),
+            view("t006", "interrupted", None),
+            view("t005", "done", Some("fail")),
+            view("t004", "checks", None),
+            stalled,
+            view("t002", "done", Some("failed_to_start")),
+            view("t003", "done", Some("pass")),
+        ];
+        let text = render_rows(&tasks, false);
+        let ids: Vec<_> = text
+            .lines()
+            .filter_map(|line| {
+                line.split_whitespace()
+                    .next()
+                    .filter(|word| word.starts_with('t'))
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "t009", "t002", "t005", "t006", "t003", "t007", "t004", "t008", "t001"
+            ]
+        );
+        assert!(text.contains("⚠ STALLED · implement"));
+        assert!(text.contains("✗ done · fail "));
+        assert!(text.contains("✗ done · failed_to_start"));
+        assert!(text.contains("✗ interrupted"));
+        assert!(text.contains("✓ done · pass · ready to merge"));
+        assert!(text.contains("● checks"));
+        assert!(text.contains("not started"));
+    }
+
+    #[test]
+    fn unicode_states_and_workers_keep_all_columns_aligned() {
+        let mut stalled = view("t001", "implement", None);
+        stalled.stalled = true;
+        stalled.worker = Some("pi:modèle@high".into());
+        let tasks = [
+            stalled,
+            view("t002", "done", Some("pass")),
+            view("t003", "implement", None),
+        ];
+        let text = render_rows(&tasks, false);
+        let header: Vec<_> = text.lines().next().unwrap().chars().collect();
+        for column in ["ID", "STATE", "WORKER", "TIME", "QUIET", "FILES"] {
+            let label: Vec<_> = column.chars().collect();
+            let start = header
+                .windows(label.len())
+                .position(|part| part == label)
+                .unwrap();
+            for line in text
+                .lines()
+                .filter(|line| line.trim_start().starts_with('t'))
+            {
+                let chars: Vec<_> = line.chars().collect();
+                assert_ne!(chars[start], ' ', "{column}: {line}");
+                assert_eq!(chars[start - 1], ' ', "{column}: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn long_worker_and_file_lists_fit_one_hundred_characters() {
+        let mut task = view("t001", "implement", None);
+        task.worker = Some(format!("pi:{}@high", "é".repeat(150)));
+        task.changed_files = (0..12)
+            .map(|index| ChangedFile {
+                path: format!("shop/monthly_report_by_region_{index}.py"),
+                added: 0,
+                removed: 0,
+            })
+            .collect();
+        let text = render_rows(&[task], false);
+        let row = text.lines().nth(1).unwrap();
+        assert!(row.chars().count() <= 100, "{row}");
+        assert!(row.contains('…'));
+        assert!(row.contains("12  …"));
+        assert!(row.contains(".py, +11 more"));
+        let files = vec![
+            ChangedFile {
+                path: "a.rs".into(),
+                added: 0,
+                removed: 0,
+            },
+            ChangedFile {
+                path: "b_long_name.rs".into(),
+                added: 0,
+                removed: 0,
+            },
+        ];
+        assert_eq!(file_summary(&files, 50), "2  a.rs, b_long_name.rs");
+        assert_eq!(file_summary(&files, 16), "2  a.rs, +1 more");
+        let short = vec![
+            ChangedFile {
+                path: "a".into(),
+                added: 0,
+                removed: 0,
+            },
+            ChangedFile {
+                path: "b".into(),
+                added: 0,
+                removed: 0,
+            },
+        ];
+        assert_eq!(file_summary(&short, 7), "2  a, b");
+        assert_eq!(file_summary(&[], 20), "0");
+    }
+
+    #[test]
+    fn long_first_path_keeps_its_tail_and_remaining_file_count() {
+        let mut task = view("t003", "done", Some("pass"));
+        task.changed_files = (1..=6)
+            .map(|index| ChangedFile {
+                path: format!("shop/reports/monthly_summary_by_region_{index}.py"),
+                added: 0,
+                removed: 0,
+            })
+            .collect();
+        let text = render_rows(&[task], false);
+        let row = text.lines().nth(1).unwrap();
+        assert!(row.chars().count() <= 100, "{row}");
+        assert!(row.contains("6  …"), "{row}");
+        assert!(row.ends_with("_1.py, +5 more"), "{row}");
+
+        let files = vec![ChangedFile {
+            path: "shop/régions/été.py".into(),
+            added: 0,
+            removed: 0,
+        }];
+        let summary = file_summary(&files, 14);
+        assert_eq!(summary, "1  …ons/été.py");
+        assert!(summary.chars().count() <= 14);
+        assert!(!summary.contains("more"));
+    }
+
+    #[test]
+    fn long_running_step_fits_one_hundred_characters_including_indent() {
+        let mut task = view("t001", "implement", None);
+        task.steps = vec![serde_json::json!({
+            "kind": "message",
+            "target": "shop/été.py\nnext\rline\ttarget",
+            "result": "é".repeat(300),
+        })];
+        let text = render_rows(&[task], false);
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        let step = lines[2];
+        assert!(step.starts_with("        └ message  shop/été.py next line target  "));
+        assert_eq!(step.chars().count(), 100);
+        assert!(step.ends_with('…'));
+        assert!(!step.contains('\x1b'));
+        assert!(!step.contains('\t'));
+    }
+
+    #[test]
+    fn hints_steps_detail_and_terminal_only_colour() {
+        let mut stalled = view("t001", "implement", None);
+        stalled.stalled = true;
+        stalled.next = None;
+        let failed = view("t002", "done", Some("fail"));
+        let mut running = view("t003", "implement", None);
+        running.steps = vec![
+            serde_json::json!({"kind":"edit\nfile", "target":"shop/\ncode", "result":"ok\rnow"}),
+        ];
+        let mut review = view("t004", "done", Some("pass"));
+        review.ready_to_merge = false;
+        review.merge_blockers = vec!["review required".into()];
+        let mut blocked = view("t005", "done", Some("pass"));
+        blocked.ready_to_merge = false;
+        let tasks = [stalled, failed, running, review, blocked];
+        let plain = render_rows(&tasks, false);
+        assert!(plain.contains("→ delegate status t001  ·  delegate discard t001"));
+        assert!(plain.contains("→ delegate run t002"));
+        assert!(plain.contains("└ edit file  shop/ code  ok now"));
+        assert!(plain.contains("✓ done · pass · needs review"));
+        assert!(plain.contains("✓ done · pass · merge blocked"));
+        assert!(!plain.contains('\x1b'));
+        assert!(!render_detail(&tasks[0], false).contains('\x1b'));
+        assert!(!use_color(false));
+        assert_eq!(use_color(true), std::env::var_os("NO_COLOR").is_none());
+        let colored = render_rows(&tasks, true);
+        for sgr in ["1;33", "31", "32", "36", "2"] {
+            assert!(colored.contains(&format!("\x1b[{sgr}m")));
+        }
+        let detail = render_detail(&tasks[0], false);
+        assert!(detail.starts_with(&render_rows(&tasks[..1], false)));
+        assert!(detail.contains("tier: standard\noutcome: -\nstarted: -\nlast activity: -"));
+    }
 
     #[test]
     fn log_and_task_metadata_are_not_activity() -> Result<()> {
