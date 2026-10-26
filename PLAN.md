@@ -25,7 +25,7 @@ copy's task before deleting it.
 | t021 | Project id, vault (created when needed, locked), `delegate setup [--vault]`, `where`, `hidden add`, sandbox hides the data folder, `init` stops writing `workers.toml`, `evals/run` finds hidden via `where` | done | – | standard | `evals/run S001 S002 S048 S049` + upgrade set | `setup.rs`, `vault.rs`, `init.rs`, `harness.rs` |
 | t022 | Task state in `checkouts/<id>-<name>/`: checkout id in the git common dir, moves repaired, copies told apart, stale folders cleaned; `/delegate` skill and docs | done | t021 | standard | `evals/run S043 S045`; P015 hidden | `task.rs`, `commands.rs`, skill + mirror |
 | t023 | Migrate old `<repo>.delegate/` on first use, safe to rerun after any interruption | ready | t022 | standard | `evals/run S044` | unit tests interrupt each step |
-| t024 | Vault sync: commit and push at every command, pull before hidden runs, offline copy, unpushed hints, conflicts kept apart, not-set-up messages; `/evaluate` uses `hidden add` | ready | t023 | standard | `evals/run S046 S047` + `fast`; P016 hidden | skill + mirror |
+| t024 | Vault sync: commit and push at every command, pull before hidden runs, offline copy, unpushed hints, conflicts kept apart, not-set-up messages; `/evaluate` uses `hidden add` | ready | t023, t031 (its `fast` gate runs S055–S058) | standard | `evals/run S046 S047` + `fast`; P016 hidden | skill + mirror |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | t021 | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Goal: each session sees its own tasks
@@ -35,8 +35,8 @@ S055, S056, S058 and hidden P018 fail (no owner or title recorded); S029 passes.
 
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t030 | Record the owning session at `new` (unowned tasks claimed by their first run); `status --json` gains `title`, `goal`, `session`, `session_name` | todo | – | standard | `evals/run S056 S058` | `task.rs`, `status.rs`, `commands.rs` |
-| t031 | Status line by session: own tasks, then dimmed per-group counts | todo | t030 | standard | `evals/run S055 S029`; P018 hidden | `statusline.rs` |
+| t030 | Record the owning session at `new` (unowned tasks claimed by their first run); `status --json` gains `title`, `goal`, `session`, `session_name` | todo | – | standard | `evals/run S056` + S058's ownership steps | `task.rs`, `status.rs`, `commands.rs` |
+| t031 | Status line by session: own tasks, then dimmed per-group counts | todo | t030 | standard | `evals/run S055 S058 S029`; P018 hidden | `statusline.rs` |
 | t032 | Pane: session dividers, `◆`/`○`, title and Goal line; summary row counts this session | todo | t030 | standard | S057, S030 (human) | `.claude/skills/delegate-pane/` + mirror |
 
 ## Known, not fixed
