@@ -117,9 +117,10 @@ history. Anything worth keeping goes into a decision record or `AGENTS.md` befor
 
 ## Where task files live
 Specs, reports, checks, reviews, logs and worktrees live **outside the repo** in
-`../<repo>.delegate/<id>/` (override with `DELEGATE_HOME`), and are deleted on merge or
-discard. Inside its worktree a worker sees only `.task/` (its spec and templates), which git
-ignores via `.git/info/exclude`.
+`<main checkout>.delegate/<id>/` beside the main checkout, even when the lead runs from a
+worktree (override with `DELEGATE_HOME`), and are deleted on merge or discard. Inside its
+worktree a worker sees only `.task/` (its spec and templates), which git ignores via
+`.git/info/exclude`.
 
 ## Sandbox
 All harnesses except Codex (which has its own sandbox) run in bwrap. The filesystem is
