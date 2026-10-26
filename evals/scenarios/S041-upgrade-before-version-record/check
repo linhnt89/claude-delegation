@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # A project set up by the first kit, before upgrades existed, with one skill edited.
+# The record keeps the edited skill's old hash (decision 005), so it isn't compared with a
+# fresh init's here; P014 compares records of untouched projects.
 . "$EVALS_LIB/common.sh"
 first="$(python3 "$EVALS_LIB/kits.py" commits | head -1)"
 old_kit_project "$first"
@@ -16,7 +18,7 @@ printf '\n$ delegate upgrade  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/trans
 [ "$(sha256sum .claude/skills/delegate/SKILL.md)" = "$ours" ] || fail "upgrade overwrote the edited delegate skill"
 echo "$OUT" | grep -qF ".claude/skills/delegate/SKILL.md" || fail "upgrade didn't name the edited delegate skill"
 while read -r m h p; do
-  case "$p" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md|.claude/settings.json|.claude/skills/delegate/SKILL.md) continue ;; esac
+  case "$p" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md|.claude/settings.json|.claude/skills/delegate/SKILL.md|.delegate-kit.toml) continue ;; esac
   same_kit_file "$m" "$h" "$PROJ/$p" ||
     fail "after upgrade $p isn't what the current kit installs (untouched kit files should be updated, the record written)"
 done < <(kit_files "$EVALS_WORK/now")

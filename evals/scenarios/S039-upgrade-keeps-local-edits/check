@@ -33,15 +33,16 @@ echo "$OUT" | grep -F ".claude/skills/evaluate/SKILL.md" | grep -qiE "missing|de
   fail "upgrade's output doesn't say the evaluate skill is missing"
 echo "$OUT" | grep -qE "(git )?diff" || fail "upgrade's output doesn't say how to see the difference"
 
-# Take the new version of the one edited skill, the way the output says.
+# Take the new version of the one edited skill, the way the output says. The kit record may
+# change with it (decision 005); every other file must not.
 take="$(echo "$OUT" | grep -oE "delegate upgrade [^\`'\"]*\.claude/skills/delegate/SKILL\.md" | head -1)"
 [ -n "$take" ] || fail "upgrade's output gives no 'delegate upgrade ... .claude/skills/delegate/SKILL.md' command to take the new version"
-before="$(kit_files "$PROJ" | grep -v ' .claude/skills/delegate/SKILL.md$')"
+before="$(kit_files "$PROJ" | grep -vE ' (\.claude/skills/delegate/SKILL\.md|\.delegate-kit\.toml)$')"
 # shellcheck disable=SC2086
 DELEGATE="$newer" d ${take#delegate }
 [ "$RC" -eq 0 ] || fail "'$take' failed: $OUT"
 cmp -s .claude/skills/delegate/SKILL.md "$EVALS_WORK/kit2/.claude/skills/delegate/SKILL.md" ||
   fail "'$take' didn't put the new version in place"
-after="$(kit_files "$PROJ" | grep -v ' .claude/skills/delegate/SKILL.md$')"
+after="$(kit_files "$PROJ" | grep -vE ' (\.claude/skills/delegate/SKILL\.md|\.delegate-kit\.toml)$')"
 [ "$before" = "$after" ] || fail "'$take' changed other files: $(diff <(echo "$before") <(echo "$after") | grep '^>' | head -2)"
 pass "upgrade kept every edited or deleted kit file, named each, and took one new version on request"
