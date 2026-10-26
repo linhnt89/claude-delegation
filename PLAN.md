@@ -35,9 +35,9 @@ S055, S056, S058 and hidden P018 fail (no owner or title recorded); S029 passes.
 
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t026 | Record the owning session at `new` (unowned tasks claimed by their first run); `status --json` gains `title`, `goal`, `session`, `session_name` | todo | – | standard | `evals/run S056 S058` | `task.rs`, `status.rs`, `commands.rs` |
-| t027 | Status line by session: own tasks, then dimmed per-group counts | todo | t026 | standard | `evals/run S055 S029`; P018 hidden | `statusline.rs` |
-| t028 | Pane: session dividers, `◆`/`○`, title and Goal line; summary row counts this session | todo | t026 | standard | S057, S030 (human) | `.claude/skills/delegate-pane/` + mirror |
+| t030 | Record the owning session at `new` (unowned tasks claimed by their first run); `status --json` gains `title`, `goal`, `session`, `session_name` | todo | – | standard | `evals/run S056 S058` | `task.rs`, `status.rs`, `commands.rs` |
+| t031 | Status line by session: own tasks, then dimmed per-group counts | todo | t030 | standard | `evals/run S055 S029`; P018 hidden | `statusline.rs` |
+| t032 | Pane: session dividers, `◆`/`○`, title and Goal line; summary row counts this session | todo | t030 | standard | S057, S030 (human) | `.claude/skills/delegate-pane/` + mirror |
 
 ## Known, not fixed
 - Task ids are per repo, not per worktree: two worktree leads can take the same id, and
@@ -48,4 +48,4 @@ S055, S056, S058 and hidden P018 fail (no owner or title recorded); S029 passes.
 
 ## Open questions
 - How the pane learns a session's title: the mod gets it only at `SessionStart` and the app
-  renames sessions later. Blocks nothing (folder or branch is the fallback); settle in t028.
+  renames sessions later. Blocks nothing (folder or branch is the fallback); settle in t032.
