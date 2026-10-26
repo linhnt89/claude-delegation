@@ -41,17 +41,27 @@ Environment/Context isn't possible: the mod API has no such slot). Criteria in S
 | t017 | `watch`/`status`: aligned table, attention order, colour in a terminal | done | – | standard | `evals/run S035 S024 S025 P009` | `status.rs`, `watch.rs` |
 | t018 | Summary row above the prompt (`AbovePrompt` band) that opens the pane | done | – | standard | `claude plugin test`, mirror identical; S030 by hand | replaces the side-card wish |
 | t019 | Summary row: counts in the pane's colours, `[ Open tasks ]` button, keyboard hint on the terminal's normal screen, row shows while the pane waits undrawn | done | t018 | standard | same | 2 rounds |
+| t019 | Stalled hint offers commands that work: `delegate status <id>  ·  kill <pid>` in status, watch, `--json` `next` (pane) and `wait` | done | – | standard | `evals/run S036 S035 S025 S032 S033 S034` | `status.rs`, `wait.rs` |
+
+t018 and t019 were each used by two worktree sessions at once (ids are per repo, see below);
+git history tells them apart by commit title. The worktree-state t018 is in the next merge.
 
 S030 verdict (2026-10-26, by hand on a demo run with a real stall, light and dark): full pass.
 The pane opened by itself, reopened when a new task started after a manual close, and closed
 once every task was gone. Still wanted: a card beside the desktop app's Environment/Context
 cards, once Claude Code offers mods such a slot. Seen on the way, not fixed:
-- The stalled hint says `delegate discard <id>`, but discard refuses a running task
-  ("stop it with: kill <pid>").
+- The stalled hint said `delegate discard <id>`, which refuses a running task: fixed by t019
+  (the hint is now `kill <pid>`, then the interrupted task's run-or-discard hint).
 - Led from a git worktree, task state lands in `<worktree>.delegate/` beside the other
   worktrees (the desktop app blocks the lead's edits there), while `evals/run` results go to
   the main repo's `.delegate/`, which the worker sandbox mounts read-only, so evals in a
-  spec's Acceptance fail unless they set `EVALS_RESULTS`.
+  spec's Acceptance fail unless they set `EVALS_RESULTS`. Moving task state with
+  `DELEGATE_HOME` under `/tmp` doesn't help: the evals' own sandboxed runs mount an empty
+  `/tmp`, hiding the checkout's stand-in workers, so every run-based scenario fails setup
+  (t019 used `~/.cache/...` instead, with `DELEGATE_SANDBOX=0 delegate check`).
+- Task ids are per repo, not per worktree: a lead in another worktree had taken `t018`, and
+  `run --background` said "running" while the runner had already died on the existing
+  `task/t018` branch (`delegate wait` then timed out on a `not_started` task).
 
 A card beside the desktop app's Environment/Context cards (checked 2026-10-26, Claude Code
 2.1.308): not possible with supported means. In the mod API types (`claude-code.d.ts`), the

@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# A worker stalls; the commands printed under it, run as printed, clear the task away.
+. "$EVALS_LIB/common.sh"
+setup_project
+install_stub claude
+trap 'flag end; kill_runs' EXIT
+export DELEGATE_STALL_SECS=3
+stub_worker claude-quiet <<'B'
+work() {
+  printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
+  wait_flag end
+}
+B
+write_spec t001 "Split a bill" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
+bg_run t001 --no-ask --worker claude:claude-quiet@high
+[ "$RC" -eq 0 ] || fail "run --background failed: $OUT"
+wait_changed 30 t001 pricing.py || fail "setup: the worker's edit never showed"
+wait_field 15 t001 stalled true || fail "setup: the task was never flagged as stalled"
+pid="$(sj 's["tasks"][0]["pid"]' t001)"
+[ -n "$pid" ] || fail "setup: status --json gives no pid for the running task"
+want="delegate status t001  ·  kill $pid"
+
+d status
+echo "$OUT" | grep -qF "→ $want" || fail "under the stalled task, 'delegate status' should say '→ $want'; it says: $OUT"
+d status t001
+hint="$(echo "$OUT" | grep '→' | head -1 | sed 's/^[[:space:]]*→ //')"
+[ "$hint" = "$want" ] || fail "under the stalled task, 'delegate status t001' should say '→ $want'; it says: $OUT"
+next="$(sj 's["tasks"][0]["next"]' t001)"
+[ "$next" = "$want" ] || fail "status --json should give '$want' as the stalled task's next (the pane shows it); it gives '$next'"
+d wait t001 --timeout 10
+echo "$OUT" | grep -qF "$want" || fail "'delegate wait' reports the stall without the commands '$want': $OUT"
+
+# Run each command on the line, as printed.
+IFS=$'\n' read -r -d '' -a cmds < <(printf '%s' "$hint" | sed 's/  ·  /\n/g'; printf '\0')
+for c in "${cmds[@]}"; do
+  out="$(cd "$PROJ" && eval "$c" 2>&1)" || fail "the hint's command '$c' failed: $out"
+done
+
+wait_field 10 t001 phase interrupted || fail "after '$want', the task didn't show as interrupted within 10s (phase: $(sj 's["tasks"][0]["phase"]' t001))"
+d status t001
+echo "$OUT" | grep -qF "→ delegate run t001 or delegate discard t001" || fail "the interrupted task doesn't offer '→ delegate run t001 or delegate discard t001': $OUT"
+d discard t001
+[ "$RC" -eq 0 ] || fail "'delegate discard t001' was refused after the kill: $OUT"
+d list
+echo "$OUT" | grep -q t001 && fail "'delegate list' still shows t001 after discard: $OUT"
+pass "the stalled task's commands worked as printed: kill stopped it, it showed interrupted, discard removed it from the list"
