@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # Judged by a human: the side pane in the Claude Code desktop app.
 cat <<'T'
-In a project set up with `delegate init`, start two runs with `delegate run --background`
-(one with a worker that streams steps, one that goes quiet past the stall threshold), then
-open the delegate pane in the Claude Code desktop app and watch it for a minute.
+In a project set up with `delegate init`, open the Claude Code desktop app, then start two
+runs with `delegate run --background`: one with a worker that streams steps, one that goes
+quiet past the stall threshold (no file change for 5 minutes by default; `DELEGATE_STALL_SECS`
+in the environment Claude Code was started from lowers it).
+Don't open the pane yourself. Watch it for a minute in light mode, then in dark mode.
 Look for:
-- each task with phase, worker, elapsed time and files changed; latest steps of running tasks
-- it updates by itself; the stalled task stands out
+- it opens by itself when a task starts
+- each task is a card that starts with its status in words, then id and worker, then times
+  and files changed; a running task shows up to 3 latest steps
+- the stalled task has a warning-coloured bar on its left, "STALLED" with how long it has
+  been quiet, and what to do next; an interrupted one an error-coloured bar
+- tasks that need you come first: stalled/interrupted/failed, ready to merge, running, not started
+- it updates by itself
+- easy to read in light and dark mode: colours stand out, dim text still readable
+- once every task is merged or discarded it closes by itself
 - no tasks: it says so instead of looking broken
-- right in light and dark mode
 Pass if all hold.
 T
 exit 2

@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Four tasks, one stalled: watch and status show an aligned table with trouble on top.
+. "$EVALS_LIB/common.sh"
+setup_project
+install_stub claude
+[ -f "$EVALS_LIB/streams/claude.steps" ] || fail "no recorded claude stream yet (evals/lib/streams/README.md)"
+simple_workers standard gpt-many gpt-many gpt-many
+export DELEGATE_STALL_SECS=6
+wpid=""
+trap 'flag end; kill $wpid 2>/dev/null; kill_runs' EXIT
+d status
+echo "$OUT" | grep -q "delegate new" || fail "status with no tasks doesn't say how to start one: '$OUT'"
+
+stub_worker gpt-many <<'B'
+work() { mkdir -p shop/reports; for n in 1 2 3 4 5 6; do printf 'x = %s\n' "$n" >"shop/reports/monthly_summary_by_region_$n.py"; done; }
+B
+stub_worker claude-busy <<'B'
+work() { replay claude 0.05; until [ -f "$EVALS_WORK/flags/end" ]; do date +%s%N >shop/busy.txt; sleep 1; done; }
+B
+stub_worker gpt-quiet <<'B'
+work() { printf '\n# quiet\n' >>shop/__init__.py; wait_flag end; }
+B
+stub_worker gpt-dies <<'B'
+work() { printf '\n# about to die\n' >>README.md; sleep 120; }
+B
+write_spec t001 "Busy" "Keeps working." "true"
+write_spec t002 "Quiet" "Goes quiet." "true"
+write_spec t003 "Many files" "Adds reports." "test -f shop/reports/monthly_summary_by_region_6.py"
+write_spec t004 "Dies" "Gets killed." "true"
+bg_run t003 --worker pi:gpt-many@high
+wait_field 60 t003 phase done || fail "setup: t003 never finished"
+bg_run t001 --no-ask --worker claude:claude-busy@high
+bg_run t002 --worker pi:gpt-quiet@high
+bg_run t004 --worker pi:gpt-dies@high
+wait_field 30 t004 phase implement || fail "setup: t004 never started"
+p4="$(sj 's["tasks"][0]["pid"]' t004)"; kill -KILL -- -"$p4" 2>/dev/null; kill -KILL "$p4" 2>/dev/null
+pkill -KILL -f "model gpt-dies" 2>/dev/null
+wait_changed 30 t001 busy.txt || fail "setup: t001 never started working"
+wait_field 30 t002 stalled true || fail "setup: t002 never stalled"
+[ "$(sj 's["tasks"][0]["stalled"]' t001)" = false ] || fail "setup: the busy task t001 counts as stalled"
+last="$(tail -1 "$EVALS_LIB/streams/claude.steps" | cut -f3)"
+
+(cd "$PROJ" && exec env --default-signal=INT "$DELEGATE" watch >"$EVALS_WORK/watch.out" 2>&1) & wpid=$!
+sleep 3; kill -INT "$wpid"; wait "$wpid"
+frame="$(awk '/^delegate watch/{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' "$EVALS_WORK/watch.out")"
+grep -q $'\e' "$EVALS_WORK/watch.out" && fail "piped watch output has terminal codes in it"
+
+for view in watch status; do
+  if [ "$view" = status ]; then d status; text="$OUT"; else text="$frame"; fi
+  header="$(echo "$text" | grep -E '^ *ID +STATE +WORKER +TIME +QUIET +FILES' | head -1)"
+  [ -n "$header" ] || fail "$view: no header row 'ID STATE WORKER TIME QUIET FILES': $text"
+  ids="$(echo "$text" | grep -oE '^ *t00[0-9] ' | tr -d ' ' | tr '\n' ' ')"
+  [ "$ids" = "t002 t004 t003 t001 " ] || fail "$view: tasks in order '$ids', expected stalled t002, interrupted t004, ready t003, running t001"
+  row() { echo "$text" | grep -E "^ *$1 "; }
+  under() { echo "$text" | awk -v id="$1" '$1==id{getline; print; exit}'; }
+  bad="$(printf '%s' "$text" | python3 -c '
+import re, sys
+lines = sys.stdin.read().splitlines()
+head = next(l for l in lines if re.match(r" *ID +STATE", l))
+for col in ["STATE", "WORKER", "TIME", "QUIET", "FILES"]:
+    p = head.index(col)
+    for l in lines:
+        if re.match(r" *t00[0-9] ", l) and not (len(l) > p and l[p] != " " and l[p - 1] == " "):
+            print(f"column {col} starts at {p + 1} in the header but not on: {l}"); sys.exit()
+')"
+  [ -z "$bad" ] || fail "$view: $bad"
+  row t002 | grep -q STALLED || fail "$view: the stalled task's line doesn't say STALLED: $(row t002)"
+  under t002 | grep -q '^ *→.*delegate' || fail "$view: no '→ delegate …' line under stalled t002: $(under t002)"
+  under t004 | grep -Eq '^ *→.*(run|discard) t004' || fail "$view: no '→' line under interrupted t004 saying run or discard: $(under t004)"
+  under t001 | grep -qF "$last" || fail "$view: the line under running t001 isn't its latest step ('$last'): $(under t001)"
+  row t003 | grep -qi merge || fail "$view: t003 isn't shown ready to merge: $(row t003)"
+  row t003 | grep -Eq '\+[0-9]+ more' || fail "$view: t003's six files aren't cut with '+N more': $(row t003)"
+  for id in t001 t002 t003 t004; do
+    w="$(row $id | wc -L)"; [ "$w" -le 100 ] || fail "$view: $id's line is $w columns wide, more than 100: $(row $id)"
+  done
+done
+
+command -v script >/dev/null || fail "setup: 'script' isn't installed, so watch can't be seen in a terminal"
+(cd "$PROJ" && exec env --default-signal=INT COLUMNS=100 script -qfc "env --default-signal=INT $DELEGATE watch" "$EVALS_WORK/tty.out" >/dev/null 2>&1 </dev/null) & tpid=$!
+sleep 3; pkill -INT -f "$DELEGATE watch" 2>/dev/null; wait "$tpid" 2>/dev/null
+python3 - "$EVALS_WORK/tty.out" <<'P' || fail "in a terminal the stalled task's line isn't coloured: $(grep -a t002 "$EVALS_WORK/tty.out" | tail -1 | cat -v)"
+import re, sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+rows = [l for l in re.split(r"[\r\n]", text) if re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", l).lstrip().startswith("t002 ")]
+sys.exit(0 if rows and re.search(r"\x1b\[[0-9;]*[1-9][0-9;]*m", rows[-1]) else 1)
+P
+pass "watch and status showed an aligned table with stalled and interrupted tasks first and what to do, the running task's latest step, cut file lists, and colour only in a terminal"
