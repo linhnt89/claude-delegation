@@ -25,5 +25,10 @@ Order: t008 + t009 → t010 + t011 → t012 + t014 → t013. t010, t011 and most
 | t014 | `delegate wait [<id>...] [--timeout]`: returns on finish, interrupt or stall; skill tells Claude to run it in the background after `run --background` | done | t010 | fast | `evals/run S032 S033 S034` | `docs/decisions/003-claude-waits-on-runs.md`; new `wait.rs` |
 | t013 | Side pane mod in Claude Code, installed by `init` | done | t012 | standard | `evals/run S030` (by hand) | blocked on the open question below |
 
+S030 verdict (2026-10-26, by hand while t015 ran): tasks with phase, worker, times and files,
+running steps, self-update and the no-tasks state are fine. Not yet seen: a stalled task
+standing out, and light/dark mode. The user finds the pane and `delegate watch` hard to read;
+improving their layout is a later task.
+
 ## Open questions
 - None.
