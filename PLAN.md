@@ -22,7 +22,7 @@ copy's task before deleting it.
 
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t021 | Project id, vault (created when needed, locked), `delegate setup [--vault]`, `where`, `hidden add`, sandbox hides the data folder, `init` stops writing `workers.toml`, `evals/run` finds hidden via `where` | ready | – | standard | `evals/run S001 S002 S048 S049` + upgrade set | `setup.rs`, `vault.rs`, `init.rs`, `harness.rs` |
+| t021 | Project id, vault (created when needed, locked), `delegate setup [--vault]`, `where`, `hidden add`, sandbox hides the data folder, `init` stops writing `workers.toml`, `evals/run` finds hidden via `where` | done | – | standard | `evals/run S001 S002 S048 S049` + upgrade set | `setup.rs`, `vault.rs`, `init.rs`, `harness.rs` |
 | t022 | Task state in `checkouts/<id>-<name>/`: checkout id in the git common dir, moves repaired, copies told apart, stale folders cleaned; `/delegate` skill and docs | ready | t021 | standard | `evals/run S043 S045`; P015 hidden | `task.rs`, `commands.rs`, skill + mirror |
 | t023 | Migrate old `<repo>.delegate/` on first use, safe to rerun after any interruption | ready | t022 | standard | `evals/run S044` | unit tests interrupt each step |
 | t024 | Vault sync: commit and push at every command, pull before hidden runs, offline copy, unpushed hints, conflicts kept apart, not-set-up messages; `/evaluate` uses `hidden add` | ready | t023 | standard | `evals/run S046 S047` + `fast`; P016 hidden | skill + mirror |
