@@ -102,6 +102,56 @@ function clip(text: string, columns: number): string {
   return `${result}…`
 }
 
+type SummaryPart = { text: string; color?: ThemeKey }
+
+function summary(tasks: Task[]): SummaryPart[] {
+  const groups = [
+    { text: 'stalled', icon: '⚠', color: 'warning' },
+    { text: 'interrupted', icon: '✗', color: 'error' },
+    { text: 'failed', icon: '✗', color: 'error' },
+    { text: 'ready to merge', icon: '✓', color: 'success' },
+    { text: 'passed', icon: '✓', color: 'success' },
+    { text: 'running', icon: '●', color: 'suggestion' },
+    { text: 'not started', icon: '', color: 'inactive' },
+  ] as const
+  const counts = groups.map(() => 0)
+  for (const t of tasks) {
+    const index = t.stalled ? 0 : t.phase === 'interrupted' ? 1
+      : failed(t) ? 2 : t.phase === 'done' && t.outcome === 'pass' ? (t.ready_to_merge ? 3 : 4)
+      : LIVE.has(t.phase) ? 5 : t.phase === 'not_started' ? 6 : -1
+    if (index >= 0) counts[index] += 1
+  }
+  const parts: SummaryPart[] = [{ text: 'delegate  ' }]
+  groups.forEach((g, i) => {
+    if (!counts[i]) return
+    if (parts.length > 1) parts.push({ text: ' · ' })
+    parts.push({ text: `${g.icon ? `${g.icon} ` : ''}${counts[i]} ${g.text}`, color: g.color })
+  })
+  return parts
+}
+
+function clipSummary(parts: SummaryPart[], columns: number): SummaryPart[] {
+  if (columns <= 0) return []
+  const width = (text: string) => Array.from(graphemes.segment(text), p => cellWidth(p.segment)).reduce((a, b) => a + b, 0)
+  const total = parts.reduce((n, p) => n + width(p.text), 0)
+  const tail = ' · Open tasks ›'
+  if (total + width(tail) <= columns) return [...parts, { text: tail }]
+  if (total <= columns) return parts
+  let remaining = Math.max(0, columns - 1)
+  const clipped: SummaryPart[] = []
+  for (const p of parts) {
+    let text = ''
+    for (const { segment } of graphemes.segment(p.text)) {
+      const cells = cellWidth(segment)
+      if (cells > remaining) return [...clipped, { ...p, text: `${text}…` }]
+      text += segment
+      remaining -= cells
+    }
+    clipped.push({ ...p, text })
+  }
+  return columns > 0 ? clipped : []
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const ran = await next(e)
@@ -118,11 +168,42 @@ export const register: Register = on => {
     return { text: 'Delegate tasks pane opened.' }
   })
 
+  // The pane registry isn't an atom: redraw the band after any open or close.
+  on('ui.open', { id: PANE }, async ($, e, next) => {
+    const result = await next(e)
+    $.ui.invalidate('ui.render')
+    return result
+  })
+
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    const result = await next(e)
+    $.ui.invalidate('ui.render')
+    return result
+  })
+
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const closed = await next(e)
     if (e.origin.kind === 'person')
       await update($, pane, state => ({ ...state, autoOpened: false }))
     return closed
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const v = await read($, view)
+    await read($, pane)
+    if (e.props.hasSurvey || (await $.ui.panes()).some(p => p.id === PANE)
+      || (!v.error && !v.tasks.some(t => t.phase !== 'not_started')))
+      return next(e)
+    const { Button, Text } = $.ui.resolve(e)
+    const parts = clipSummary(v.error ? [{ text: 'delegate: status unavailable' }] : summary(v.tasks), e.props.bodyColumns)
+    return (
+      <Button key="delegate-summary" label={parts.length ? undefined : 'Delegate tasks'} plain onPress={async () => {
+        await $.ui.open({ id: PANE, title: 'Delegate tasks' })
+        await update($, pane, state => ({ ...state, autoOpened: false }))
+      }}>
+        {parts.length ? parts.map(p => <Text color={p.color} dimColor={!p.color}>{p.text}</Text>) : <Text>{''}</Text>}
+      </Button>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
