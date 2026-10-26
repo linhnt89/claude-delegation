@@ -39,6 +39,8 @@ Environment/Context isn't possible: the mod API has no such slot). Criteria in S
 |----|------|--------|------------|------|------------|-------|
 | t016 | Pane: status-first cards, attention order, opens/closes by itself | done | – | standard | `claude plugin test`, mirror identical; S030 by hand | `.claude/skills/delegate-pane/` + template |
 | t017 | `watch`/`status`: aligned table, attention order, colour in a terminal | done | – | standard | `evals/run S035 S024 S025 P009` | `status.rs`, `watch.rs` |
+| t018 | Summary row above the prompt (`AbovePrompt` band) that opens the pane | done | – | standard | `claude plugin test`, mirror identical; S030 by hand | replaces the side-card wish |
+| t019 | Summary row: counts in the pane's colours, `[ Open tasks ]` button, keyboard hint on the terminal's normal screen, row shows while the pane waits undrawn | done | t018 | standard | same | 2 rounds |
 
 S030 verdict (2026-10-26, by hand on a demo run with a real stall, light and dark): full pass.
 The pane opened by itself, reopened when a new task started after a manual close, and closed
@@ -60,6 +62,12 @@ as `placement: 'dock' | 'inline'` (~10879). The `desktop` element table (~3951) 
 MCP app widgets render inline in the chat, and the app's settings have nothing for it. Closest
 supported: the docked pane we have, made narrow with `$.ui.open({ columns })` (~7647), plus the
 status line. Revisit when the mod API adds a side-card component.
+
+Instead (2026-10-26): a summary row above the prompt, shown while the pane is closed. The user
+picked coloured counts plus an `Open tasks` button over a whole-row click (a Button draws its
+own label style, so counts inside it lose their colours), and, on the terminal's normal screen
+where clicks don't reach it, the hint `/delegate-pane or ctrl+x tab, Enter to open`.
+S030 verdict on the row (2026-10-26, by hand in the desktop app and the terminal): pass.
 
 ## Open questions
 - None.

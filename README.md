@@ -36,7 +36,8 @@ delegate init
 `init` adds the project files (templates are built into the binary) and creates
 `~/.config/delegate/workers.toml` if missing; it never overwrites. It also sets up Claude
 Code's status line (unless you have your own) and the `/delegate-pane` side pane, which show
-running tasks live. Then fill in `AGENTS.md`
+running tasks live; while the pane is closed, a row above the prompt sums the tasks up and
+opens it. Then fill in `AGENTS.md`
 (commands first) and any `.delegate.toml` rules.
 
 Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
