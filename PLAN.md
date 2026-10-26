@@ -40,5 +40,16 @@ Environment/Context isn't possible: the mod API has no such slot). Criteria in S
 | t016 | Pane: status-first cards, attention order, opens/closes by itself | done | – | standard | `claude plugin test`, mirror identical; S030 by hand | `.claude/skills/delegate-pane/` + template |
 | t017 | `watch`/`status`: aligned table, attention order, colour in a terminal | done | – | standard | `evals/run S035 S024 S025 P009` | `status.rs`, `watch.rs` |
 
+S030 verdict (2026-10-26, by hand on a demo run with a real stall, light and dark): full pass.
+The pane opened by itself, reopened when a new task started after a manual close, and closed
+once every task was gone. Still wanted: a card beside the desktop app's Environment/Context
+cards, once Claude Code offers mods such a slot. Seen on the way, not fixed:
+- The stalled hint says `delegate discard <id>`, but discard refuses a running task
+  ("stop it with: kill <pid>").
+- Led from a git worktree, task state lands in `<worktree>.delegate/` beside the other
+  worktrees (the desktop app blocks the lead's edits there), while `evals/run` results go to
+  the main repo's `.delegate/`, which the worker sandbox mounts read-only, so evals in a
+  spec's Acceptance fail unless they set `EVALS_RESULTS`.
+
 ## Open questions
 - None.
