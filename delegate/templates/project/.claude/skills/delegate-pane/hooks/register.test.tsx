@@ -30,7 +30,8 @@ const BAND = {
 const now = new Date().toISOString()
 function task(id: string, overrides: Partial<Task> = {}): Task {
   return {
-    id, phase: 'implement', outcome: null, worker: 'pi:gpt-x@high', started_at: now,
+    id, title: `Task ${id}`, goal: '', session: 'session-a', session_name: 'my-project',
+    phase: 'implement', outcome: null, worker: 'pi:gpt-x@high', started_at: now,
     last_activity_at: now, stalled: false, changed_files: [], steps: [],
     ready_to_merge: false, merge_blockers: [], next: null, ...overrides,
   }
@@ -47,7 +48,7 @@ const STATUS = {
   ],
 }
 
-function engine(on: any, stdout: string, exitCode = 0) {
+function engine(on: any, stdout: string, exitCode = 0, sessionId: string | null = 'session-a') {
   let open = false
   let isPlaced = true
   const opened: string[] = []
@@ -68,6 +69,10 @@ function engine(on: any, stdout: string, exitCode = 0) {
     open = false
     closed.push(e.origin.kind)
     return { value: undefined }
+  })
+  on('session.id', () => {
+    if (sessionId === null) throw new Error('session id unavailable')
+    return { value: sessionId }
   })
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('process.run', () => ({ value: { exitCode, stdout, stderr: exitCode ? 'error: not inside a git repository' : '' } }))
@@ -101,8 +106,8 @@ function command() {
   }
 }
 
-function summaryEngine($: any, on: any, stdout: string) {
-  const e = engine(on, stdout)
+function summaryEngine($: any, on: any, stdout: string, sessionId: string | null = 'session-a') {
+  const e = engine(on, stdout, 0, sessionId)
   const closeHooks: any[] = []
   register(((event: string, ...args: any[]) => {
     if (event === 'ui.close') closeHooks.push(args[args.length - 1])
@@ -244,6 +249,156 @@ test('only the latest three running steps are shown, clipped inside bodyColumns'
   }
 })
 
+test('session dividers put mine first, other sessions by name, and by hand last; cards retain priority and colours', async ($, on) => {
+  mock.clock(on)
+  engine(on, JSON.stringify({ tasks: [
+    task('t001', { session: null, session_name: 'by hand', phase: 'interrupted' }),
+    task('t002', { session: 'z', session_name: 'zebra', stalled: true }),
+    task('t003', { session: 'b', session_name: 'alpha', phase: 'done', outcome: 'fail' }),
+    task('t004', { session: 'b', session_name: 'alpha', phase: 'done', outcome: 'pass', ready_to_merge: true }),
+    task('t005'),
+    task('t006', { phase: 'not_started' }),
+    task('t007', { stalled: true }),
+    task('t008', { session: 'c', session_name: 'alpha' }),
+    task('t009', { session: 'b', session_name: 'alpha' }),
+  ] }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const dividers = (await ui.findAll({ type: 'Text' })).filter(t => /^[◆○] ──/.test(t.text))
+    expect(dividers.map(d => d.text)).toEqual([
+      `◆ ── This session · my-project ${'─'.repeat(29)}`,
+      `○ ── alpha ${'─'.repeat(49)}`, `○ ── alpha ${'─'.repeat(49)}`,
+      `○ ── zebra ${'─'.repeat(49)}`, `○ ── by hand ${'─'.repeat(47)}`,
+    ])
+    expect(dividers[0]).toMatchObject({ props: { bold: true, dimColor: false } })
+    for (const d of dividers.slice(1)) expect(d).toMatchObject({ props: { bold: false, dimColor: true } })
+    const boxes = await ui.findAll({ type: 'Box' })
+    expect(boxes.filter(b => b.key?.startsWith('session:')).map(b => b.key))
+      .toEqual(['session:session-a', 'session:b', 'session:c', 'session:z', 'session:unowned'])
+    expect(boxes.filter(b => b.key?.startsWith('t')).map(b => b.key))
+      .toEqual(['t007', 't005', 't006', 't003', 't004', 't009', 't008', 't002', 't001'])
+    for (const id of ['t005', 't006', 't007'])
+      expect(await ui.find({ type: 'Text', text: new RegExp(`^◆ ${id} Task ${id}  pi:gpt-x@high$`) })).toBeTruthy()
+    for (const id of ['t001', 't002', 't003', 't004', 't008', 't009'])
+      expect(await ui.find({ type: 'Text', text: new RegExp(`^○ ${id} Task ${id}  pi:gpt-x@high$`) })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: '✗ failed' })).toMatchObject({ props: { color: 'error' } })
+    expect(await ui.find({ type: 'Text', text: '✓ ready to merge' })).toMatchObject({ props: { color: 'success' } })
+    expect(await ui.find({ type: 'Text', text: '● implementing' })).toMatchObject({ props: { color: 'suggestion' } })
+    const bars = await ui.findAll({ type: 'Text', text: '┃' })
+    expect(bars.filter(b => b.props.color === 'warning')).toHaveLength(8)
+    expect(bars.filter(b => b.props.color === 'error')).toHaveLength(6)
+    await ui.unmount()
+  }
+})
+
+test('a sole session still has a divider; identity has a bold id, title, dim worker, then a dim nonempty goal', async ($, on) => {
+  mock.clock(on)
+  engine(on, JSON.stringify({ tasks: [
+    task('t001', { title: 'Fix pricing', goal: 'Charge the correct amount' }),
+    task('t002', { worker: null, title: 'Add tests', goal: '' }),
+  ] }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /^◆ ── This session · my-project ─/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: '◆ t001 Fix pricing  pi:gpt-x@high' })).toBeTruthy()
+    const identity = await ui.find({ type: 'Text', text: /^◆ t001 Fix pricing  pi:gpt-x@high$/ })
+    expect(identity?.children[1]).toMatchObject({ props: { bold: true }, children: ['t001'] })
+    expect(identity?.children[3]).toMatchObject({ props: { dimColor: true }, children: ['  pi:gpt-x@high'] })
+    expect(await ui.find({ type: 'Text', text: 'Charge the correct amount' })).toMatchObject({ props: { dimColor: true } })
+    const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.props.flexDirection === 'row')
+    expect(rows).toHaveLength(7)
+    expect(rows.slice(0, 3).map(r => r.text.trimStart())).toEqual([
+      '● implementing', '◆ t001 Fix pricing  pi:gpt-x@high', 'Charge the correct amount',
+    ])
+    expect(rows[3].text.trimStart()).toMatch(/^running .* · quiet .* · no files yet$/)
+    expect(rows.slice(4, 6).map(r => r.text.trimStart())).toEqual(['● implementing', '◆ t002 Add tests'])
+    expect(rows[6].text.trimStart()).toMatch(/^running .* · quiet .* · no files yet$/)
+    expect(await ui.findAll({ type: 'Text', text: '┃' })).toHaveLength(0)
+    await ui.unmount()
+  }
+})
+
+test('without tasks of mine there is no empty current group, and a by-hand-only project still has its divider', async ($, on) => {
+  const clock = mock.clock(on)
+  const other = task('t001', { session: 'other', session_name: 'other project' })
+  const manual = task('t002', { session: null, session_name: 'by hand' })
+  const e = engine(on, JSON.stringify({ tasks: [manual, other] }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /This session/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^○ ── other project ─/ })).toBeTruthy()
+  e.status([manual])
+  await clock.advance(3000)
+  expect(await ui.find({ type: 'Text', text: /^○ ── by hand ─/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^○ t002 / })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /This session|other project/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+function widthOf(text: string): number {
+  return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), ({ segment }) =>
+    /^[\p{Mark}\p{Control}\p{Format}]+$/u.test(segment) ? 0
+      : /[\p{Extended_Pictographic}界]/u.test(segment) ? 2 : 1).reduce((a, b) => a + b, 0)
+}
+
+test('every divider and card line clips to pane width, including Unicode, status, identity, goal, timing, steps, and next', async ($, on) => {
+  mock.clock(on)
+  const long = `界👩‍💻é${'x'.repeat(200)}`
+  engine(on, JSON.stringify({ tasks: [
+    task('t001', {
+      title: long, goal: `${long}\nmore\tgoal`, worker: long, session_name: long,
+      stalled: true, next: long, steps: [{ kind: 'run', target: long }],
+    }),
+    task('t002', { phase: 'done', outcome: 'pass', merge_blockers: [long], title: long, worker: long }),
+  ] }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    for (const bodyColumns of [0, 1, 2, 3, 4, 10, 20, 60, 200]) {
+      const ui = await $.ui.mount({ ...PANE, surface, props: { ...PANE.props, bodyColumns } })
+      const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.props.flexDirection === 'row')
+      expect(rows.length > 0).toBe(true)
+      for (const row of rows) {
+        // Render-tree text omits the gutter's one-column right margin.
+        expect(widthOf(row.text) + (bodyColumns > 1 ? 1 : 0) <= bodyColumns).toBe(true)
+        expect(/[\r\n\t]/.test(row.text)).toBe(false)
+      }
+      const dividers = (await ui.findAll({ type: 'Text' })).filter(t => t.props.wrap === 'truncate-end' && !t.props.dimColor)
+      expect(dividers).toHaveLength(1)
+      expect(widthOf(dividers[0].text) <= bodyColumns).toBe(true)
+      if (bodyColumns >= 20) {
+        // Long identity, goal, step, next, blocker/status, and second identity lines.
+        for (const index of [1, 2, 4, 5, 6, 7]) expect(rows[index].text.endsWith('…')).toBe(true)
+        if (bodyColumns === 20) expect(rows[3].text.endsWith('…')).toBe(true)
+      }
+      await ui.unmount()
+    }
+  }
+})
+
+test('an unreadable session id treats all cards as mine in one priority-sorted group', async ($, on) => {
+  mock.clock(on)
+  engine(on, JSON.stringify({ tasks: [
+    task('t001', { session: 'b', session_name: 'Beta', title: 'Running elsewhere', goal: 'Keep the goal' }),
+    task('t002', { session: null, session_name: 'by hand', stalled: true }),
+    task('t003', { phase: 'not_started' }),
+  ] }), 0, null)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const groups = (await ui.findAll({ type: 'Box' })).filter(b => b.key?.startsWith('session:'))
+    expect(groups).toHaveLength(1)
+    expect((await ui.findAll({ type: 'Box' })).filter(b => b.key?.startsWith('t')).map(b => b.key))
+      .toEqual(['t002', 't001', 't003'])
+    for (const id of ['t001', 't002', 't003'])
+      expect(await ui.find({ type: 'Text', text: new RegExp(`^◆ ${id} `) })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /^○/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'Keep the goal' })).toMatchObject({ props: { dimColor: true } })
+    await ui.unmount()
+  }
+})
+
 test('the pane opens when a task starts, follows refreshes, and closes when only unstarted tasks remain', async ($, on) => {
   const clock = mock.clock(on)
   const e = engine(on, JSON.stringify({ tasks: [task('t001', { phase: 'not_started' })] }))
@@ -369,6 +524,48 @@ for (const { surface, viewport, name, normal } of [
       expect(await ui.find({ type: 'Text', text })).toMatchObject({ props: { color, dimColor: false } })
     for (const text of ['delegate  ', ' · ', ...(normal ? [HINT] : [])])
       expect(await ui.find({ type: 'Text', text })).toMatchObject({ props: { dimColor: true } })
+    await ui.unmount()
+  })
+
+  test(`summary counts only my session but remains visible for actionable tasks elsewhere on ${name}`, async ($, on) => {
+    const clock = mock.clock(on)
+    const mine = task('t001', { phase: 'done', outcome: 'pass', ready_to_merge: true })
+    const other = task('t002', { session: 'other', session_name: 'other', stalled: true })
+    const manual = task('t003', { session: null, session_name: 'by hand', phase: 'done', outcome: 'fail' })
+    const e = summaryEngine($, on, JSON.stringify({ tasks: [mine, other, manual] }))
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    await e.change('person')
+    const ui = await $.ui.mount({ ...BAND, surface, viewport })
+    expect(await ui.find({ type: 'Text', text: '✓ 1 ready to merge' })).toMatchObject({ props: { color: 'success' } })
+    expect(await ui.find({ type: 'Text', text: /stalled|failed/ })).toBeUndefined()
+    e.status([task('t001', { phase: 'not_started' }), other])
+    await clock.advance(3000)
+    expect(await ui.find({ type: 'Text', text: '1 not started' })).toBeTruthy()
+    expect(await ui.find({ type: 'Button' })).toBeTruthy()
+    e.status([other, manual])
+    await clock.advance(3000)
+    expect(await ui.find({ type: 'Text', text: 'delegate  ' })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /stalled|failed|not started|ready to merge/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Button' })).toBeTruthy()
+    e.status([task('t001', { phase: 'not_started' })])
+    await clock.advance(3000)
+    expect(await ui.find({ type: 'Button' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`summary falls back to counting every session when its id is unreadable on ${name}`, async ($, on) => {
+    mock.clock(on)
+    const e = summaryEngine($, on, JSON.stringify({ tasks: [
+      task('t001', { session: 'other', session_name: 'other', stalled: true }),
+      task('t002', { session: null, session_name: 'by hand', phase: 'done', outcome: 'fail' }),
+      task('t003', { phase: 'done', outcome: 'pass', ready_to_merge: true }),
+    ] }), null)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    await e.change('person')
+    const ui = await $.ui.mount({ ...BAND, surface, viewport })
+    expect(await ui.find({ type: 'Text', text: '⚠ 1 stalled' })).toMatchObject({ props: { color: 'warning' } })
+    expect(await ui.find({ type: 'Text', text: '✗ 1 failed' })).toMatchObject({ props: { color: 'error' } })
+    expect(await ui.find({ type: 'Text', text: '✓ 1 ready to merge' })).toMatchObject({ props: { color: 'success' } })
     await ui.unmount()
   })
 

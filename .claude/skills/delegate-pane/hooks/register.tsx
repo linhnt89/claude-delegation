@@ -66,6 +66,32 @@ function group(t: Task): number {
   return t.stalled || failed(t) ? 0 : t.phase === 'done' ? 1 : LIVE.has(t.phase) ? 2 : 3
 }
 
+async function sessionId($: EngineInterface): Promise<string | null> {
+  try {
+    return (await $.session.id()) || null
+  } catch {
+    // Older engines may not expose the viewer's session id.
+    return null
+  }
+}
+
+type SessionGroup = { session: string | null; name: string; mine: boolean; tasks: Task[] }
+
+function sessions(tasks: Task[], id: string | null): SessionGroup[] {
+  if (id === null)
+    return [{ session: null, name: tasks[0]?.session_name ?? 'by hand', mine: true, tasks }]
+  const groups = new Map<string | null, SessionGroup>()
+  for (const t of tasks) {
+    const g: SessionGroup = groups.get(t.session)
+      ?? { session: t.session, name: t.session_name, mine: t.session === id, tasks: [] }
+    g.tasks.push(t)
+    groups.set(t.session, g)
+  }
+  return [...groups.values()].sort((a, b) => Number(b.mine) - Number(a.mine)
+    || Number(a.session === null) - Number(b.session === null)
+    || a.name.localeCompare(b.name) || (a.session ?? '').localeCompare(b.session ?? ''))
+}
+
 function label(t: Task, now: number): { text: string; color: ThemeKey } {
   if (t.stalled) return { text: `⚠ STALLED · quiet ${ago(t.last_activity_at, now)}`, color: 'warning' }
   if (t.phase === 'interrupted') return { text: '✗ interrupted', color: 'error' }
@@ -100,6 +126,27 @@ function clip(text: string, columns: number): string {
     used += cellWidth(c)
   }
   return `${result}…`
+}
+
+function divider(g: SessionGroup, columns: number): string {
+  const heading = `${g.mine ? '◆ ── This session ·' : '○ ──'} ${g.name} ──`
+  return clip(heading + '─'.repeat(Math.max(0, columns - textWidth(heading))), columns)
+}
+
+function identity(t: Task, mine: boolean, columns: number) {
+  const parts = [
+    { text: `${mine ? '◆' : '○'} ` },
+    { text: t.id, bold: true },
+    { text: ` ${t.title}` },
+    { text: t.worker ? `  ${t.worker}` : '', dimColor: true },
+  ]
+  const clipped = clip(parts.map(p => p.text).join(''), columns)
+  let offset = 0
+  return parts.map(p => {
+    const text = clipped.slice(offset, offset + p.text.length)
+    offset += p.text.length
+    return { ...p, text }
+  }).filter(p => p.text)
 }
 
 type SummaryPart = { text: string; color?: ThemeKey }
@@ -195,7 +242,9 @@ export const register: Register = on => {
     const label = normal ? 'Open' : 'Open tasks'
     const controlWidth = label.length + (e.surface === 'terminal' ? 4 : 0)
     const buttonWidth = columns >= controlWidth ? controlWidth : 0
-    const source = v.error ? [{ text: 'delegate: status unavailable' }] : summary(v.tasks)
+    const id = await sessionId($)
+    const source = v.error ? [{ text: 'delegate: status unavailable' }]
+      : summary(id === null ? v.tasks : v.tasks.filter(t => t.session === id))
     const total = source.reduce((n, p) => n + textWidth(p.text), 0)
     // Reserve the control first; shorten the keyboard hint before clipping counts.
     let hint = normal ? '/delegate-pane or ctrl+x tab, Enter to open' : ''
@@ -223,46 +272,57 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     const v = await read($, view)
     const now = v.readAt || Date.now()
-    if (v.error) return <Box flexDirection="column"><Text dimColor>{v.error}</Text></Box>
+    const width = Math.max(0, e.props.bodyColumns)
+    const columns = Math.max(0, width - 2)
+    if (v.error) return <Box flexDirection="column"><Text dimColor>{clip(v.error, width)}</Text></Box>
     if (v.tasks.length === 0)
       return (
         <Box flexDirection="column">
-          <Text>No delegate tasks yet.</Text>
-          <Text dimColor>Start one with: delegate new t001</Text>
+          <Text>{clip('No delegate tasks yet.', width)}</Text>
+          <Text dimColor>{clip('Start one with: delegate new t001', width)}</Text>
         </Box>
       )
+    const groups = sessions(v.tasks, await sessionId($))
     return (
-      <Box flexDirection="column">
-        {[...v.tasks].sort((a, b) => group(a) - group(b) || a.id.localeCompare(b.id)).map(t => {
-          const l = label(t, now)
-          const live = LIVE.has(t.phase)
-          const n = t.changed_files.length
-          const files = `${n} ${n === 1 ? 'file' : 'files'}`
-          const bar: ThemeKey | undefined = t.stalled ? 'warning' : failed(t) ? 'error' : undefined
-          const lines = [
-            <Text color={l.color} bold={t.stalled}>{l.text}</Text>,
-            <Text><Text bold>{t.id}</Text>{t.worker ? <Text dimColor>  {t.worker}</Text> : null}</Text>,
-          ]
-          if (t.phase !== 'not_started')
-            lines.push(<Text dimColor>{live
-              ? `running ${ago(t.started_at, now)} · quiet ${ago(t.last_activity_at, now)} · ${n ? files : 'no files yet'}`
-              : `done · ${files}`}</Text>)
-          if (live)
-            for (const s of t.steps.slice(-3))
-              lines.push(<Text dimColor wrap="truncate-end">{clip(`  ${s.kind} ${s.target ?? ''} ${s.result ?? ''}`, e.props.bodyColumns - 2)}</Text>)
-          if ((t.stalled || failed(t) || t.ready_to_merge) && (t.next || t.stalled))
-            lines.push(<Text>→ {t.next || `delegate status ${t.id}`}</Text>)
-          return (
-            <Box key={t.id} flexDirection="column" marginBottom={1}>
-              {lines.map(line => (
-                <Box flexDirection="row">
-                  <Box width={1} flexShrink={0} marginRight={1}><Text color={bar}>{bar ? '┃' : ' '}</Text></Box>
-                  <Box minWidth={0} flexShrink={1}>{line}</Box>
+      <Box flexDirection="column" width={width} overflow="hidden">
+        {groups.map(g => (
+          <Box key={`session:${g.session ?? 'unowned'}`} flexDirection="column">
+            <Text bold={g.mine} dimColor={!g.mine} wrap="truncate-end">{divider(g, width)}</Text>
+            {[...g.tasks].sort((a, b) => group(a) - group(b) || a.id.localeCompare(b.id)).map(t => {
+              const l = label(t, now)
+              const live = LIVE.has(t.phase)
+              const n = t.changed_files.length
+              const files = `${n} ${n === 1 ? 'file' : 'files'}`
+              const bar: ThemeKey | undefined = t.stalled ? 'warning' : failed(t) ? 'error' : undefined
+              const lines = [
+                <Text color={l.color} bold={t.stalled}>{clip(l.text, columns)}</Text>,
+                <Text>{identity(t, g.mine, columns).map(p => <Text bold={p.bold} dimColor={p.dimColor}>{p.text}</Text>)}</Text>,
+              ]
+              if (t.goal) lines.push(<Text dimColor>{clip(t.goal, columns)}</Text>)
+              if (t.phase !== 'not_started')
+                lines.push(<Text dimColor>{clip(live
+                  ? `running ${ago(t.started_at, now)} · quiet ${ago(t.last_activity_at, now)} · ${n ? files : 'no files yet'}`
+                  : `done · ${files}`, columns)}</Text>)
+              if (live)
+                for (const s of t.steps.slice(-3))
+                  lines.push(<Text dimColor wrap="truncate-end">{clip(`  ${s.kind} ${s.target ?? ''} ${s.result ?? ''}`, columns)}</Text>)
+              if ((t.stalled || failed(t) || t.ready_to_merge) && (t.next || t.stalled))
+                lines.push(<Text>{clip(`→ ${t.next || `delegate status ${t.id}`}`, columns)}</Text>)
+              return (
+                <Box key={t.id} flexDirection="column" marginBottom={1}>
+                  {lines.map(line => (
+                    <Box flexDirection="row" width={width} flexWrap="nowrap">
+                      <Box width={Math.min(1, width)} flexShrink={0} marginRight={width > 1 ? 1 : 0}>
+                        <Text color={bar}>{clip(bar ? '┃' : ' ', Math.min(1, width))}</Text>
+                      </Box>
+                      <Box minWidth={0} flexShrink={1}>{line}</Box>
+                    </Box>
+                  ))}
                 </Box>
-              ))}
-            </Box>
-          )
-        })}
+              )
+            })}
+          </Box>
+        ))}
       </Box>
     )
   })

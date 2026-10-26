@@ -4,6 +4,10 @@ export type Step = { kind: string; target?: string | null; result?: string | nul
 /** One task, the fields of `delegate status --json` the pane draws. */
 export type Task = {
   id: string
+  title: string
+  goal: string
+  session: string | null
+  session_name: string
   phase: string
   outcome: string | null
   worker: string | null
