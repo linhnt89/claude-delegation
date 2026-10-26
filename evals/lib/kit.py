@@ -1,6 +1,6 @@
 """Helpers for property checks: drive `delegate` the way a user does, many times, seeded.
 
-Use after `. common.sh; setup_project` in the check, which exports PROJ, DHOME, DELEGATE,
+Use after `. common.sh; setup_project` in the check, which exports PROJ, DELEGATE,
 HOME and PATH (stand-in `pi` first). `save_template()` keeps that project; `fresh()` resets
 to it before each generated case.
 """
@@ -14,7 +14,18 @@ import sys
 
 W = os.environ["EVALS_WORK"]
 PROJ = os.environ["PROJ"]
-DHOME = os.environ["DHOME"]
+
+
+
+def dhome(cwd=None):
+    """This checkout's task-state folder: what `delegate where` says, else `<checkout>.delegate`."""
+    cwd = cwd or PROJ
+    p = subprocess.run([DELEGATE, "where"], cwd=cwd, capture_output=True, text=True)
+    for line in p.stdout.splitlines() if p.returncode == 0 else []:
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0] == "tasks":
+            return parts[1].strip()
+    return cwd.rstrip("/") + ".delegate"
 DELEGATE = os.environ["DELEGATE"]
 HOME = os.environ["HOME"]
 TEMPLATE = os.path.join(W, "template")
@@ -54,7 +65,9 @@ def save_template():
 
 
 def fresh():
-    for p in (PROJ, DHOME, CALLS, os.path.join(W, "flags")):
+    for p in (dhome() if os.path.isdir(PROJ) else None, PROJ, CALLS, os.path.join(W, "flags")):
+        if p is None:
+            continue
         shutil.rmtree(p, ignore_errors=True)
     shutil.copytree(TEMPLATE, PROJ, symlinks=True)
     os.makedirs(CALLS, exist_ok=True)
@@ -84,7 +97,7 @@ def spec(tid, cmds=("python3 -c 'from shop.split import share; assert share(10, 
     if rc != 0:
         raise RuntimeError(f"delegate new {tid}: {out}")
     acc = "\n".join(f"- [ ] `{c}`" for c in cmds)
-    write(os.path.join(DHOME, tid, "SPEC.md"),
+    write(out.strip().splitlines()[-1].strip(),
           f"# Task {tid}: {title}\n\n## Goal\nLet the checkout split a bill.\n\n"
           f"## Scope\n- In: `shop/**`\n\n## Acceptance\n{acc}\n")
 
@@ -128,8 +141,8 @@ def list_tasks():
 def task_state_left(tid):
     """What of a task is still around: folder, worktree, branch."""
     left = []
-    if os.path.exists(os.path.join(DHOME, tid)):
-        left.append(f"folder {DHOME}/{tid}")
+    if os.path.exists(os.path.join(dhome(), tid)):
+        left.append(f"folder {dhome()}/{tid}")
     if git("rev-parse", "-q", "--verify", f"refs/heads/task/{tid}"):
         left.append(f"branch task/{tid}")
     wts = [l for l in git("worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")]

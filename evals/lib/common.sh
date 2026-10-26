@@ -39,7 +39,7 @@ export HOME="$EVALS_WORK/home"
 mkdir -p "$HOME/.cache/stub/calls" "$HOME/.pi" "$HOME/.config/delegate"
 mkdir -p "$EVALS_WORK/bin" "$EVALS_WORK/stub"
 export PATH="$EVALS_WORK/bin:$PATH"
-unset DELEGATE_HOME DELEGATE_WORKERS DELEGATE_SANDBOX
+unset DELEGATE_HOME DELEGATE_WORKERS DELEGATE_SANDBOX XDG_DATA_HOME XDG_CONFIG_HOME
 # Nothing a check starts (delegate, workers, a Claude under test) may find the hidden set
 # or write into this run's results.
 unset EVALS_HIDDEN EVALS_RESULTS
@@ -52,10 +52,22 @@ git config --global advice.detachedHead false
 export PROJ="$EVALS_WORK/shop"
 export DHOME="$EVALS_WORK/shop.delegate"
 
+# dhome_of <checkout>: its task-state folder, as `delegate where` says; before `where` existed,
+# <checkout>.delegate beside it. hidden_of <checkout>: its hidden scenarios folder, if any.
+dhome_of() {
+  local w
+  w="$(cd "$1" 2>/dev/null && "$DELEGATE" where 2>/dev/null | awk '$1 == "tasks" {sub(/^tasks[ \t]+/, ""); print; exit}')"
+  [ -n "$w" ] && echo "$w" || echo "${1%/}.delegate"
+}
+hidden_of() {
+  (cd "$1" 2>/dev/null && "$DELEGATE" where 2>/dev/null | awk '$1 == "hidden" {sub(/^hidden[ \t]+/, ""); print; exit}')
+}
+
 # d <args...>: run delegate in $PROJ. Sets OUT (stdout+stderr) and RC.
 d() {
   OUT="$(cd "${DCWD:-$PROJ}" && "$DELEGATE" "$@" 2>&1)"; RC=$?
   printf '\n$ delegate %s  (exit %s)\n%s\n' "$*" "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+  [ -d "$PROJ" ] && DHOME="$(dhome_of "$PROJ")"
   return 0
 }
 
@@ -137,6 +149,8 @@ write_spec() {
   local id="$1" title="$2" goal="$3"; shift 3
   d new "$id"
   [ "$RC" -eq 0 ] || fail "delegate new $id failed: $OUT"
+  local spec="${OUT##*$'\n'}"
+  mkdir -p "$(dirname "$spec")"
   {
     echo "# Task $id: $title"
     echo
@@ -156,7 +170,7 @@ write_spec() {
     echo
     echo "## If unsure"
     echo "STOP. Don't guess. Write the question in .task/REPORT.md and finish."
-  } >"$DHOME/$id/SPEC.md"
+  } >"$spec"
 }
 
 # stub_worker <model>: behaviour for one stand-in model, as bash functions read from stdin.
@@ -251,12 +265,13 @@ install_stub pi
 bg_run() {
   OUT="$(cd "$PROJ" && timeout 20 "$DELEGATE" run --background "$@" 2>&1 </dev/null)"; RC=$?
   printf '\n$ delegate run --background %s  (exit %s)\n%s\n' "$*" "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+  DHOME="$(dhome_of "$PROJ")"
 }
 
 # sj <expr> [id]: a value from `delegate status [id] --json`, by a Python expression over `s`
 # (the parsed output), e.g. sj 's["tasks"][0]["phase"]' t001. Empty when status fails.
 sj() {
-  (cd "$PROJ" && "$DELEGATE" status ${2:+"$2"} --json 2>/dev/null) |
+  (cd "$PROJ" 2>/dev/null && "$DELEGATE" status ${2:+"$2"} --json 2>/dev/null) |
     python3 -c 'import json,sys
 try: s=json.load(sys.stdin)
 except Exception: sys.exit(0)
@@ -371,4 +386,68 @@ kit_files() {
 # same_kit_file <mode> <sha256> <file>: the file exists with that mode and content.
 same_kit_file() {
   [ -f "$3" ] && [ "$(stat -c %a "$3")" = "$1" ] && [ "$(sha256sum "$3" | cut -c1-64)" = "$2" ]
+}
+
+# --- Machines, vaults and hidden scenarios (decisions 007, 008) ---
+
+# use_machine <name>: act as another machine from now on: its own HOME (config, vault, task
+# state), same PATH and binary. The first machine is the HOME common.sh set up ("main").
+use_machine() {
+  if [ "$1" = main ]; then export HOME="$EVALS_WORK/home"; else export HOME="$EVALS_WORK/machines/$1/home"; fi
+  mkdir -p "$HOME/.cache/stub/calls" "$HOME/.pi" "$HOME/.config/delegate"
+  export GIT_CONFIG_GLOBAL="$HOME/.gitconfig"
+  git config --global init.defaultBranch main
+  git config --global advice.detachedHead false
+}
+
+# bare_remote <name>: an empty bare git repo standing in for a private remote; prints its URL.
+bare_remote() {
+  local r="$EVALS_WORK/remotes/$1.git"
+  [ -d "$r" ] || git init -q --bare "$r"
+  echo "$r"
+}
+
+# setup_machine <vault url>: `delegate setup --vault <url>` on the current machine, or fail.
+setup_machine() {
+  OUT="$("$DELEGATE" setup --vault "$1" </dev/null 2>&1)"; RC=$?
+  printf '\n$ delegate setup --vault %s  (exit %s)\n%s\n' "$1" "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+  [ "$RC" -eq 0 ] || fail "setup: delegate setup --vault failed: $OUT"
+}
+
+# hide_scenario <id> [marker]: write a passing scenario in $PROJ/evals/scenarios and hide it with
+# `delegate hidden add`, as /evaluate does. Its title is "Hidden check <marker>", which
+# evals/run prints as "Hidden check <marker>  (<id>, hidden)".
+hide_scenario() {
+  local dir="$PROJ/evals/scenarios/$1-hidden-check"
+  mkdir -p "$dir"
+  printf '# %s Hidden check %s\n- Job: J1\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' "$1" "${2:-v1}" >"$dir/scenario.md"
+  printf '#!/usr/bin/env bash\necho "hidden %s %s"\n' "$1" "${2:-v1}" >"$dir/check"
+  chmod +x "$dir/check"
+  d hidden add "evals/scenarios/$1-hidden-check"
+  [ "$RC" -eq 0 ] || fail "setup: delegate hidden add $1 failed: $OUT"
+}
+
+# remote_has <url> <text>: some file in the remote's main branch contains the text.
+remote_has() { git --git-dir="$1" grep -q -F "$2" main -- 2>/dev/null; }
+
+# project_evals <checkout>: run the project's own evals/run there; sets EV (output) and ERC.
+project_evals() {
+  EV="$(cd "$1" && evals/run fast 2>&1)"; ERC=$?
+  printf '\n$ (%s) evals/run fast  (exit %s)\n%s\n' "$1" "$ERC" "$EV" >>"$EVALS_WORK/transcript.log"
+}
+
+# delegate_at <commit>: a delegate binary built from that commit of this repo (an older one,
+# for starting states made by earlier versions). Prints its path.
+delegate_at() {
+  local src="$EVALS_WORK/src-$1" out="$EVALS_WORK/bin-$1/delegate"
+  local target="$EVALS_ROOT/delegate/target/evals-newer"
+  mkdir -p "$src" "$(dirname "$out")"
+  git -C "$EVALS_ROOT" archive "$1" delegate | tar -C "$src" -xf - || fail "no commit $1 in this repo"
+  if ! (cd "$src/delegate" && export MISE_STATE_DIR="${MISE_STATE_DIR:-$REAL_HOME/.cache/mise-state}" \
+          MISE_TRUSTED_CONFIG_PATHS="$PWD" HOME="$REAL_HOME" CARGO_TARGET_DIR="$target" &&
+          flock "$EVALS_ROOT/delegate/target" mise exec -- cargo build -q --release --offline &&
+          cp "$target/release/delegate" "$out") >"$EVALS_WORK/build-$1.log" 2>&1; then
+    fail "could not build delegate at $1 (see build-$1.log)"
+  fi
+  echo "$out"
 }

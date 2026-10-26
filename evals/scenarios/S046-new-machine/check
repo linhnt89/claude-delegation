@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# The user works on a project on machine A, then continues on machine B from a git clone.
+. "$EVALS_LIB/common.sh"
+vault="$(bare_remote vault)"
+origin="$(bare_remote shop-origin)"
+setup_machine "$vault"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+hide_scenario S901
+git -C "$PROJ" push -q "$origin" HEAD:main || fail "setup: push to the project's remote failed"
+remote_has "$vault" "S901 Hidden check" || fail "setup: the hidden scenario isn't on the vault remote"
+
+use_machine b
+mkdir -p "$EVALS_WORK/b"
+git clone -q "$origin" "$EVALS_WORK/b/shop" || fail "setup: clone failed"
+export PROJ="$EVALS_WORK/b/shop"
+global_b() { find "$HOME/.config/delegate" "$HOME/.local/share/delegate" -type f 2>/dev/null | grep -v '/checkouts/' | sort; }
+
+d list
+[ "$RC" -eq 0 ] || fail "delegate list on a machine that isn't set up failed: $OUT"
+echo "$OUT" | grep -q "delegate setup --vault" || fail "delegate list doesn't say this machine isn't set up, with delegate setup --vault: $OUT"
+echo "$OUT" | grep -qi "hidden" || fail "delegate list doesn't say the project's hidden scenarios aren't here: $OUT"
+project_evals "$PROJ"
+echo "$EV" | grep -q "delegate setup --vault" || fail "evals/run doesn't say this machine isn't set up: $(echo "$EV" | head -3)"
+echo "$EV" | grep -q "S901, hidden" && fail "evals/run on machine B ran a hidden scenario it shouldn't have yet"
+[ -z "$(global_b)" ] || fail "commands on a machine that isn't set up created global files: $(global_b | head -3)"
+
+setup_machine "$vault"
+d list
+echo "$OUT" | grep -q t001 && fail "machine A's task state showed up on machine B: $OUT"
+echo "$OUT" | grep -q "delegate setup" && fail "after setup, delegate list still says the machine isn't set up: $OUT"
+project_evals "$PROJ"
+echo "$EV" | grep -q "S901, hidden" || fail "after setup, evals/run on machine B doesn't run the hidden scenario: $(echo "$EV" | tail -3)"
+# Machine B never runs delegate init: the kit files came with the clone.
+pass "on a second machine, delegate said what was missing; after one setup the hidden set came along, and no task state"

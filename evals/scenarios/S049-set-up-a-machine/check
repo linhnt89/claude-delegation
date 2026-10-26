@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# A fresh machine: delegate just built, Pi and Codex installed, OpenCode not.
+. "$EVALS_LIB/common.sh"
+install_stub codex
+# The vault remote comes from the user's other machine.
+vault="$(bare_remote vault)"
+origin="$(bare_remote shop-origin)"
+setup_machine "$vault"
+setup_project
+hide_scenario S901
+git -C "$PROJ" push -q "$origin" HEAD:main || fail "setup: push failed"
+
+use_machine fresh
+minimal_path pi codex bwrap mise cargo find xargs sha256sum timeout awk tr cut
+rm -rf "$HOME/.config/delegate"
+git clone -q "$origin" "$EVALS_WORK/fresh-shop" || fail "setup: clone failed"
+export PROJ="$EVALS_WORK/fresh-shop"
+machine_files() { find "$HOME/.config/delegate" "$HOME/.local/share/delegate" -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum; }
+
+OUT="$(timeout 60 "$DELEGATE" setup --vault "$vault" </dev/null 2>&1)"; RC=$?
+printf '\n$ delegate setup --vault  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+[ "$RC" -ne 124 ] || fail "delegate setup waited for input"
+[ "$RC" -eq 0 ] || fail "delegate setup failed on a fresh machine: $OUT"
+cfg="$HOME/.config/delegate/workers.toml"
+[ -f "$cfg" ] || fail "setup didn't write $cfg"
+grep -q '"pi:' "$cfg" && grep -q '"codex:' "$cfg" || fail "workers.toml doesn't use both installed harnesses (pi, codex): $(cat "$cfg")"
+grep -qE '"(opencode|gemini|claude):' "$cfg" && fail "workers.toml names harnesses that aren't installed: $(grep -E '"(opencode|gemini|claude):' "$cfg" | head -2)"
+echo "$OUT" | grep -qi "pi" && echo "$OUT" | grep -qi "codex" || fail "setup doesn't list the harnesses it found: $OUT"
+echo "$OUT" | grep -i "opencode" | grep -qiE "install|missing|not found" || fail "setup doesn't say OpenCode is missing and how to add it: $OUT"
+hidden="$(hidden_of "$PROJ")"
+[ -n "$hidden" ] && grep -rq "S901 Hidden check" "$hidden" 2>/dev/null || fail "setup didn't connect the vault: the clone has no hidden S901 (where: ${hidden:-nothing})"
+
+before="$(machine_files)"
+OUT="$(timeout 60 "$DELEGATE" setup </dev/null 2>&1)"; RC=$?
+printf '\n$ delegate setup  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+[ "$RC" -eq 0 ] || fail "delegate setup as a health check failed: $OUT"
+[ "$(machine_files)" = "$before" ] || fail "rerunning delegate setup changed files"
+for w in pi codex vault bwrap; do echo "$OUT" | grep -qi "$w" || fail "the health check doesn't report $w: $OUT"; done
+echo "$OUT" | grep -qiE "not pushed|unpushed" && fail "the health check says there are unpushed changes on a fresh vault: $OUT"
+
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() { printf '\n\ndef tip(a):\n    return round(a * 0.1, 2)\n' >>shop/pricing.py; }
+B
+write_spec t001 "Add a tip" "Add tip." "python3 -m unittest -q"
+OUT="$(cd "$PROJ" && timeout 300 "$DELEGATE" run t001 </dev/null 2>&1)"; RC=$?
+[ "$RC" -eq 0 ] && [ -f "$(dhome_of "$PROJ")/t001/SUMMARY.txt" ] || fail "a task didn't run on the newly set-up machine: $OUT"
+
+# Failure paths, each on a machine of its own.
+use_machine nobwrap
+minimal_path pi codex find xargs sha256sum timeout awk tr cut
+OUT="$(timeout 60 "$DELEGATE" setup </dev/null 2>&1)"
+echo "$OUT" | grep -i "bwrap" | grep -qiE "missing|not found|install|can.t|cannot" || fail "setup without bwrap doesn't say so and how to fix it: $OUT"
+[ -f "$HOME/.config/delegate/workers.toml" ] || fail "setup without bwrap didn't still write workers.toml"
+
+use_machine ownconfig
+minimal_path pi codex bwrap find xargs sha256sum timeout awk tr cut
+printf '[defaults]\nimplement = "standard"\n[implement]\nstandard = ["gemini:gemini-3-pro@high"]\n# mine\n' >"$HOME/.config/delegate/workers.toml"
+mine="$(sha256sum "$HOME/.config/delegate/workers.toml")"
+OUT="$(timeout 60 "$DELEGATE" setup </dev/null 2>&1)"
+[ "$(sha256sum "$HOME/.config/delegate/workers.toml")" = "$mine" ] || fail "setup overwrote an existing workers.toml"
+echo "$OUT" | grep -i "gemini" | grep -qiE "install|missing|not found" || fail "setup doesn't say the configured gemini isn't installed: $OUT"
+
+use_machine badurl
+minimal_path pi codex bwrap find xargs sha256sum timeout awk tr cut
+OUT="$(timeout 60 "$DELEGATE" setup --vault "$EVALS_WORK/remotes/no-such-vault.git" </dev/null 2>&1)"; RC=$?
+echo "$OUT" | grep -qiE "can.t|cannot|could not|unreachable|not found|failed" || fail "setup with a wrong vault URL didn't say so: $OUT"
+v="$HOME/.local/share/delegate/vault"
+[ ! -d "$v/.git" ] || [ -z "$(git -C "$v" remote 2>/dev/null)" ] || fail "setup with a wrong vault URL still connected a remote"
+OUT="$(timeout 60 "$DELEGATE" setup --vault "$vault" </dev/null 2>&1)"; RC=$?
+[ "$RC" -eq 0 ] || fail "rerunning setup with the right vault URL failed: $OUT"
+pass "one setup found the harnesses and connected the vault; rerun changed nothing; a task ran; failures were named"

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Hidden scenarios changed on machine A reach machine B, also when the remote comes and goes.
+. "$EVALS_LIB/common.sh"
+vault="$(bare_remote vault)"
+origin="$(bare_remote shop-origin)"
+setup_machine "$vault"
+setup_project
+hide_scenario S901 v1
+git -C "$PROJ" push -q "$origin" HEAD:main || fail "setup: push failed"
+A="$PROJ"
+use_machine b
+setup_machine "$vault"
+git clone -q "$origin" "$EVALS_WORK/b-shop" || fail "setup: clone failed"
+B="$EVALS_WORK/b-shop"
+project_evals "$B"
+echo "$EV" | grep -q "Hidden check v1.*(S901, hidden)" || fail "setup: machine B doesn't run S901: $(echo "$EV" | tail -3)"
+offline() { mv "$vault" "$vault.away"; }
+online() { mv "$vault.away" "$vault"; }
+
+# Machine A: hide a new scenario the way /evaluate does, then edit another by hand.
+use_machine main
+export PROJ="$A"
+hide_scenario S903 v1
+[ ! -e "$A/evals/scenarios/S903-hidden-check" ] || fail "delegate hidden add left the scenario in the repo"
+remote_has "$vault" "S903 Hidden check v1" || fail "delegate hidden add didn't push the new hidden scenario"
+hidden="$(hidden_of "$A")"
+f="$(grep -rl "S901 Hidden check" "$hidden" | head -1)"
+[ -n "$f" ] || fail "can't find S901 in machine A's hidden folder ${hidden:-?}"
+sed -i 's/Hidden check v1/Hidden check v2/' "$f"
+d list
+remote_has "$vault" "S901 Hidden check v2" || fail "a hand edit in the vault wasn't pushed by the next delegate command"
+
+# Machine B pulls before running hidden scenarios.
+use_machine b
+project_evals "$B"
+echo "$EV" | grep -q "Hidden check v1.*(S903, hidden)" || fail "machine B doesn't run the new hidden scenario: $(echo "$EV" | tail -4)"
+echo "$EV" | grep -q "Hidden check v2.*(S901, hidden)" || fail "machine B runs the old version of the edited hidden scenario: $(echo "$EV" | tail -4)"
+
+# Machine A, remote unreachable: committed locally, said so until it can push.
+use_machine main
+offline
+sed -i 's/Hidden check v2/Hidden check v3/' "$f"
+d list
+echo "$OUT" | grep -qiE "not pushed|unpushed" || fail "with the remote away, delegate didn't say the change isn't pushed: $OUT"
+d list
+echo "$OUT" | grep -qiE "not pushed|unpushed" || fail "delegate list stopped saying the change isn't pushed: $OUT"
+online
+d list
+remote_has "$vault" "S901 Hidden check v3" || fail "once the remote was back, the change wasn't pushed"
+
+# Machine B, remote unreachable: runs its local copy and says it couldn't check.
+use_machine b
+offline
+project_evals "$B"
+online
+echo "$EV" | grep -q "(S901, hidden)" || fail "offline, machine B didn't run its local hidden copy: $(echo "$EV" | tail -3)"
+echo "$EV" | grep -qiE "latest|couldn.t (check|reach)|could not (check|reach)|offline|unreachable" ||
+  fail "offline, machine B didn't say it couldn't check its hidden set is the latest: $(echo "$EV" | head -3)"
+
+# Both machines change the same hidden file.
+project_evals "$B"   # B up to date (v3)
+use_machine main
+sed -i 's/Hidden check v3/Hidden check from-A/' "$f"
+d list
+remote_has "$vault" "S901 Hidden check from-A" || fail "setup: A's change wasn't pushed"
+use_machine b
+fb="$(grep -rl "S901 Hidden check" "$(hidden_of "$B")" | head -1)"
+sed -i 's/Hidden check v3/Hidden check from-B/' "$fb"
+DCWD="$B" d list
+echo "$OUT" | grep -qi "conflict" || fail "both machines changed S901, and delegate didn't report a conflict: $OUT"
+vb="$(dirname "$(git -C "$(dirname "$fb")" rev-parse --absolute-git-dir)")"
+git -C "$vb" log --all -p 2>/dev/null | grep -q "from-B" || grep -rq "from-B" "$vb" ||
+  fail "machine B's change was lost in the conflict"
+remote_has "$vault" "S901 Hidden check from-A" || fail "machine A's change was lost in the conflict"
+pass "hidden changes reached the other machine; offline and conflicts were reported and nothing was lost"

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# The user copies a project folder to try something, works in the copy, then deletes it.
+. "$EVALS_LIB/common.sh"
+setup_machine "$(bare_remote vault)"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+tid="$(sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md)"
+work() { printf '\n\ndef f_%s(a):\n    return a\n' "$tid" >>shop/pricing.py; }
+B
+write_spec t001 "Split a bill" "Add f_t001." "python3 -m unittest -q"
+d run t001
+[ -f "$DHOME/t001/SUMMARY.txt" ] || fail "setup: the first round didn't finish: $OUT"
+hide_scenario S901
+d list
+listed="$OUT"
+ORIG="$PROJ"
+orig_home="$DHOME"
+orig_state="$(find "$orig_home" -path '*/worktree' -prune -o \( -name SPEC.md -o -name STATE.json -o -name SUMMARY.txt -o -name CHECKS.txt \) -print0 | sort -z | xargs -0 sha256sum)"
+
+cp -a "$ORIG" "$EVALS_WORK/shop-experiment"
+COPY="$EVALS_WORK/shop-experiment"
+export PROJ="$COPY"
+d list
+echo "$OUT" | grep -q t001 && fail "the copy shows the original's task: $OUT"
+copy_home="$DHOME"
+[ "$copy_home" != "$orig_home" ] || fail "the copy and the original share one task-state folder: $copy_home"
+project_evals "$COPY"
+echo "$EV" | grep -q "S901, hidden" || fail "the copy's evals/run doesn't run the project's hidden scenario: $(echo "$EV" | tail -3)"
+
+write_spec t002 "Experiment" "Add f_t002." "python3 -m unittest -q"
+d run t002
+[ -f "$copy_home/t002/SUMMARY.txt" ] || fail "a task in the copy didn't run: $OUT"
+
+export PROJ="$ORIG"
+d list
+[ "$OUT" = "$listed" ] || fail "the original's task list changed after work in the copy: $OUT"
+now="$(find "$orig_home" -path '*/worktree' -prune -o \( -name SPEC.md -o -name STATE.json -o -name SUMMARY.txt -o -name CHECKS.txt \) -print0 | sort -z | xargs -0 sha256sum)"
+[ "$now" = "$orig_state" ] || fail "work in the copy changed the original's task state: $(diff <(echo "$orig_state") <(echo "$now") | grep '^>' | head -2)"
+
+rm -rf "$COPY"
+d list
+[ ! -e "$copy_home" ] || fail "the deleted copy's task-state folder is still there: $copy_home"
+[ -f "$orig_home/t001/SUMMARY.txt" ] || fail "cleaning up after the copy touched the original's task state"
+pass "the copy started clean, shared the hidden set, and was cleaned up; the original kept its task"

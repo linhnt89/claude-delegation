@@ -21,7 +21,7 @@ for f in AGENTS.md CLAUDE.md PLAN.md .delegate.toml docs/decisions evals/run eva
   echo "$OUT" | grep -q "added .*$f" || fail "init's output doesn't list $f"
 done
 [ -x "$PROJ/evals/run" ] || fail "evals/run is not executable"
-[ -f "$HOME/.config/delegate/workers.toml" ] || fail "init didn't create ~/.config/delegate/workers.toml"
-echo "$OUT" | grep -q "workers.toml" || fail "init's output doesn't mention workers.toml"
+[ ! -e "$HOME/.config/delegate/workers.toml" ] || fail "init wrote the machine's workers.toml (that's delegate setup's job now)"
+echo "$OUT" | tail -3 | grep -q "delegate setup" || fail "init's output doesn't end by pointing to delegate setup: $(echo "$OUT" | tail -2)"
 [ "$own" = "$(cd "$PROJ" && git ls-files | xargs sha256sum)" ] || fail "init changed the repo's own files"
-pass "one init added every kit file and the worker config, listed them, and left the code alone"
+pass "one init added every kit file, listed them, pointed to delegate setup and left the code alone"

@@ -15,7 +15,8 @@ A git repo with real code and a commit or two, no kit files yet; no `~/.config/d
 
 ## Passes when
 - `AGENTS.md`, `CLAUDE.md`, `PLAN.md`, `.delegate.toml`, `docs/decisions/`, `evals/` and the three skills exist.
-- `~/.config/delegate/workers.toml` exists.
+- On a machine that isn't set up, no `~/.config/delegate/` file is written: the output ends by
+  saying this machine isn't set up, with `delegate setup` (decision 008).
 - The output lists each file it added.
 - The repo's own files are unchanged.
 

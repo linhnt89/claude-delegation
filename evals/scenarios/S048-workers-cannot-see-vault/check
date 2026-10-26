@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# A worker in the sandbox goes looking for the vault, the hidden set and other tasks' state.
+. "$EVALS_LIB/common.sh"
+vault="$(bare_remote vault-secret-url)"
+setup_machine "$vault"
+setup_project
+simple_workers standard gpt-nosy gpt-nosy gpt-nosy
+hide_scenario S901 secret-marker
+write_spec t001 "Other task" "Something else." "true"
+SCOPE='`seen.txt`' write_spec t002 "Look around" "Write seen.txt." "true"
+stub_worker gpt-nosy <<'B'
+work() {
+  root="$HOME/.local/share/delegate"
+  {
+    echo "== listing"; ls -laR "$root" 2>&1
+    echo "== configs"; find "$root" -name config -path '*.git*' -exec cat {} \; 2>&1
+    echo "== grep"; grep -r "secret-marker\|vault-secret-url\|Other task" "$root" 2>&1
+  } >seen.txt
+  mkdir -p "$root/vault" 2>/dev/null; echo pwned >"$root/vault/pwned" 2>/dev/null
+  echo pwned >"$root/pwned" 2>/dev/null
+  true
+}
+B
+d run t002 --no-ask
+[ -f "$DHOME/t002/SUMMARY.txt" ] || fail "setup: the nosy worker's task didn't run: $OUT"
+seen="$(git -C "$PROJ" show task/t002:seen.txt 2>/dev/null)"
+[ -n "$seen" ] || fail "setup: the worker's seen.txt wasn't committed"
+for secret in secret-marker vault-secret-url "Other task"; do
+  echo "$seen" | grep -q "$secret" && fail "the worker could see '$secret' under ~/.local/share/delegate"
+done
+found="$(find "$HOME/.local/share/delegate" -name pwned 2>/dev/null)"
+[ -z "$found" ] || fail "the worker wrote into ~/.local/share/delegate: $found"
+pass "the worker saw no hidden scenario, vault URL or other task's state, and couldn't write there"

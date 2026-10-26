@@ -50,7 +50,7 @@ def judge(name, rc, out, words, tid=None):
         fail(f"{name}: the message doesn't name the problem ({' / '.join(words)}): {out.strip()[-160:]}", name, s)
     if name.startswith("empty candidate list") and "family" in out:
         fail(f"{name}: the message blames model families, not the empty list: {out.strip()[-160:]}", name, s)
-    if tid and (git("rev-parse", "-q", "--verify", f"refs/heads/task/{tid}") or os.path.isdir(os.path.join(DHOME, tid, "worktree"))):
+    if tid and (git("rev-parse", "-q", "--verify", f"refs/heads/task/{tid}") or os.path.isdir(os.path.join(dhome(), tid, "worktree"))):
         fail(f"{name}: a refused run left a worktree or branch for {tid}", name, s)
 
 checked = 0

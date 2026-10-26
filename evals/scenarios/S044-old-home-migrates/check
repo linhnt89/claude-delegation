@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# A project used with the old layout (<repo>.delegate/ beside it) meets the new delegate.
+. "$EVALS_LIB/common.sh"
+# The last delegate with the old layout; it makes the starting state.
+OLD_LAYOUT=93e3ba8
+old="$(delegate_at "$OLD_LAYOUT")" || exit 1
+new="$DELEGATE"
+
+old_layout_project() {   # $1: name; leaves an open task, results and two hidden scenarios beside it
+  export PROJ="$EVALS_WORK/$1"
+  DELEGATE="$old" setup_project
+  DELEGATE="$old" simple_workers standard gpt-good gpt-good gpt-good
+  stub_worker gpt-good <<'B'
+work() { printf '\n\ndef divide_bill(a, p):\n    return a / p\n' >>shop/pricing.py; }
+B
+  DELEGATE="$old" write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+  DELEGATE="$old" d run t001
+  OLDHOME="$EVALS_WORK/$1.delegate"
+  [ -f "$OLDHOME/t001/SUMMARY.txt" ] || fail "setup: the old delegate didn't finish a round in $OLDHOME"
+  for id in S901 S902; do
+    mkdir -p "$OLDHOME/_evals/hidden/scenarios/$id-hidden"
+    printf '# %s Hidden check\n- Job: J1\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' "$id" \
+      >"$OLDHOME/_evals/hidden/scenarios/$id-hidden/scenario.md"
+    printf '#!/usr/bin/env bash\necho "hidden %s ran"\n' "$id" >"$OLDHOME/_evals/hidden/scenarios/$id-hidden/check"
+    chmod +x "$OLDHOME/_evals/hidden/scenarios/$id-hidden/check"
+  done
+  (cd "$PROJ" && DELEGATE="$old" evals/run fast >/dev/null 2>&1)
+  [ -d "$OLDHOME/_evals/results" ] || fail "setup: the old evals/run wrote no results"
+  DELEGATE="$old" d list
+  LISTED="$OUT"
+  grep -q '^project' "$PROJ/.delegate-kit.toml" 2>/dev/null && fail "setup: the old kit record already has a project id"
+}
+
+# With a vault remote on this machine.
+remote="$(bare_remote vault)"
+setup_machine "$remote"
+old_layout_project shop
+d list
+first="$OUT"
+[ "$RC" -eq 0 ] || fail "the first delegate list after the update failed: $first"
+echo "$first" | grep -q 't001' || fail "the first delegate list doesn't show the task: $first"
+echo "$first" | grep -qF "$HOME/.local/share/delegate" || echo "$first" | grep -qF "~/.local/share/delegate" ||
+  fail "the first delegate list doesn't say where it moved the task state and hidden set: $first"
+[ ! -e "$OLDHOME" ] || fail "the old home is still beside the repo: $(ls -A "$OLDHOME" | head -5 | tr '\n' ' ')"
+remote_has "$remote" "S901 Hidden check" && remote_has "$remote" "S902 Hidden check" ||
+  fail "the hidden scenarios aren't committed and pushed to the vault remote"
+grep -qE '^project *= *"[^"]+"' "$PROJ/.delegate-kit.toml" || fail "no project id written to .delegate-kit.toml"
+echo "$first" | grep -F ".delegate-kit.toml" | grep -qi "commit" || fail "the output doesn't say to commit the project id: $first"
+d list
+[ "$OUT" = "$LISTED" ] || fail "the second delegate list isn't the plain task list from before: $OUT"
+# The project's evals/run is still the old kit's, which only knows the old layout: the user
+# gets the new one the usual way after rebuilding delegate.
+d upgrade
+[ "$RC" -eq 0 ] || fail "delegate upgrade after the migration failed: $OUT"
+project_evals "$PROJ"
+echo "$EV" | grep -q "S901, hidden" && echo "$EV" | grep -q "S902, hidden" || fail "after the move, evals/run doesn't run the hidden scenarios: $(echo "$EV" | tail -3)"
+[ -f "$DHOME/t001/SUMMARY.txt" ] || fail "the task's round results didn't come along to $DHOME"
+
+# A machine without a vault remote: a local vault, and how to connect it.
+use_machine other
+old_layout_project shop-b
+d list
+echo "$OUT" | grep -q 't001' || fail "without a vault remote, delegate list doesn't show the task: $OUT"
+echo "$OUT" | grep -q "delegate setup --vault" || fail "without a vault remote, the output doesn't say how to connect one: $OUT"
+[ ! -e "$OLDHOME" ] || fail "without a vault remote, the old home is still beside the repo"
+hidden="$(hidden_of "$PROJ")"
+[ -n "$hidden" ] && [ -n "$(find "$hidden" -name scenario.md -path '*S901*')" ] && [ -n "$(find "$hidden" -name scenario.md -path '*S902*')" ] ||
+  fail "without a vault remote, the hidden scenarios aren't in a local vault (delegate where says: ${hidden:-nothing})"
+# Not covered: a migration killed halfway (no reliable way to stop it at a chosen point yet).
+pass "the old home moved into the central place on first use, the hidden set into the vault, and said so once"

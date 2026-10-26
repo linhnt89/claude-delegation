@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# A project in use is moved to another folder; its delegate home stays behind.
+# A project in use is moved to another folder and renamed; everything should still be there.
 . "$EVALS_LIB/common.sh"
+trap kill_runs EXIT
+setup_machine "$(bare_remote vault)"
 setup_project
 simple_workers standard gpt-good gpt-good gpt-good
 stub_worker gpt-good <<'B'
@@ -9,55 +11,47 @@ B
 write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
 d run t001
 [ -f "$DHOME/t001/SUMMARY.txt" ] || fail "setup: the first round didn't finish: $OUT"
-for id in S901 S902; do
-  mkdir -p "$DHOME/_evals/hidden/scenarios/$id-hidden"
-  printf '# %s Hidden check\n- Job: J1\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' "$id" \
-    >"$DHOME/_evals/hidden/scenarios/$id-hidden/scenario.md"
-  printf '#!/usr/bin/env bash\necho "hidden %s ran"\n' "$id" >"$DHOME/_evals/hidden/scenarios/$id-hidden/check"
-  chmod +x "$DHOME/_evals/hidden/scenarios/$id-hidden/check"
-done
+hide_scenario S901
+hide_scenario S902
 d list
 listed="$OUT"
 echo "$listed" | grep -q t001 || fail "setup: delegate list doesn't show t001 before the move: $listed"
-OLD="$DHOME"
-snapshot() { find "$EVALS_WORK" -path "$EVALS_WORK/home" -prune -o -path '*/.git' -prune -o -print | sort; }
 
-# Copy first: the original still exists, so nothing should point the copy at its home.
-cp -a "$PROJ" "$EVALS_WORK/shop-copy"
-DCWD="$EVALS_WORK/shop-copy" d list
-echo "$OUT" | grep -qF "$OLD" && fail "a copy of the repo was told about the original's delegate home: $OUT"
-
-# The move.
-rm -rf "$EVALS_WORK/shop-copy" "$EVALS_WORK/shop-copy.delegate"
 mkdir -p "$EVALS_WORK/projects"
-mv "$PROJ" "$EVALS_WORK/projects/shop"
-export PROJ="$EVALS_WORK/projects/shop"
-NEW="$EVALS_WORK/projects/shop.delegate"
-before="$(snapshot)"
+mv "$PROJ" "$EVALS_WORK/projects/shop2"
+export PROJ="$EVALS_WORK/projects/shop2"
 
 d list
-echo "$OUT" | grep -qF "$OLD" || fail "after the move, delegate list doesn't say the home is still at $OLD: $OUT"
-cmd="$(echo "$OUT" | grep -oE "mv [^\`]*$(printf '%s' "$OLD" | sed 's/[.]/\\./g')[^\`]*" | head -1)"
-[ -n "$cmd" ] || fail "after the move, delegate list gives no mv command for the old home: $OUT"
-ev="$(cd "$PROJ" && evals/run fast 2>&1)"
-echo "$ev" | grep -qF "$OLD" || fail "after the move, evals/run doesn't say the home is still at $OLD: $(echo "$ev" | head -3)"
-[ "$(snapshot)" = "$before" ] || fail "delegate or evals/run moved or deleted files by itself"
+[ "$OUT" = "$listed" ] || fail "after the move, delegate list differs from before (it should show the task, no message): $OUT"
+project_evals "$PROJ"
+echo "$EV" | grep -q "S901, hidden" && echo "$EV" | grep -q "S902, hidden" || fail "after the move, evals/run doesn't run the hidden scenarios: $(echo "$EV" | tail -3)"
+case "$(basename "$DHOME")" in *-shop2) ;; *) fail "the task-state folder isn't named after the renamed repo: $DHOME" ;; esac
+d merge t001
+[ "$RC" -eq 0 ] || fail "merge after the move failed: $OUT"
+[ ! -e "$DHOME/t001" ] || fail "merge after the move left task state in $DHOME/t001"
+git -C "$PROJ" rev-parse -q --verify task/t001 >/dev/null && fail "merge after the move left the task branch"
 
-note "running: $cmd"
-(cd "$EVALS_WORK" && eval "$cmd") || fail "the suggested command failed: $cmd"
-[ -d "$NEW/t001" ] || fail "the suggested command didn't put the home beside the repo at $NEW"
+# Moved while a task runs in the background: found, or interrupted with a hint that works.
+stub_worker gpt-slow <<'B'
+work() { wait_flag go 60; printf '\n\ndef tip(a):\n    return round(a * 0.1, 2)\n' >>shop/pricing.py; }
+B
+SCOPE='`shop/pricing.py`' write_spec t002 "Add a tip" "Add tip." "python3 -m unittest -q"
+bg_run t002 --no-ask --worker pi:gpt-slow@high
+[ "$RC" -eq 0 ] || fail "setup: background run failed to start: $OUT"
+wait_until 30 test -n "$(calls_where work gpt-slow)" || fail "setup: the background worker never started"
+mv "$PROJ" "$EVALS_WORK/shop3"
+export PROJ="$EVALS_WORK/shop3"
+flag go
+wait_until 60 sh -c "cd '$PROJ' && '$DELEGATE' list 2>&1 | grep -q 't002.*\\(done\\|interrupted\\)'" ||
+  { d list; fail "a task running during the move is neither done nor interrupted: $OUT"; }
 d list
-[ "$OUT" = "$listed" ] || fail "after moving the home, delegate list differs from before the move: $OUT"
-ev="$(cd "$PROJ" && evals/run fast 2>&1)"
-echo "$ev" | grep -q "S901" && echo "$ev" | grep -q "S902" || fail "after moving the home, evals/run doesn't run the hidden scenarios: $(echo "$ev" | tail -3)"
-
-# The old home gone too: said once, then quiet.
-mv "$PROJ" "$EVALS_WORK/shop-again"
-export PROJ="$EVALS_WORK/shop-again"
-rm -rf "$NEW"
+if echo "$OUT" | grep -q 't002.*interrupted'; then
+  d discard t002
+  [ "$RC" -eq 0 ] || fail "the interrupted task's hint didn't work: discard failed: $OUT"
+else
+  d merge t002
+  [ "$RC" -eq 0 ] || fail "the task that finished during the move can't be merged: $OUT"
+fi
 d list
-echo "$OUT" | grep -qF "$NEW" && echo "$OUT" | grep -qiE "missing|gone|lost" ||
-  fail "with the old home deleted, delegate list doesn't say $NEW is missing: $OUT"
-d list
-echo "$OUT" | grep -qF "$NEW" && fail "delegate list keeps warning about the lost home: $OUT"
-pass "after a move, delegate and evals/run pointed at the old home, and one command brought it back"
+echo "$OUT" | grep -q t002 && fail "t002 is still listed after it was finished off: $OUT"
+pass "after a move and a rename, the task, the hidden scenarios and merging all worked as before"
