@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Two sessions and a plain terminal share a project; each session's status line is its own.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/sessions.sh"
+setup_project
+ln -sf "$DELEGATE" "$EVALS_WORK/bin/delegate"
+trap 'flag end; kill_runs' EXIT
+sessions_scene
+has() { printf '%s' "$PLAIN" | grep -Eq -- "$1"; }
+lacks() { ! printf '%s' "$PLAIN" | grep -Eq -- "$1"; }
+
+line_as "$SESS_A" "$PROJ"
+[ "$LRC" -eq 0 ] || fail "the status line failed in session A: $LINE"
+[ "$(printf '%s' "$LINE" | wc -l)" -eq 0 ] || fail "the status line printed more than one line: $PLAIN"
+has 't021 implement' || fail "session A's line doesn't show its running t021: $PLAIN"
+has '1 ready to merge' || fail "session A's line doesn't count its t022 as ready to merge: $PLAIN"
+for t in t030 t031 t032; do lacks "$t" || fail "session A's line names $t, which isn't A's: $PLAIN"; done
+has 'pane-polish[^·│]*2[^·│]*1 stalled' || fail "session A's line doesn't count session B's group as 'pane-polish 2 (1 stalled)': $PLAIN"
+has 'by hand 1' || fail "session A's line doesn't count the task started by hand: $PLAIN"
+python3 - "$LINE" <<'PY' || fail "session A's line doesn't dim the other groups: $(printf '%q' "$LINE")"
+import sys
+l = sys.argv[1]; dim = l.rfind("\x1b[2m", 0, l.find("pane-polish"))
+sys.exit(0 if dim > l.find("t021") >= 0 else 1)
+PY
+[ "$MS" -lt 1000 ] || fail "the status line took ${MS}ms"
+
+line_as "$SESS_B" "$WT_B"
+[ "$LRC" -eq 0 ] || fail "the status line failed in session B: $LINE"
+has 't030 ' || fail "session B's line doesn't show its t030: $PLAIN"
+has 't032 stalled' || fail "session B's line doesn't show its t032 as stalled: $PLAIN"
+for t in t021 t022 t031; do lacks "$t" || fail "session B's line names $t, which isn't B's: $PLAIN"; done
+has '(shop|main)[^·│]* 2' || fail "session B's line doesn't count session A's group (named by its folder or branch) as 2: $PLAIN"
+has 'by hand 1' || fail "session B's line doesn't count the task started by hand: $PLAIN"
+
+line_as "8d000000-0000-4000-8000-00000000000c" "$PROJ"
+for t in t021 t022 t030 t031 t032; do lacks "$t" || fail "a session with no tasks of its own sees $t by id: $PLAIN"; done
+has 'pane-polish' && has 'by hand 1' || fail "a session with no tasks of its own doesn't see the other groups' counts: $PLAIN"
+
+line_as "" "$PROJ"
+for t in t021 t030 t031; do has "$t" || fail "with no session id the status line leaves out $t: $PLAIN"; done
+pass "each session's status line showed its own tasks by id and the others as dimmed counts; with no session id, every task"

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Running a task from another session doesn't take it over; an unowned task goes to its first runner.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/sessions.sh"
+setup_project
+ln -sf "$DELEGATE" "$EVALS_WORK/bin/delegate"
+trap 'flag end; kill_runs' EXIT
+simple_workers standard gpt-quick gpt-quick gpt-quick
+stub_worker gpt-quick <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; }
+B
+(cd "$PROJ" && mkdir -p "$(dirname "$WT_B")" && git worktree add -q -b pane-polish "$WT_B") || fail "setup: could not make session B's worktree"
+as_session "$SESS_A" "$PROJ" write_spec t021 "Project id and vault" "Give each project an id." "grep -q divide_bill shop/pricing.py"
+as_session "" "$PROJ" write_spec t040 "Split bills" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
+owner() { sj 's["tasks"][0].get("session")' "$1"; }
+[ "$(owner t021)" = "$SESS_A" ] || fail "t021, created in session A, has session '$(owner t021)'"
+as_session "$SESS_B" "$WT_B" d run t021
+[ "$RC" -eq 0 ] || fail "session B couldn't run t021: $OUT"
+[ "$(sj 's["tasks"][0]["ready_to_merge"]' t021)" = true ] || fail "setup: t021 isn't ready to merge after its run: $OUT"
+[ "$(owner t021)" = "$SESS_A" ] || fail "after session B ran t021 it belongs to '$(owner t021)', not session A"
+as_session "$SESS_B" "$WT_B" d status t021
+as_session "$SESS_B" "$WT_B" d review t021 >/dev/null 2>&1
+[ "$(owner t021)" = "$SESS_A" ] || fail "after session B looked at or reviewed t021 it belongs to '$(owner t021)', not session A"
+[ "$(owner t040)" = null ] || [ -z "$(owner t040)" ] || fail "t040, created from a plain terminal, already has session '$(owner t040)'"
+as_session "$SESS_A" "$PROJ" bg_in t040
+wait_field 60 t040 phase done || fail "setup: t040 never finished: $OUT"
+[ "$(owner t040)" = "$SESS_A" ] || fail "t040 had no owner and session A ran it first, but it belongs to '$(owner t040)'"
+as_session "$SESS_B" "$WT_B" d run t040 >/dev/null 2>&1
+[ "$(owner t040)" = "$SESS_A" ] || fail "t040 moved to '$(owner t040)' when session B ran it again"
+line_as "$SESS_A" "$PROJ"
+printf '%s' "$PLAIN" | grep -q '2 ready to merge' || fail "session A's status line doesn't count t021 and t040 as its own ready to merge: $PLAIN"
+line_as "$SESS_B" "$WT_B"
+printf '%s' "$PLAIN" | grep -Eq 't021|t040' && fail "session B's status line names A's tasks by id: $PLAIN"
+printf '%s' "$PLAIN" | grep -Eq '(shop|main)[^·│]* 2' || fail "session B's status line doesn't count A's two tasks in A's group: $PLAIN"
+pass "t021 stayed with session A after B ran and reviewed it; unowned t040 went to A, its first runner, and stayed"

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Judged by a human: the delegate pane groups tasks by session.
+cat <<'T'
+In a project set up with `delegate init`, open two Claude Code sessions: A in the main checkout,
+B in a worktree on branch `pane-polish`. From A, create and run two tasks (one that keeps
+running, one that finishes ready to merge). From B, two more, one of them going quiet past the
+stall threshold (`DELEGATE_STALL_SECS` in the environment Claude Code was started from lowers
+it). From a plain terminal outside Claude Code, one more. Give every spec a title and a Goal.
+Open the pane in A, in the desktop app and in the terminal, light mode then dark mode. Then in B.
+Look for:
+- one divider line per session: "◆ ── This session · <name> ──" first and bright, then each
+  other session dimmed as "○ ── pane-polish ──", then "○ ── by hand ──" last
+- with no session title known, a group is named by its folder or branch
+- every task has the same full card and its status colour, whatever its group
+- the card's second line is ◆ or ○, the id, the title, the worker; below it the Goal's first
+  line, dimmed; long lines end in … at the pane's width
+- within a group, tasks that need you come first (stalled/interrupted/failed, ready, running)
+- the coloured ┃ bar only on stalled, interrupted or failed tasks, in any group
+- close the pane: the row above the prompt counts this session's tasks like the status line
+- B's pane is the mirror image: its own group first
+- with tasks from only one session, its divider still shows
+Pass if all hold.
+T
+exit 2

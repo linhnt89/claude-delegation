@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# status --json says, for every task, what it is for and which session it belongs to.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/sessions.sh"
+setup_project
+ln -sf "$DELEGATE" "$EVALS_WORK/bin/delegate"
+trap 'flag end; kill_runs' EXIT
+sessions_scene
+as_session "" "$PROJ" d new t033
+[ "$RC" -eq 0 ] || fail "delegate new t033 failed: $OUT"
+d status --json
+problem="$(SA="$SESS_A" SB="$SESS_B" python3 - "$OUT" <<'PY'
+import json, os, sys
+try: tasks = {t["id"]: t for t in json.loads(sys.argv[1])["tasks"]}
+except Exception as e: print(f"status --json gave no tasks: {e}"); sys.exit()
+want = {
+  "t021": ("Project id and vault", "Give each project an id and a locked vault.", os.environ["SA"]),
+  "t022": ("Task state in checkouts", "Move task state under the checkout id.", os.environ["SA"]),
+  "t030": ("Status line per session", "Show each session its own tasks.", os.environ["SB"]),
+  "t031": ("Fix wait timeout", "Make wait give up after its timeout.", None),
+}
+for tid, (title, goal, sess) in want.items():
+  t = tasks.get(tid)
+  if t is None: print(f"status --json lacks {tid}"); sys.exit()
+  for key, val in (("title", title), ("goal", goal), ("session", sess)):
+    if t.get(key, "<missing>") != val: print(f"{tid}'s {key} is {t.get(key, '<missing>')!r}, want {val!r}"); sys.exit()
+name = lambda tid: str(tasks[tid].get("session_name"))
+if "pane-polish" not in name("t030"): print(f"t030's session_name is {name('t030')!r}; with no title known it should name B's folder or branch, pane-polish"); sys.exit()
+if not name("t021") or name("t021") in ("None", "by hand"): print(f"t021's session_name is {name('t021')!r}; it should name session A"); sys.exit()
+if name("t031") != "by hand": print(f"t031, started from a plain terminal, has session_name {name('t031')!r}, want 'by hand'"); sys.exit()
+t = tasks.get("t033", {})
+if t.get("title") != "t033" or t.get("goal") not in ("", None): print(f"t033's spec is still the template: title should fall back to the id and goal be empty, got {t.get('title')!r}, {t.get('goal')!r}")
+PY
+)"
+[ -z "$problem" ] || fail "$problem"
+pass "every task in status --json said its title, goal, session and session name; the plain-terminal task said 'by hand'"
