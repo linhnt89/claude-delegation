@@ -8,7 +8,7 @@
   Every spec's Acceptance gets the project gate `scripts/check`; at review, `evals/run` adds
   the hidden scenarios for the same jobs.
 - t018 (2026-10-26): every checkout of the repo, worktrees included, shares one delegate home
-  beside the main checkout, so a worktree-led spec can run `evals/run` in Acceptance (S035).
+  beside the main checkout, so a worktree-led spec can run `evals/run` in Acceptance (S037).
 
 ## Goal: live view of running tasks
 Let the user and Claude see, any time, each task's phase, its worker's steps, and whether it

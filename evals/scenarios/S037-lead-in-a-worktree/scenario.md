@@ -1,4 +1,4 @@
-# S035 Claude leads from a git worktree of the project
+# S037 Claude leads from a git worktree of the project
 - Job: J2
 - Tier: fast
 - Judged by: auto
