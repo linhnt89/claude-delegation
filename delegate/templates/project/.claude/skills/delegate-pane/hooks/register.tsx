@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, ThemeKey } from 'claude-code'
 
-import type { Task, View } from '../types'
+import type { PaneState, Task, View } from '../types'
 
 // Shows `delegate status --json` in a pane beside the chat, read again every few seconds.
 const PANE = 'delegate'
@@ -12,6 +12,26 @@ const view = atom({ plugin: 'delegate-pane', key: 'view' } as const, {
   error: null,
   readAt: 0,
 } as View)
+
+const pane = atom({ plugin: 'delegate-pane', key: 'pane' } as const, {
+  running: [],
+  autoOpened: false,
+} as PaneState)
+
+async function syncPane($: EngineInterface, tasks: Task[]): Promise<void> {
+  const previous = await read($, pane)
+  const running = tasks.filter(t => LIVE.has(t.phase)).map(t => t.id)
+  // Moving between running phases must not undo a person's close.
+  const started = running.some(id => !previous.running.includes(id))
+  await update($, pane, state => ({ ...state, running }))
+  if (started && !(await $.ui.panes()).some(p => p.id === PANE)) {
+    await $.ui.open({ id: PANE, title: 'Delegate tasks' })
+    await update($, pane, state => ({ ...state, autoOpened: true }))
+  } else if (!tasks.some(t => t.phase !== 'not_started') && previous.autoOpened) {
+    await $.ui.close({ id: PANE })
+    await update($, pane, state => ({ ...state, autoOpened: false }))
+  }
+}
 
 async function refresh($: EngineInterface): Promise<View> {
   let next: View
@@ -27,6 +47,8 @@ async function refresh($: EngineInterface): Promise<View> {
     next = { tasks: [], error: `delegate isn't available here (${String(err)})`, readAt: Date.now() }
   }
   await update($, view, () => next)
+  // A failed read says nothing about whether the workers stopped.
+  if (!next.error) await syncPane($, next.tasks)
   return next
 }
 
@@ -36,23 +58,55 @@ function ago(iso: string | null, now: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m${s % 60}s` : `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`
 }
 
-function label(t: Task): { text: string; color?: string } {
-  if (t.stalled) return { text: `${t.phase}, stalled`, color: 'warning' }
-  if (t.phase === 'interrupted') return { text: 'interrupted', color: 'error' }
+function failed(t: Task): boolean {
+  return t.phase === 'interrupted' || (t.phase === 'done' && t.outcome === 'fail')
+}
+
+function group(t: Task): number {
+  return t.stalled || failed(t) ? 0 : t.phase === 'done' ? 1 : LIVE.has(t.phase) ? 2 : 3
+}
+
+function label(t: Task, now: number): { text: string; color: ThemeKey } {
+  if (t.stalled) return { text: `⚠ STALLED · quiet ${ago(t.last_activity_at, now)}`, color: 'warning' }
+  if (t.phase === 'interrupted') return { text: '✗ interrupted', color: 'error' }
+  if (t.phase === 'done' && t.outcome === 'fail') return { text: '✗ failed', color: 'error' }
   if (t.phase === 'done' && t.outcome === 'pass')
-    return { text: t.ready_to_merge ? 'done, pass, ready to merge' : 'done, pass', color: 'success' }
-  if (t.phase === 'done') return { text: `done, ${t.outcome ?? '-'}`, color: t.outcome === 'fail' ? 'error' : undefined }
+    return {
+      text: t.ready_to_merge ? '✓ ready to merge' : `✓ passed · ${t.merge_blockers?.[0] || 'not ready to merge'}`,
+      color: 'success',
+    }
+  if (t.phase === 'done') return { text: `done, ${t.outcome ?? '-'}`, color: 'inactive' }
   if (t.phase === 'not_started') return { text: 'not started', color: 'inactive' }
-  return { text: t.phase, color: 'suggestion' }
+  return { text: `● ${t.phase === 'implement' ? 'implementing' : t.phase}`, color: 'suggestion' }
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+function cellWidth(text: string): number {
+  if (/^[\p{Mark}\p{Control}\p{Format}]+$/u.test(text)) return 0
+  return /[\p{Extended_Pictographic}\p{Regional_Indicator}\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff01-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}]/u.test(text) ? 2 : 1
+}
+
+function clip(text: string, columns: number): string {
+  const cells = Array.from(graphemes.segment(text.replace(/[\r\n\t]/g, ' ')), part => part.segment)
+  const width = Math.max(0, columns)
+  if (cells.reduce((n, c) => n + cellWidth(c), 0) <= width) return cells.join('')
+  if (width === 0) return ''
+  let result = ''
+  let used = 0
+  for (const c of cells) {
+    if (used + cellWidth(c) > width - 1) break
+    result += c
+    used += cellWidth(c)
+  }
+  return `${result}…`
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const ran = await next(e)
     await $.command.register({ name: 'delegate-pane', description: 'Show delegate tasks in a pane' })
-    const first = await refresh($)
-    // Open by itself only where there is something to follow.
-    if (first.tasks.some(t => t.phase !== 'not_started')) void $.ui.open({ id: PANE, title: 'Delegate tasks' })
+    await refresh($)
     $.clock.every(EVERY_MS, () => refresh($))
     return ran
   })
@@ -60,7 +114,15 @@ export const register: Register = on => {
   on('command.run', { command: 'delegate-pane' }, async $ => {
     await refresh($)
     await $.ui.open({ id: PANE, title: 'Delegate tasks' })
+    await update($, pane, state => ({ ...state, autoOpened: false }))
     return { text: 'Delegate tasks pane opened.' }
+  })
+
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    const closed = await next(e)
+    if (e.origin.kind === 'person')
+      await update($, pane, state => ({ ...state, autoOpened: false }))
+    return closed
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -77,30 +139,33 @@ export const register: Register = on => {
       )
     return (
       <Box flexDirection="column">
-        {v.tasks.map(t => {
-          const l = label(t)
-          const files = t.changed_files.map(f => f.path)
+        {[...v.tasks].sort((a, b) => group(a) - group(b) || a.id.localeCompare(b.id)).map(t => {
+          const l = label(t, now)
           const live = LIVE.has(t.phase)
+          const n = t.changed_files.length
+          const files = `${n} ${n === 1 ? 'file' : 'files'}`
+          const bar: ThemeKey | undefined = t.stalled ? 'warning' : failed(t) ? 'error' : undefined
+          const lines = [
+            <Text color={l.color} bold={t.stalled}>{l.text}</Text>,
+            <Text><Text bold>{t.id}</Text>{t.worker ? <Text dimColor>  {t.worker}</Text> : null}</Text>,
+          ]
+          if (t.phase !== 'not_started')
+            lines.push(<Text dimColor>{live
+              ? `running ${ago(t.started_at, now)} · quiet ${ago(t.last_activity_at, now)} · ${n ? files : 'no files yet'}`
+              : `done · ${files}`}</Text>)
+          if (live)
+            for (const s of t.steps.slice(-3))
+              lines.push(<Text dimColor wrap="truncate-end">{clip(`  ${s.kind} ${s.target ?? ''} ${s.result ?? ''}`, e.props.bodyColumns - 2)}</Text>)
+          if ((t.stalled || failed(t) || t.ready_to_merge) && (t.next || t.stalled))
+            lines.push(<Text>→ {t.next || `delegate status ${t.id}`}</Text>)
           return (
-            <Box flexDirection="column" marginBottom={1}>
-              <Text>
-                <Text bold>{t.id}</Text> <Text color={l.color}>{l.text}</Text>
-                {t.worker ? <Text dimColor>  {t.worker}</Text> : null}
-              </Text>
-              {t.phase !== 'not_started' && (
-                <Text dimColor>
-                  {live ? `running ${ago(t.started_at, now)}, ` : ''}last activity {ago(t.last_activity_at, now)} ago
-                  {files.length ? `, ${files.length} files: ${files.slice(0, 3).join(', ')}${files.length > 3 ? ', …' : ''}` : ''}
-                </Text>
-              )}
-              {live &&
-                t.steps.slice(-3).map(s => (
-                  <Text dimColor>
-                    {'  '}
-                    {s.kind} {s.target ?? ''} {s.result ?? ''}
-                  </Text>
-                ))}
-              {!live && t.next && <Text dimColor>  next: {t.next}</Text>}
+            <Box key={t.id} flexDirection="column" marginBottom={1}>
+              {lines.map(line => (
+                <Box flexDirection="row">
+                  <Box width={1} flexShrink={0} marginRight={1}><Text color={bar}>{bar ? '┃' : ' '}</Text></Box>
+                  <Box minWidth={0} flexShrink={1}>{line}</Box>
+                </Box>
+              ))}
             </Box>
           )
         })}

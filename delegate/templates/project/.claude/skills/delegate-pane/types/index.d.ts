@@ -13,14 +13,18 @@ export type Task = {
   changed_files: { path: string }[]
   steps: Step[]
   ready_to_merge: boolean
+  merge_blockers: string[]
   next: string | null
 }
 
 /** What the pane last read: the tasks, or why there are none. */
 export type View = { tasks: Task[]; error: string | null; readAt: number }
 
+/** Pane ownership and the running tasks seen at the last successful refresh. */
+export type PaneState = { running: string[]; autoOpened: boolean }
+
 declare module 'claude-code' {
   interface PluginState {
-    'delegate-pane': { view: View }
+    'delegate-pane': { view: View; pane: PaneState }
   }
 }
