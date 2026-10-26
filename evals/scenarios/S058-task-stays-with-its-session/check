@@ -14,9 +14,11 @@ as_session "$SESS_A" "$PROJ" write_spec t021 "Project id and vault" "Give each p
 as_session "" "$PROJ" write_spec t040 "Split bills" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
 owner() { sj 's["tasks"][0].get("session")' "$1"; }
 [ "$(owner t021)" = "$SESS_A" ] || fail "t021, created in session A, has session '$(owner t021)'"
+as_session "$SESS_A" "$PROJ" d run t021
+[ "$RC" -eq 0 ] || fail "setup: session A couldn't run t021: $OUT"
 as_session "$SESS_B" "$WT_B" d run t021
-[ "$RC" -eq 0 ] || fail "session B couldn't run t021: $OUT"
-[ "$(sj 's["tasks"][0]["ready_to_merge"]' t021)" = true ] || fail "setup: t021 isn't ready to merge after its run: $OUT"
+[ "$RC" -eq 0 ] || fail "session B couldn't run another round of t021: $OUT"
+[ "$(sj 's["tasks"][0]["ready_to_merge"]' t021)" = true ] || fail "setup: t021 isn't ready to merge after B's round: $OUT"
 [ "$(owner t021)" = "$SESS_A" ] || fail "after session B ran t021 it belongs to '$(owner t021)', not session A"
 as_session "$SESS_B" "$WT_B" d status t021
 as_session "$SESS_B" "$WT_B" d review t021 >/dev/null 2>&1
@@ -32,4 +34,4 @@ printf '%s' "$PLAIN" | grep -q '2 ready to merge' || fail "session A's status li
 line_as "$SESS_B" "$WT_B"
 printf '%s' "$PLAIN" | grep -Eq 't021|t040' && fail "session B's status line names A's tasks by id: $PLAIN"
 printf '%s' "$PLAIN" | grep -Eq '(shop|main)[^·│]* 2' || fail "session B's status line doesn't count A's two tasks in A's group: $PLAIN"
-pass "t021 stayed with session A after B ran and reviewed it; unowned t040 went to A, its first runner, and stayed"
+pass "t021 stayed with session A after B ran another round and reviewed it; unowned t040 went to A, its first runner, and stayed"

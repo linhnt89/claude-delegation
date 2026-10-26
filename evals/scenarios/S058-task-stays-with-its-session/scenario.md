@@ -12,7 +12,7 @@ A project set up with `delegate init`. Session A created t021 with `delegate new
 t040 was created from a plain terminal.
 
 ## Steps
-1. From session B, run t021 to the end, so it's ready to merge.
+1. Session A runs t021; then, from session B, run another round of it, so it's ready to merge.
 2. From session A, run t040.
 3. Read `delegate status --json` and the status line as A and as B.
 
