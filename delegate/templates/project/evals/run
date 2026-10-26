@@ -36,7 +36,9 @@ fi
 hidden="${EVALS_HIDDEN:-$dhome/_evals/hidden}"
 [ -d "$hidden" ] || hidden=""
 results="${EVALS_RESULTS:-$dhome/_evals/results}"
-mkdir -p "$results" 2>/dev/null || results="$(mktemp -d)"
+if ! mkdir -p "$results" 2>/dev/null || [ ! -w "$results" ]; then
+  results="$(mktemp -d)"
+fi
 
 selection="fast"
 ids=()

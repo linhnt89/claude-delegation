@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# The lead works in a git worktree of the project, as the desktop app sets it up.
+. "$EVALS_LIB/common.sh"
+setup_project
+cd "$PROJ"
+mkdir -p evals/scenarios/S001-split-bill
+printf '# S001 Split a bill\n- Job: J1\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' \
+  >evals/scenarios/S001-split-bill/scenario.md
+printf '#!/usr/bin/env bash\ncd "$EVALS_ROOT" && python3 -c "from shop.pricing import divide_bill as d; assert d(10, 3) == 3.33"\n' \
+  >evals/scenarios/S001-split-bill/check
+chmod +x evals/scenarios/S001-split-bill/check
+git add -A && git commit -qm "Scenario: split a bill"
+echo ".claude/worktrees/" >>.git/info/exclude
+lead="$PROJ/.claude/worktrees/lead"
+git worktree add -q -b claude/lead "$lead" || fail "could not make the lead's worktree"
+cd "$EVALS_WORK"
+mkdir -p "$DHOME/_evals/hidden/scenarios/S900-secret"
+echo "HIDDEN-CHECK-CONTENT-7f3a" >"$DHOME/_evals/hidden/scenarios/S900-secret/scenario.md"
+
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() {
+  printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
+  main="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+  { cat "$main.delegate/_evals/hidden/scenarios/"*/scenario.md
+    cat "$PROJ/.claude/worktrees/lead.delegate/_evals/hidden/scenarios/"*/scenario.md
+  } >"$HOME/.cache/hidden-read" 2>/dev/null
+  printf '# Report\nAdded divide_bill.\n' >.task/REPORT.md
+}
+B
+
+export DCWD="$lead"
+d new t001
+[ "$RC" -eq 0 ] || fail "delegate new from the lead's worktree failed: $OUT"
+[ -e "$lead.delegate" ] && fail "task state went to the worktree's own folder ($lead.delegate), not the project's delegate home"
+[ -f "$DHOME/t001/SPEC.md" ] || fail "no t001/SPEC.md in the project's delegate home $DHOME"
+write_spec_body() {
+  printf '# Task t001: Split a bill\n\n## Goal\nAdd divide_bill.\n\n## Context (read these, nothing more)\n- `shop/pricing.py`\n\n## Scope\n- In: `shop/pricing.py`\n- Out: everything else\n\n## Acceptance\n- [ ] `evals/run S001`\n\n## If unsure\nSTOP.\n'
+}
+write_spec_body >"$DHOME/t001/SPEC.md"
+
+d run t001
+[ "$RC" -eq 0 ] || fail "the run failed (exit $RC): $(echo "$OUT" | tail -5)"
+echo "$OUT" | grep -qi "read-only file system" && fail "evals/run hit a read-only folder inside the sandbox: $(echo "$OUT" | grep -i -m1 'read-only')"
+grep -q "HIDDEN-CHECK-CONTENT" "$HOME/.cache/hidden-read" 2>/dev/null && fail "the worker read the hidden scenarios"
+d review t001
+[ "$RC" -eq 0 ] || fail "review failed: $(echo "$OUT" | tail -3)"
+before="$(git -C "$lead" rev-parse HEAD)"
+d merge t001
+[ "$RC" -eq 0 ] || fail "merge from the lead's worktree failed: $(echo "$OUT" | tail -3)"
+[ "$(git -C "$lead" rev-parse HEAD)" != "$before" ] || fail "the merge didn't land on the lead's branch"
+git -C "$lead" show HEAD:shop/pricing.py | grep -q divide_bill || fail "the lead's branch doesn't have the task's change"
+d list
+echo "$OUT" | grep -q "no tasks" || fail "delegate list still shows tasks after the merge: $OUT"
+pass "from a worktree, task state, acceptance via evals/run, hidden checks and merge all work"

@@ -11,9 +11,9 @@ use crate::config::Tier;
 /// Paths every command needs.
 #[derive(Debug)]
 pub struct Ctx {
-    /// Main checkout.
+    /// Toplevel of the current checkout (possibly a linked worktree).
     pub root: PathBuf,
-    /// Task state: `$DELEGATE_HOME` or `../<repo>.delegate`.
+    /// Task state: `$DELEGATE_HOME` or `<main checkout>.delegate` beside the main checkout.
     pub dhome: PathBuf,
     /// Shared git dir (`.git` of the main checkout).
     pub gitdir: PathBuf,
@@ -25,22 +25,23 @@ impl Ctx {
         let root = PathBuf::from(
             git(&cwd, &["rev-parse", "--show-toplevel"]).context("not inside a git repository")?,
         );
-        let dhome = std::env::var_os("DELEGATE_HOME").map_or_else(
-            || {
-                let name = root
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                root.parent()
-                    .unwrap_or(&root)
-                    .join(format!("{name}.delegate"))
-            },
-            PathBuf::from,
-        );
         let gitdir = PathBuf::from(git(
             &root,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?);
+        let dhome = std::env::var_os("DELEGATE_HOME").map_or_else(
+            || {
+                let main = gitdir.parent().unwrap_or(&root);
+                let name = main
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                main.parent()
+                    .unwrap_or(main)
+                    .join(format!("{name}.delegate"))
+            },
+            PathBuf::from,
+        );
         Ok(Ctx {
             root,
             dhome,
@@ -270,6 +271,78 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discover_shares_home_across_worktrees() -> Result<()> {
+        const EXPECTED_HOME: &str = "_DELEGATE_TEST_DISCOVER_HOME";
+        struct TempRepo(PathBuf);
+        impl Drop for TempRepo {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        if let Some(expected) = std::env::var_os(EXPECTED_HOME) {
+            let ctx = Ctx::discover()?;
+            assert_eq!(ctx.dhome, PathBuf::from(expected));
+            assert_eq!(ctx.root, std::env::current_dir()?);
+            return Ok(());
+        }
+
+        // Discover uses process-global cwd and environment; isolate each call in a child.
+        let temp = TempRepo(std::env::temp_dir().join(format!(
+            "delegate-discover-{}",
+            uuid::Uuid::new_v4()
+        )));
+        let main = temp.0.join("project");
+        std::fs::create_dir_all(&main)?;
+        git(&main, &["init", "-q"])?;
+        git(
+            &main,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "initial",
+                "--allow-empty",
+            ],
+        )?;
+        let linked = main.join(".claude/worktrees/lead");
+        git(
+            &main,
+            &["worktree", "add", "-q", "--detach", &linked.to_string_lossy()],
+        )?;
+        let shared_home = temp.0.join("project.delegate");
+        let override_home = temp.0.join("override");
+        for (checkout, expected, overridden) in [
+            (&main, &shared_home, false),
+            (&linked, &shared_home, false),
+            (&linked, &override_home, true),
+        ] {
+            let mut child = Command::new(std::env::current_exe()?);
+            child
+                .args(["--exact", "task::tests::discover_shares_home_across_worktrees"])
+                .current_dir(checkout)
+                .env_remove("DELEGATE_HOME")
+                .env(EXPECTED_HOME, expected);
+            if overridden {
+                child.env("DELEGATE_HOME", expected);
+            }
+            let output = child.output()?;
+            assert!(
+                output.status.success(),
+                "discover from {} failed:\n{}\n{}",
+                checkout.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        Ok(())
+    }
 
     fn round() -> Round {
         Round {

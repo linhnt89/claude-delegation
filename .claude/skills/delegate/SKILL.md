@@ -9,7 +9,8 @@ Goal: put every available model to work where it fits (quality, quota, parallel 
 second opinion), while Claude keeps planning, specs and decisions. Trust comes from the same
 checks for every model, not from which model did the work.
 Runner: the `delegate` binary on PATH (`delegate --help`). All task state lives outside the
-repo (`../<repo>.delegate/<id>/`) and is deleted on merge or discard.
+repo, beside the main checkout even when you lead from a worktree
+(`<main checkout>.delegate/<id>/`), and is deleted on merge or discard.
 
 Which model does the work is decided by **role × tier** in `~/.config/delegate/workers.toml`,
 never per task. Project rules in `.delegate.toml` set minimum tiers and required reviews by path.
