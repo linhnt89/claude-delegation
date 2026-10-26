@@ -24,8 +24,8 @@ A project set up with `delegate init`; two tasks running with steps, one stalled
 - It updates by itself as steps and phases change.
 - It is easy to read in both light and dark mode: every colour stands out from the background, and dim text is still readable.
 - It closes by itself once no task is left to act on (all merged or discarded).
-- While the pane is closed and a task is left to act on, one row above the prompt sums up the tasks, trouble first, with a count and colour per status: `⚠ 1 stalled · ✗ 1 failed · ✓ 1 ready to merge · ● 2 running · Open tasks ›` (stalled in the warning colour, interrupted or failed in the error colour, ready to merge in the success colour).
-- A click anywhere on that row opens the side pane, in the desktop app and in the terminal, at any window width.
+- While the pane is closed and a task is left to act on, one row above the prompt sums up the tasks, trouble first, with a count per status in the same colours as the pane: `delegate  ⚠ 1 stalled · ✗ 1 failed · ✓ 1 ready to merge · ● 2 running  [Open tasks]` (stalled in the warning colour, interrupted or failed in the error colour, ready to merge in the success colour), in the desktop app and in the terminal.
+- The row's `Open tasks` button opens the side pane with a click in the desktop app and in the fullscreen terminal, at any window width. On the terminal's normal screen, where clicks don't reach it, the row ends with `/delegate-pane or ctrl+x tab, Enter to open`, and both ways open the pane.
 - The row is hidden while the pane is open, comes back when the pane is closed with tasks left, and is gone once no task is left to act on.
 
 ## If this fails
@@ -33,7 +33,7 @@ The user who lives in the desktop app has no live view of their workers there.
 
 ## Failure paths
 - No tasks: the pane says so instead of looking broken.
-- `delegate status` can't be read: the row says `delegate: status unavailable · Open tasks ›` instead of disappearing.
+- `delegate status` can't be read: the row says `delegate: status unavailable` with the same way to open the pane instead of disappearing.
 
 ## Properties
 - None.

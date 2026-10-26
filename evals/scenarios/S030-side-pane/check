@@ -18,8 +18,9 @@ Look for:
 - once every task is merged or discarded it closes by itself
 - no tasks: it says so instead of looking broken
 Then close the pane by hand and look above the prompt:
-- one row sums up the tasks, trouble first, a coloured count per status, ending "Open tasks ›"
-- a click anywhere on it opens the pane (try the terminal too, in a narrow window)
+- one row sums up the tasks, trouble first, each count in the pane's colours, then an "Open tasks" button
+- a click on the button opens the pane, in the app and in the fullscreen terminal (narrow window too)
+- in a terminal on the normal screen the row ends "/delegate-pane or ctrl+x tab, Enter to open"; both work
 - the row hides while the pane is open, returns when you close it, and is gone with no tasks
 - if `delegate status` fails, the row says "delegate: status unavailable" instead
 Pass if all hold.
