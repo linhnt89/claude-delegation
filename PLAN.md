@@ -51,5 +51,15 @@ cards, once Claude Code offers mods such a slot. Seen on the way, not fixed:
   the main repo's `.delegate/`, which the worker sandbox mounts read-only, so evals in a
   spec's Acceptance fail unless they set `EVALS_RESULTS`.
 
+A card beside the desktop app's Environment/Context cards (checked 2026-10-26, Claude Code
+2.1.308): not possible with supported means. In the mod API types (`claude-code.d.ts`), the
+components a mod draws are `RenderComponent` (~line 9812): message rows, tool rows, spinner,
+hints, `AbovePrompt` and `Pane`, with no side card. `Pane` is the only one a mod opens, seated
+as `placement: 'dock' | 'inline'` (~10879). The `desktop` element table (~3951) lists elements
+(Box, Text, Svg, Client...), not places. `$.ui.mount` draws in tests only (`MountTarget`, ~16765).
+MCP app widgets render inline in the chat, and the app's settings have nothing for it. Closest
+supported: the docked pane we have, made narrow with `$.ui.open({ columns })` (~7647), plus the
+status line. Revisit when the mod API adds a side-card component.
+
 ## Open questions
 - None.
