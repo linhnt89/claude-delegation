@@ -14,7 +14,7 @@ A project set up with `delegate init`; two tasks running, one ready to merge.
 1. Run the status line command that `init` configured, the way Claude Code runs it.
 
 ## Passes when
-- It prints one short line: each task's id and phase (and stalled when it is), and how many are ready to merge.
+- It prints one short line: each of this session's tasks by id and phase (and stalled when it is), and how many of them are ready to merge; other sessions' tasks follow as dimmed counts (S055). With no session id on stdin, every task is this session's.
 - With no tasks it prints nothing delegate-related.
 - It answers fast enough not to slow Claude Code down (well under a second).
 

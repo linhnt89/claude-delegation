@@ -16,7 +16,7 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 | J5 Run several tasks at once | Parallel tasks don't step on each other, and `delegate list` shows where each one stands |
 | J6 Research and plan review | A read-only research run returns a report and changes no code. Plan review uses a model that isn't Claude and finds real problems before work starts |
 | J7 The repo stays the shared memory | Decisions and scenarios are kept in the repo. After merge or discard, no task state is left behind and none ends up in git history |
-| J8 See what running tasks are doing | I start a run in the background and can see any time, from the terminal or Claude Code, each task's phase, its worker's steps as they happen, and whether it has stalled or died. Claude can check the same thing to decide what to do next |
+| J8 See what running tasks are doing | I start a run in the background and can see any time, from the terminal or Claude Code, each task's phase, what it is for, which session started it, its worker's steps as they happen, and whether it has stalled or died. Claude can check the same thing to decide what to do next |
 | J9 Claude leads, workers build | Once a plan is agreed, Claude writes neither product code nor checks itself. Its attempts are refused with what to do instead, and workers are never slowed by it. Only I can turn that off |
 
 ## What would make them give up
@@ -41,3 +41,4 @@ chosen from scenarios that pass today, mostly properties and failure paths:
 J1 P012 (new feature: fails until built) · J2 S007 · J3 P001 · J4 S014 · J5 S016 · J7 S021 ·
 J8 P010 S028. J6 has none: its one scenario, S017, stays visible.
 Added for decision 007 (new feature: fail until built): J7 P015 P016.
+Added for session-scoped views (new feature: fails until built): J8 P018.

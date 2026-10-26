@@ -41,7 +41,8 @@ mkdir -p "$EVALS_WORK/bin" "$EVALS_WORK/stub"
 # `delegate` is on the user's PATH, so the project's evals/run and skills can call it.
 ln -sf "$DELEGATE" "$EVALS_WORK/bin/delegate"
 export PATH="$EVALS_WORK/bin:$PATH"
-unset DELEGATE_HOME DELEGATE_WORKERS DELEGATE_SANDBOX XDG_DATA_HOME XDG_CONFIG_HOME
+# The lead running the evals is itself a Claude Code session: its id must not own test tasks.
+unset DELEGATE_HOME DELEGATE_WORKERS DELEGATE_SANDBOX XDG_DATA_HOME XDG_CONFIG_HOME CLAUDE_CODE_SESSION_ID
 # Nothing a check starts (delegate, workers, a Claude under test) may find the hidden set
 # or write into this run's results.
 unset EVALS_HIDDEN EVALS_RESULTS

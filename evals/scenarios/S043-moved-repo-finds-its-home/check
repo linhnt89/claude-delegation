@@ -38,7 +38,8 @@ B
 SCOPE='`shop/pricing.py`' write_spec t002 "Add a tip" "Add tip." "python3 -m unittest -q"
 bg_run t002 --no-ask --worker pi:gpt-slow@high
 [ "$RC" -eq 0 ] || fail "setup: background run failed to start: $OUT"
-wait_until 30 test -n "$(calls_where work gpt-slow)" || fail "setup: the background worker never started"
+has_call() { [ -n "$(calls_where "$@")" ]; }
+wait_until 30 has_call work gpt-slow || fail "setup: the background worker never started"
 mv "$PROJ" "$EVALS_WORK/shop3"
 export PROJ="$EVALS_WORK/shop3"
 flag go
