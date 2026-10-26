@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# A project in use is moved to another folder; its delegate home stays behind.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+work() { printf '\n\ndef divide_bill(a, p):\n    return a / p\n' >>shop/pricing.py; }
+B
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+d run t001
+[ -f "$DHOME/t001/SUMMARY.txt" ] || fail "setup: the first round didn't finish: $OUT"
+for id in S901 S902; do
+  mkdir -p "$DHOME/_evals/hidden/scenarios/$id-hidden"
+  printf '# %s Hidden check\n- Job: J1\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' "$id" \
+    >"$DHOME/_evals/hidden/scenarios/$id-hidden/scenario.md"
+  printf '#!/usr/bin/env bash\necho "hidden %s ran"\n' "$id" >"$DHOME/_evals/hidden/scenarios/$id-hidden/check"
+  chmod +x "$DHOME/_evals/hidden/scenarios/$id-hidden/check"
+done
+d list
+listed="$OUT"
+echo "$listed" | grep -q t001 || fail "setup: delegate list doesn't show t001 before the move: $listed"
+OLD="$DHOME"
+snapshot() { find "$EVALS_WORK" -path "$EVALS_WORK/home" -prune -o -path '*/.git' -prune -o -print | sort; }
+
+# Copy first: the original still exists, so nothing should point the copy at its home.
+cp -a "$PROJ" "$EVALS_WORK/shop-copy"
+DCWD="$EVALS_WORK/shop-copy" d list
+echo "$OUT" | grep -qF "$OLD" && fail "a copy of the repo was told about the original's delegate home: $OUT"
+
+# The move.
+rm -rf "$EVALS_WORK/shop-copy" "$EVALS_WORK/shop-copy.delegate"
+mkdir -p "$EVALS_WORK/projects"
+mv "$PROJ" "$EVALS_WORK/projects/shop"
+export PROJ="$EVALS_WORK/projects/shop"
+NEW="$EVALS_WORK/projects/shop.delegate"
+before="$(snapshot)"
+
+d list
+echo "$OUT" | grep -qF "$OLD" || fail "after the move, delegate list doesn't say the home is still at $OLD: $OUT"
+cmd="$(echo "$OUT" | grep -oE "mv [^\`]*$(printf '%s' "$OLD" | sed 's/[.]/\\./g')[^\`]*" | head -1)"
+[ -n "$cmd" ] || fail "after the move, delegate list gives no mv command for the old home: $OUT"
+ev="$(cd "$PROJ" && evals/run fast 2>&1)"
+echo "$ev" | grep -qF "$OLD" || fail "after the move, evals/run doesn't say the home is still at $OLD: $(echo "$ev" | head -3)"
+[ "$(snapshot)" = "$before" ] || fail "delegate or evals/run moved or deleted files by itself"
+
+note "running: $cmd"
+(cd "$EVALS_WORK" && eval "$cmd") || fail "the suggested command failed: $cmd"
+[ -d "$NEW/t001" ] || fail "the suggested command didn't put the home beside the repo at $NEW"
+d list
+[ "$OUT" = "$listed" ] || fail "after moving the home, delegate list differs from before the move: $OUT"
+ev="$(cd "$PROJ" && evals/run fast 2>&1)"
+echo "$ev" | grep -q "S901" && echo "$ev" | grep -q "S902" || fail "after moving the home, evals/run doesn't run the hidden scenarios: $(echo "$ev" | tail -3)"
+
+# The old home gone too: said once, then quiet.
+mv "$PROJ" "$EVALS_WORK/shop-again"
+export PROJ="$EVALS_WORK/shop-again"
+rm -rf "$NEW"
+d list
+echo "$OUT" | grep -qF "$NEW" && echo "$OUT" | grep -qiE "missing|gone|lost" ||
+  fail "with the old home deleted, delegate list doesn't say $NEW is missing: $OUT"
+d list
+echo "$OUT" | grep -qF "$NEW" && fail "delegate list keeps warning about the lost home: $OUT"
+pass "after a move, delegate and evals/run pointed at the old home, and one command brought it back"
