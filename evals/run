@@ -15,7 +15,7 @@
 #   EVALS_LIB       evals/lib (helpers)     EVALS_WORK   the fresh directory (also cwd)
 #   EVALS_SCENARIO  the scenario's folder   EVALS_HIDDEN hidden material, or empty
 #
-# Hidden scenarios live outside the repo in <delegate home>/_evals/hidden/scenarios/, where
+# Hidden scenarios live in the private vault (delegate where prints their folder), where
 # workers can't read them. Results go to <delegate home>/_evals/results/ (override with
 # EVALS_RESULTS). Per-check timeout: "- Timeout: <seconds>" in scenario.md, else
 # EVALS_TIMEOUT, else 900.
@@ -33,7 +33,20 @@ elif common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 
 else
   dhome="$(dirname "$root")/$(basename "$root").delegate"
 fi
-hidden="${EVALS_HIDDEN:-$dhome/_evals/hidden}"
+# Prefer the project-id vault when this delegate supports `where`. Older binaries
+# keep the previous rule. An explicit EVALS_HIDDEN still overrides discovery.
+hidden="$dhome/_evals/hidden"
+if command -v delegate >/dev/null 2>&1 && delegate --help 2>/dev/null | grep -qE '^[[:space:]]+where[[:space:]]'; then
+  if locations="$(cd "$root" && delegate where)"; then
+    hidden="$(printf '%s\n' "$locations" | awk '/^hidden / {sub(/^hidden /, ""); if ($0 !~ /^none:/) print; exit}')"
+    reason="$(printf '%s\n' "$locations" | awk '/^hidden none:/ {print; exit}')"
+    [ -z "$reason" ] || printf '%s\n' "$reason" >&2
+  else
+    echo "evals: delegate where failed; cannot locate the hidden set" >&2
+    exit 1
+  fi
+fi
+hidden="${EVALS_HIDDEN:-$hidden}"
 [ -d "$hidden" ] || hidden=""
 results="${EVALS_RESULTS:-$dhome/_evals/results}"
 if ! mkdir -p "$results" 2>/dev/null || [ ! -w "$results" ]; then

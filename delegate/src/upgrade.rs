@@ -28,6 +28,8 @@ const REBUILD: &str =
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct Record {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub kit: String,
     pub files: BTreeMap<String, String>,
 }
@@ -35,6 +37,7 @@ pub(crate) struct Record {
 impl Record {
     pub fn new() -> Self {
         Self {
+            project: Some(uuid::Uuid::new_v4().to_string()),
             kit: current().id,
             files: BTreeMap::new(),
         }
@@ -366,6 +369,7 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
         .collect();
     let baseline = identify(&kits, &unrecorded);
     let mut record = saved.unwrap_or_else(|| Record {
+        project: None,
         kit: baseline.map_or_else(|| now.id.clone(), |kit| kit.id.clone()),
         files: BTreeMap::new(),
     });
@@ -464,6 +468,7 @@ mod tests {
                 }
             }
             let record = Record {
+                project: Some(uuid::Uuid::new_v4().to_string()),
                 kit: current().id,
                 files: current().files,
             };
@@ -673,6 +678,7 @@ mod tests {
         old.files.insert("obsolete.txt".into(), sha256::hex(b"old"));
         let mut hashes = old.files.clone();
         let mut record = Record {
+            project: None,
             kit: old.id.clone(),
             files: old.files.clone(),
         };

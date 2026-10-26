@@ -1,4 +1,4 @@
-//! `delegate init`: add the project files and the user's worker config, never overwriting.
+//! `delegate init`: add project files; machine configuration belongs to `setup`.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use crate::config::{WORKERS_EXAMPLE, user_config_path};
+use crate::config::user_config_path;
 use crate::task::git;
 
 // Keep include_str! calls on one line: historical kit readers parse this list.
@@ -90,7 +90,10 @@ fn configure_status_line(root: &Path) -> Result<()> {
             fs::create_dir_all(parent)?;
         }
         let settings = serde_json::json!({"statusLine": status_line()});
-        fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&settings)?))?;
+        fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&settings)?),
+        )?;
         println!("added    {CLAUDE_SETTINGS} (Claude Code status line)");
         return Ok(());
     }
@@ -101,9 +104,7 @@ fn configure_status_line(root: &Path) -> Result<()> {
         return Ok(());
     };
     let Some(object) = settings.as_object_mut() else {
-        println!(
-            "kept     {CLAUDE_SETTINGS} (not a JSON object; add the status line by hand)"
-        );
+        println!("kept     {CLAUDE_SETTINGS} (not a JSON object; add the status line by hand)");
         return Ok(());
     };
     if object.contains_key("statusLine") {
@@ -159,17 +160,11 @@ pub fn init(dir: &Path) -> Result<()> {
         crate::upgrade::RECORD,
     )?;
     configure_status_line(root)?;
-    let cfg = user_config_path();
-    write_new(
-        &cfg,
-        WORKERS_EXAMPLE,
-        &format!(
-            "{} (your worker models, shared by all projects)",
-            cfg.display()
-        ),
-    )?;
     println!(
-        "\nNext: fill in AGENTS.md (commands first) and .delegate.toml rules, run /evaluate define, then commit."
+        "\nNext: fill in AGENTS.md (commands first) and .delegate.toml rules, run /evaluate define, then commit (including .delegate-kit.toml)."
     );
+    if !user_config_path().is_file() {
+        println!("this machine isn't set up: run delegate setup");
+    }
     Ok(())
 }

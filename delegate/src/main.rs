@@ -5,12 +5,14 @@ mod config;
 mod harness;
 mod init;
 mod prompts;
+mod setup;
 mod sha256;
 mod spec;
 mod status;
 mod statusline;
 mod task;
 mod upgrade;
+mod vault;
 mod wait;
 mod watch;
 
@@ -38,7 +40,20 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Cmd {
-    /// Add the project files (AGENTS.md, skills, rules, ...) and your worker config if missing
+    /// Set up this machine's worker config, check harnesses and connect a vault
+    Setup {
+        /// Private git remote for the hidden-scenario vault
+        #[arg(long)]
+        vault: Option<String>,
+    },
+    /// Print this checkout's task-state and hidden-scenario folders
+    Where,
+    /// Manage hidden scenarios outside the project
+    Hidden {
+        #[command(subcommand)]
+        cmd: HiddenCmd,
+    },
+    /// Add the project files (AGENTS.md, skills, rules, ...) if missing
     Init {
         /// Project directory (default: current)
         dir: Option<PathBuf>,
@@ -137,7 +152,17 @@ enum Cmd {
     Discard { id: String },
 }
 
+#[derive(Debug, Subcommand)]
+enum HiddenCmd {
+    /// Move a scenario folder into the vault, commit it and push if connected
+    Add { folder: PathBuf },
+}
+
 fn dispatch(cmd: Cmd) -> Result<ExitCode> {
+    if let Cmd::Setup { vault } = &cmd {
+        setup::run(vault.as_deref())?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if let Cmd::Init { dir } = &cmd {
         let dir = dir.clone().map_or_else(std::env::current_dir, Ok)?;
         init::init(&dir)?;
@@ -157,9 +182,17 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         return wait::run(&ctx, ids, timeout.as_deref());
     }
     match cmd {
-        Cmd::Init { .. } | Cmd::Upgrade { .. } | Cmd::Wait { .. } | Cmd::Statusline => {
+        Cmd::Setup { .. }
+        | Cmd::Init { .. }
+        | Cmd::Upgrade { .. }
+        | Cmd::Wait { .. }
+        | Cmd::Statusline => {
             unreachable!("handled above")
         }
+        Cmd::Where => vault::where_paths(&ctx),
+        Cmd::Hidden {
+            cmd: HiddenCmd::Add { folder },
+        } => vault::add(&ctx, &folder),
         Cmd::New { id, prune } => commands::new(&ctx, &id, prune),
         Cmd::Run {
             id,

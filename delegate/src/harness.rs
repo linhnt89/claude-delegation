@@ -3,6 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -52,8 +53,13 @@ fn state_dirs(harness: Option<Harness>) -> Vec<PathBuf> {
 }
 
 pub(crate) fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(program).is_file()))
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|d| {
+            d.join(program)
+                .metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+    })
 }
 
 /// Acceptance checks need bwrap even when every worker uses Codex's own sandbox.
@@ -105,6 +111,12 @@ pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Resul
         if p.exists() {
             sb.extend(["--bind".into(), s(p), s(p)]);
         }
+    }
+    // Last mount wins: an XDG data folder under a harness state dir or ~/.cache
+    // must not be re-exposed by the read-write binds above.
+    let data = crate::vault::data_dir();
+    if data.exists() {
+        sb.extend(["--tmpfs".into(), s(&data)]);
     }
     sb.extend(["--chdir".into(), s(chdir)]);
     Ok(sb)
@@ -368,6 +380,59 @@ mod tests {
 
     fn w(s: &str) -> Worker {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn data_is_hidden_after_state_and_worktree_binds() {
+        if std::env::var_os("DELEGATE_TEST_DATA_HIDE").is_some() {
+            let data = crate::vault::data_dir();
+            let root = home();
+            let bounds = Bounds {
+                rw: vec![root.join(".cache")],
+                ..Bounds::default()
+            };
+            for harness in [Some(Harness::Pi), Some(Harness::Opencode), None] {
+                let args = sandbox(harness, &bounds, &root).unwrap();
+                let data_hide = args
+                    .windows(2)
+                    .position(|w| w == ["--tmpfs", data.to_str().unwrap()])
+                    .unwrap();
+                let last_bind = args.iter().rposition(|a| a == "--bind").unwrap();
+                assert!(data_hide > last_bind, "{args:?}");
+            }
+            assert_eq!(
+                sandbox(Some(Harness::Codex), &bounds, &root).unwrap(),
+                Vec::<String>::new()
+            );
+            return;
+        }
+        let root =
+            std::env::temp_dir().join(format!("delegate-data-hide-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".cache/delegate")).unwrap();
+        std::fs::create_dir(root.join(".pi")).unwrap();
+        std::fs::create_dir(root.join("bin")).unwrap();
+        let bwrap = root.join("bin/bwrap");
+        std::fs::write(&bwrap, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::tests::data_is_hidden_after_state_and_worktree_binds",
+            ])
+            .env("HOME", &root)
+            .env("XDG_DATA_HOME", root.join(".cache"))
+            .env("PATH", root.join("bin"))
+            .env("DELEGATE_TEST_DATA_HIDE", "1")
+            .env_remove("DELEGATE_SANDBOX")
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            out.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]

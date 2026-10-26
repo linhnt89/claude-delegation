@@ -235,7 +235,7 @@ impl WorkersConfig {
             }
         }
         eprintln!(
-            "note: no {}, using the built-in defaults (run: delegate init)",
+            "note: no {}, using the built-in defaults (run: delegate setup)",
             user_config_path().display()
         );
         Ok(toml::from_str(WORKERS_EXAMPLE)?)

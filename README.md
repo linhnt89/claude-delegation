@@ -29,12 +29,18 @@ machine and put it on your PATH:
 ```bash
 cd delegate && mise exec -- cargo build --release && cp target/release/delegate ~/.local/bin/
 ```
-Then, in each project (a git repo):
+Set up this machine (optionally connect your private vault remote):
+```bash
+delegate setup [--vault <url>]
+```
+Then, once in each new project (a git repo; clones already have the project files):
 ```bash
 delegate init
 ```
-`init` adds the project files (templates are built into the binary) and creates
-`~/.config/delegate/workers.toml` if missing; it never overwrites a file. It also sets up Claude
+`setup` creates `~/.config/delegate/workers.toml` from harnesses installed on PATH, never
+replacing an existing config, and checks harnesses, the vault and bwrap. Rerun it as a health
+check. `init` adds only project files (templates are built into the binary), keeping existing
+kit files. It also sets up Claude
 Code's status line (added to your `.claude/settings.json` unless you have your own) and the `/delegate-pane` side pane, which show
 running tasks live; while the pane is closed, a row above the prompt sums the tasks up and
 opens it. Then fill in `AGENTS.md`
@@ -51,7 +57,10 @@ Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
 ## Commands
 | Command | What it does |
 |---|---|
-| `delegate init [dir]` | Add project files and your worker config, never overwriting |
+| `delegate setup [--vault <url>]` | Set up this machine's workers and vault, or check their health |
+| `delegate where` | Print task-state and hidden-scenario folders (or why hidden scenarios are unavailable) |
+| `delegate hidden add <scenario folder>` | Move a scenario into the vault, commit and push when connected |
+| `delegate init [dir]` | Add project files, keeping existing kit files |
 | `delegate upgrade [<path>...]` | Update pristine kit files, preserving edits; paths explicitly take current versions |
 | `delegate new <id> [--prune]` | Create a spec from the template (or the stale-doc pruning spec) |
 | `delegate run <id> [--tier T]` | Question phase, work phase, commit, acceptance checks |
@@ -130,10 +139,22 @@ worktree (override with `DELEGATE_HOME`), and are deleted on merge or discard. I
 worktree a worker sees only `.task/` (its spec and templates), which git ignores via
 `.git/info/exclude`.
 
+Hidden scenarios live separately in one private git repo at
+`$XDG_DATA_HOME/delegate/vault/` (default `~/.local/share/delegate/vault/`), under
+`<project-id>-<main checkout name>/hidden/scenarios/`. The UUID v4 `project` in
+`.delegate-kit.toml` is shared by clones: commit it. `delegate where` creates the ID if
+missing, but does not create a vault or task folder. Vault folders are found by ID after a
+rename. `delegate hidden add evals/scenarios/<ID>-<slug>` commits the scenario in the vault
+before removing its source and pushes if a remote is connected; a failed push keeps the local
+commit. Use `delegate setup --vault <url>` to connect an empty or existing private remote.
+Task state and results keep their existing location; old hidden homes are not migrated yet.
+
 ## Sandbox
 All harnesses except Codex (which has its own sandbox) run in bwrap. The filesystem is
 read-only; the main checkout and every task folder, including the running task's own, are
-hidden. Writes are allowed only to the worktree, the harness's state dir (`~/.pi`,
+hidden. The whole delegate data folder (including the vault and its remote URL) is hidden
+after all writable mounts, even if XDG_DATA_HOME is inside a harness state folder.
+Writes are allowed only to the worktree, the harness's state dir (`~/.pi`,
 `~/.claude`, ...) and `~/.cache`. Git objects are read-only, so workers can't commit or move
 branches. Acceptance checks run in the same sandbox. Network stays on.
 `DELEGATE_SANDBOX=0` turns it off.
@@ -163,7 +184,7 @@ sessions in `~/.pi`, Claude workers in `~/.claude/projects/`.
 | `PLAN.md` | living, pruned | Current goal, task table, open questions |
 | `docs/decisions/` | append-only | Why X over Y; superseded, never edited |
 | `.delegate.toml` | living | Project rules: minimum tiers and required reviews by path |
-| `.delegate-kit.toml` | committed | Installed kit id and file hashes, used by `delegate upgrade` |
+| `.delegate-kit.toml` | committed | Project UUID, installed kit id and file hashes, used by `delegate upgrade` |
 | `.claude/skills/delegate` | – | `/delegate`: plan review → spec → run → review → merge or discard |
 | `.claude/skills/distill` | – | `/distill`: end a discussion, save only decisions and plan changes |
 | `.claude/skills/evaluate` | – | `/evaluate`: build and keep runnable user scenarios, before the code they check |
@@ -178,6 +199,7 @@ sessions in `~/.pi`, Claude workers in `~/.claude/projects/`.
 | `src/harness.rs` | Worker commands per harness, sessions, bwrap sandbox |
 | `src/commands.rs` | `new`, `run`, `check`, `review`, `plan-review`, `list`, `merge`, `discard` |
 | `src/init.rs`, `src/prompts.rs` | `init` with embedded templates; worker prompts |
+| `src/setup.rs`, `src/vault.rs` | Machine setup, project IDs, `where` and the locked private vault |
 | `src/upgrade.rs`, `src/sha256.rs` | `upgrade`: kit record, earlier kits from `templates/kit-history.txt`; hashing |
 | `templates/` | Spec, report, prune and worker-config templates; `project/` files for `init` |
 

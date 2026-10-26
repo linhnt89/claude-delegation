@@ -50,9 +50,18 @@ the reason shown in results.
 | benchmark | Rarely: expensive comparisons |
 
 ## Hidden scenarios
-A few scenarios live outside the repo in `<repo>.delegate/_evals/hidden/scenarios/`, same
-format. Workers can't read that folder, so they can't tailor work to those checks. The runner
-includes them when it can see them (the lead's review), and skips them inside the sandbox.
+A few scenarios live outside the repo in the private vault, in the same format. Move one with
+`delegate hidden add evals/scenarios/<ID>-<slug>`: this commits it in the vault and pushes when
+connected. `delegate setup --vault <url>` connects the vault on each machine. Commit the
+`project` UUID in `.delegate-kit.toml` so clones share their hidden set.
+
+`delegate where` prints `hidden <path>` (or `hidden none: <why>`). The folder is
+`$XDG_DATA_HOME/delegate/vault/<project-id>-<main checkout name>/hidden/`, defaulting to
+`~/.local/share/delegate/vault/.../hidden/`, with scenarios under `scenarios/`. `evals/run`
+asks `delegate where` when supported, otherwise uses the old
+`<repo>.delegate/_evals/hidden/` rule. `EVALS_HIDDEN` overrides discovery. Workers cannot read
+the delegate data folder, so they cannot tailor work to these checks. Results stay in the
+existing task-state folder. Old hidden homes and further vault syncing are not migrated yet.
 
 ## Results
 `evals/run` prints a table and writes it, with one log per check, to
