@@ -130,13 +130,13 @@ function summary(tasks: Task[]): SummaryPart[] {
   return parts
 }
 
+function textWidth(text: string): number {
+  return Array.from(graphemes.segment(text), p => cellWidth(p.segment)).reduce((a, b) => a + b, 0)
+}
+
 function clipSummary(parts: SummaryPart[], columns: number): SummaryPart[] {
   if (columns <= 0) return []
-  const width = (text: string) => Array.from(graphemes.segment(text), p => cellWidth(p.segment)).reduce((a, b) => a + b, 0)
-  const total = parts.reduce((n, p) => n + width(p.text), 0)
-  const tail = ' · Open tasks ›'
-  if (total + width(tail) <= columns) return [...parts, { text: tail }]
-  if (total <= columns) return parts
+  if (parts.reduce((n, p) => n + textWidth(p.text), 0) <= columns) return parts
   let remaining = Math.max(0, columns - 1)
   const clipped: SummaryPart[] = []
   for (const p of parts) {
@@ -176,33 +176,46 @@ export const register: Register = on => {
   })
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
-    const result = await next(e)
-    $.ui.invalidate('ui.render')
-    return result
-  })
-
-  on('ui.close', { id: PANE }, async ($, e, next) => {
     const closed = await next(e)
     if (e.origin.kind === 'person')
       await update($, pane, state => ({ ...state, autoOpened: false }))
+    $.ui.invalidate('ui.render')
     return closed
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const v = await read($, view)
     await read($, pane)
-    if (e.props.hasSurvey || (await $.ui.panes()).some(p => p.id === PANE)
+    if (e.props.hasSurvey || (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
       || (!v.error && !v.tasks.some(t => t.phase !== 'not_started')))
       return next(e)
-    const { Button, Text } = $.ui.resolve(e)
-    const parts = clipSummary(v.error ? [{ text: 'delegate: status unavailable' }] : summary(v.tasks), e.props.bodyColumns)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const normal = e.surface === 'terminal' && e.viewport?.isFullscreen !== true
+    const columns = Math.max(0, e.props.bodyColumns)
+    const label = normal ? 'Open' : 'Open tasks'
+    const controlWidth = label.length + (e.surface === 'terminal' ? 4 : 0)
+    const buttonWidth = columns >= controlWidth ? controlWidth : 0
+    const source = v.error ? [{ text: 'delegate: status unavailable' }] : summary(v.tasks)
+    const total = source.reduce((n, p) => n + textWidth(p.text), 0)
+    // Reserve the control first; shorten the keyboard hint before clipping counts.
+    let hint = normal ? '/delegate-pane or ctrl+x tab, Enter to open' : ''
+    if (total + hint.length + buttonWidth + 4 > columns) hint = normal ? '/delegate-pane to open' : ''
+    if (hint.length + buttonWidth + 4 > columns) hint = ''
+    const tailWidth = (hint ? hint.length + 2 : 0) + (buttonWidth ? buttonWidth + 2 : 0)
+    const parts = clipSummary(source, columns - tailWidth)
+    const button = <Button key="delegate-open" label={label} autoFocus onPress={async () => {
+      await $.ui.open({ id: PANE, title: 'Delegate tasks' })
+      await update($, pane, state => ({ ...state, autoOpened: false }))
+    }} />
     return (
-      <Button key="delegate-summary" label={parts.length ? undefined : 'Delegate tasks'} plain onPress={async () => {
-        await $.ui.open({ id: PANE, title: 'Delegate tasks' })
-        await update($, pane, state => ({ ...state, autoOpened: false }))
-      }}>
-        {parts.length ? parts.map(p => <Text color={p.color} dimColor={!p.color}>{p.text}</Text>) : <Text>{''}</Text>}
-      </Button>
+      <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
+        {parts.map(p => <Text color={p.color} dimColor={!p.color}>{p.text}</Text>)}
+        {hint ? <Text dimColor>{`${parts.length ? '  ' : ''}${hint}`}</Text> : null}
+        {buttonWidth ? <Text dimColor>{parts.length || hint ? '  ' : ''}</Text> : null}
+        {/* Even with no room for its label, keep the terminal's keyboard target. */}
+        {buttonWidth ? button : normal
+          ? <Box width={0} height={1} flexShrink={0} overflow="hidden">{button}</Box> : null}
+      </Box>
     )
   })
 

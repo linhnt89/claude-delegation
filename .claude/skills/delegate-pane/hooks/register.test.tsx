@@ -49,6 +49,7 @@ const STATUS = {
 
 function engine(on: any, stdout: string, exitCode = 0) {
   let open = false
+  let isPlaced = true
   const opened: string[] = []
   const closed: string[] = []
   let closeHook: any
@@ -60,9 +61,9 @@ function engine(on: any, stdout: string, exitCode = 0) {
   on('ui.open', (_: unknown, e: { id: string }) => {
     open = true
     opened.push(e.id)
-    return { value: { isPlaced: true } }
+    return { value: { isPlaced } }
   })
-  on('ui.panes', () => ({ value: open ? [{ id: 'delegate', title: 'Delegate tasks', isPlaced: true, isShown: true, isFocused: false }] : [] }))
+  on('ui.panes', () => ({ value: open ? [{ id: 'delegate', title: 'Delegate tasks', isPlaced, isShown: true, isFocused: false }] : [] }))
   on('ui.close', (_: unknown, e: { origin: { kind: string } }) => {
     open = false
     closed.push(e.origin.kind)
@@ -74,7 +75,7 @@ function engine(on: any, stdout: string, exitCode = 0) {
     opened, closed,
     async personClose() {
       let state = { running: ['t001'], autoOpened: true }
-      const fixture = { state: {
+      const fixture = { ui: { invalidate() {} }, state: {
         get: async () => ({ value: state, version: 1 }),
         set: async (_: unknown, value: typeof state) => {
           state = value
@@ -87,6 +88,7 @@ function engine(on: any, stdout: string, exitCode = 0) {
       })
       expect(state).toEqual({ running: ['t001'], autoOpened: false })
     },
+    placed(value: boolean) { isPlaced = value },
     status(tasks: Task[]) { stdout = JSON.stringify({ tasks }); exitCode = 0 },
     fail() { exitCode = 1 },
   }
@@ -323,8 +325,16 @@ test('finished tasks alone do not auto-open, and a failed refresh does not close
   expect(e.opened).toEqual(['delegate'])
 })
 
-for (const surface of ['desktop', 'terminal'] as const) {
-  test(`summary counts trouble first, once per task, with semantic colours on ${surface}`, async ($, on) => {
+const HINT = '/delegate-pane or ctrl+x tab, Enter to open'
+const SHORT_HINT = '/delegate-pane to open'
+
+for (const { surface, viewport, name, normal } of [
+  { surface: 'desktop', viewport: undefined, name: 'desktop', normal: false },
+  { surface: 'terminal', viewport: { columns: 200, rows: 40, isFullscreen: true }, name: 'fullscreen terminal', normal: false },
+  { surface: 'terminal', viewport: { columns: 200, rows: 40, isFullscreen: false }, name: 'normal terminal', normal: true },
+  { surface: 'terminal', viewport: undefined, name: 'unmeasured terminal', normal: true },
+] as const) {
+  test(`summary counts trouble first, once per task, with semantic colours on ${name}`, async ($, on) => {
     mock.clock(on)
     const e = summaryEngine($, on, JSON.stringify({ tasks: [
       task('t009', { phase: 'not_started' }),
@@ -338,26 +348,35 @@ for (const surface of ['desktop', 'terminal'] as const) {
     ] }))
     await $.session.start({ cwd: '/', surface, isInteractive: true })
     await e.change('person')
-    const ui = await $.ui.mount({ ...BAND, surface })
-    const button = await ui.find({ type: 'Button', key: 'delegate-summary' })
-    expect(button?.text).toBe('delegate  ⚠ 2 stalled · ✗ 1 interrupted · ✗ 1 failed · ✓ 1 ready to merge · ✓ 1 passed · ● 2 running · 1 not started · Open tasks ›')
+    const ui = await $.ui.mount({ ...BAND, surface, viewport })
+    const row = await ui.find({ type: 'Box' })
+    expect(row).toMatchObject({ props: { flexDirection: 'row', height: 1, flexWrap: 'nowrap' } })
+    const button = await ui.find({ type: 'Button', key: 'delegate-open' })
+    expect(button?.text).toBe(normal ? 'Open' : 'Open tasks')
+    expect(button?.props.autoFocus).toBe(true)
+    expect(button?.props.plain).toBeUndefined()
+    expect(button?.children).toEqual([])
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
+    const texts = await ui.findAll({ type: 'Text' })
+    expect(texts.map(t => t.text).join('')).toBe(`delegate  ⚠ 2 stalled · ✗ 1 interrupted · ✗ 1 failed · ✓ 1 ready to merge · ✓ 1 passed · ● 2 running · 1 not started${normal ? `  ${HINT}` : ''}  `)
+    // Counts are direct Text children of the row, never Button children.
+    expect(row?.children.filter((c: any) => c.type === 'Text')).toHaveLength(texts.length)
     for (const [text, color] of [
       ['⚠ 2 stalled', 'warning'], ['✗ 1 interrupted', 'error'], ['✗ 1 failed', 'error'],
       ['✓ 1 ready to merge', 'success'], ['✓ 1 passed', 'success'], ['● 2 running', 'suggestion'],
       ['1 not started', 'inactive'],
     ])
       expect(await ui.find({ type: 'Text', text })).toMatchObject({ props: { color, dimColor: false } })
-    for (const text of ['delegate  ', ' · Open tasks ›'])
+    for (const text of ['delegate  ', ' · ', ...(normal ? [HINT] : [])])
       expect(await ui.find({ type: 'Text', text })).toMatchObject({ props: { dimColor: true } })
     await ui.unmount()
   })
 
-  test(`summary yields for empty, unstarted, open panes and surveys on ${surface}`, async ($, on) => {
+  test(`summary yields for empty, unstarted, open panes and surveys on ${name}`, async ($, on) => {
     const clock = mock.clock(on)
     const e = summaryEngine($, on, JSON.stringify({ tasks: [] }))
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    const ui = await $.ui.mount({ ...BAND, surface })
+    const ui = await $.ui.mount({ ...BAND, surface, viewport })
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeTruthy()
     e.status([task('t001', { phase: 'not_started' })])
@@ -379,13 +398,33 @@ for (const surface of ['desktop', 'terminal'] as const) {
     await ui.unmount()
   })
 
-  test(`summary press opens a person-owned pane; manual and mod closes redraw on ${surface}`, async ($, on) => {
+  test(`summary shows while the auto-opened pane is listed but not placed on ${name}`, async ($, on) => {
+    mock.clock(on)
+    const e = summaryEngine($, on, JSON.stringify(STATUS))
+    e.placed(false)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    expect(e.opened).toEqual(['delegate'])
+    const ui = await $.ui.mount({
+      ...BAND, surface,
+      viewport: viewport ? { ...viewport, columns: 130 } : undefined,
+      props: { ...BAND.props, bodyColumns: 125 },
+    })
+    expect(await ui.find({ type: 'Text', text: /delegate/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'delegate-open' })).toBeTruthy()
+    e.placed(true)
+    await ui.press({ key: 'delegate-open' })
+    expect(e.opened).toEqual(['delegate', 'delegate'])
+    expect(await ui.find({ type: 'Button' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`summary press opens a person-owned pane; manual and mod closes redraw on ${name}`, async ($, on) => {
     const clock = mock.clock(on)
     const e = summaryEngine($, on, JSON.stringify({ tasks: [task('t001', { phase: 'done', outcome: 'pass', ready_to_merge: true })] }))
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    const ui = await $.ui.mount({ ...BAND, surface })
-    expect(await ui.find({ type: 'Button' })).toBeTruthy()
-    await ui.press({ key: 'delegate-summary' })
+    const ui = await $.ui.mount({ ...BAND, surface, viewport })
+    expect(await ui.find({ type: 'Button' })).toMatchObject({ text: normal ? 'Open' : 'Open tasks', props: { autoFocus: true } })
+    await ui.press({ key: 'delegate-open' })
     expect(e.opened).toEqual(['delegate'])
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     // A summary-opened pane stays open, like a command-opened one.
@@ -403,51 +442,69 @@ for (const surface of ['desktop', 'terminal'] as const) {
     await ui.unmount()
   })
 
-  test(`summary follows status refreshes and reports failures on ${surface}`, async ($, on) => {
+  test(`summary follows status refreshes and reports failures on ${name}`, async ($, on) => {
     const clock = mock.clock(on)
     const e = summaryEngine($, on, JSON.stringify({ tasks: [task('t001', { phase: 'done', outcome: 'pass' })] }))
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    const ui = await $.ui.mount({ ...BAND, surface })
+    const ui = await $.ui.mount({ ...BAND, surface, viewport })
     expect(await ui.find({ type: 'Text', text: '✓ 1 passed' })).toBeTruthy()
     e.status([task('t001', { phase: 'done', outcome: 'fail' })])
     await clock.advance(3000)
     expect(await ui.find({ type: 'Text', text: '✗ 1 failed' })).toBeTruthy()
     e.fail()
     await clock.advance(3000)
-    expect((await ui.find({ type: 'Button' }))?.text).toBe('delegate: status unavailable · Open tasks ›')
+    expect(await ui.find({ type: 'Text', text: /^delegate: status unavailable$/ })).toMatchObject({ props: { dimColor: true } })
+    expect((await ui.find({ type: 'Button' }))?.text).toBe(normal ? 'Open' : 'Open tasks')
+    if (normal) expect(await ui.find({ type: 'Text', text: HINT })).toMatchObject({ props: { dimColor: true } })
     for (const text of await ui.findAll({ type: 'Text' }))
       expect(text.props.dimColor).toBe(true)
     await ui.redraw({ ...BAND.props, hasSurvey: true })
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await ui.redraw(BAND.props)
-    await ui.press({ key: 'delegate-summary' })
+    await ui.press({ key: 'delegate-open' })
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await e.change('person', ui)
-    expect((await ui.find({ type: 'Button' }))?.text).toBe('delegate: status unavailable · Open tasks ›')
+    expect(await ui.find({ type: 'Text', text: /^delegate: status unavailable$/ })).toBeTruthy()
     e.status([])
     await clock.advance(3000)
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await ui.unmount()
   })
 
-  test(`summary stays one row at narrow widths, dropping the open hint first on ${surface}`, async ($, on) => {
+  test(`summary stays one row, preserving the button and shortening the hint on ${name}`, async ($, on) => {
     mock.clock(on)
     const e = summaryEngine($, on, JSON.stringify({ tasks: [task('t001', { phase: 'done', outcome: 'pass', ready_to_merge: true })] }))
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    for (const bodyColumns of [0, 1, 2, 9, 10, 20, 31, 32, 60]) {
-      const ui = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, bodyColumns } })
-      const button = await ui.find({ type: 'Button', key: 'delegate-summary' })
-      expect(button).toBeTruthy()
+    for (const bodyColumns of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 29, 31, 32, 40, 60, 100]) {
+      const ui = await $.ui.mount({ ...BAND, surface, viewport, props: { ...BAND.props, bodyColumns } })
+      const button = await ui.find({ type: 'Button', key: 'delegate-open' })
+      const buttonWidth = (normal ? 4 : 10) + (surface === 'terminal' ? 4 : 0)
+      const shownButton = bodyColumns >= buttonWidth
+      expect(Boolean(button)).toBe(normal || shownButton)
+      if (button) {
+        expect(button.props.autoFocus).toBe(true)
+        expect(button.props.plain).toBeUndefined()
+      }
       const text = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
       const width = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), p =>
         /\p{Extended_Pictographic}/u.test(p.segment) ? 2 : 1).reduce((a, b) => a + b, 0)
+        + (shownButton ? buttonWidth : 0)
       expect(width <= bodyColumns).toBe(true)
       expect(/[\r\n\t]/.test(text)).toBe(false)
-      if (bodyColumns === 31) expect(text).toBe('delegate  ✓ 1 ready to merge')
-      if (bodyColumns === 60) expect(text).toBe('delegate  ✓ 1 ready to merge · Open tasks ›')
-      await ui.press({ key: 'delegate-summary' })
-      expect(await ui.find({ type: 'Button' })).toBeUndefined()
-      await e.change('plugin', ui)
+      expect(await ui.find({ type: 'Box' })).toMatchObject({ props: { width: bodyColumns, height: 1, overflow: 'hidden' } })
+      if (bodyColumns === 20) expect(text).toBe(normal ? 'delegate …  '
+        : surface === 'terminal' ? 'del…  ' : 'delegat…  ')
+      if (bodyColumns === 60) expect(text).toBe(normal
+        ? `delegate  ✓ 1 ready to me…  ${SHORT_HINT}  ` : 'delegate  ✓ 1 ready to merge  ')
+      if (bodyColumns === 100 && normal) expect(text).toContain(HINT)
+      if (bodyColumns === 40 && normal) expect(text).toContain(`…  ${SHORT_HINT}`)
+      if (!shownButton && normal)
+        expect(await ui.find({ type: 'Box', text: 'Open' })).toBeTruthy()
+      if (button) {
+        await ui.press({ key: 'delegate-open' })
+        expect(await ui.find({ type: 'Button' })).toBeUndefined()
+        await e.change('plugin', ui)
+      }
       await ui.unmount()
     }
   })
