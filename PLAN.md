@@ -81,5 +81,14 @@ own label style, so counts inside it lose their colours), and, on the terminal's
 where clicks don't reach it, the hint `/delegate-pane or ctrl+x tab, Enter to open`.
 S030 verdict on the row (2026-10-26, by hand in the desktop app and the terminal): pass.
 
+## Goal: projects keep up with the kit
+One `delegate upgrade` brings a project set up with any earlier kit up to date, keeping the
+project's own files and its edits to kit files (J1; `docs/decisions/005-kit-upgrade.md`).
+Baseline 2026-10-26: S038–S042, P013, P014 and hidden P012 fail (no `upgrade` command).
+
+| id | task | status | depends on | tier | acceptance | notes |
+|----|------|--------|------------|------|------------|-------|
+| t020 | `delegate upgrade`, `.delegate-kit.toml` written by `init`, `kit-history.txt` + `scripts/kit-history`, hand-written sha256 | ready | – | standard | `evals/run S038 S039 S040 S041 S042 P013 P014` | `init.rs`, new `upgrade.rs`; S038/S039/S042 are full tier (build a second binary) |
+
 ## Open questions
 - None.
