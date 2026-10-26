@@ -322,9 +322,12 @@ kill_runs() {
 # minimal_path <tool>...: PATH with only the stand-ins and the named tools, so "missing" is real.
 minimal_path() {
   local dir="$EVALS_WORK/minbin" t
-  rm -rf "$dir" && mkdir -p "$dir"   # fresh each call: a tool linked earlier must not linger
+  # Tools come from the PATH before the first call, so calling it again (PATH is minbin by then)
+  # still finds them.
+  : "${FULL_PATH:=$PATH}"
+  PATH="$FULL_PATH" rm -rf "$dir" && PATH="$FULL_PATH" mkdir -p "$dir"   # fresh each call: a tool linked earlier must not linger
   for t in "$@" git bash sh env cat ls mkdir cp rm wc date grep sed sort tail head printf python3 dirname basename; do
-    [ -e "$dir/$t" ] || ln -s "$(command -v "$t")" "$dir/$t" 2>/dev/null
+    [ -e "$dir/$t" ] || PATH="$FULL_PATH" ln -s "$(PATH="$FULL_PATH" command -v "$t")" "$dir/$t" 2>/dev/null
   done
   export PATH="$EVALS_WORK/bin:$dir"
 }
