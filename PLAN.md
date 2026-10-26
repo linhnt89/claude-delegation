@@ -30,5 +30,15 @@ running steps, self-update and the no-tasks state are fine. Not yet seen: a stal
 standing out, and light/dark mode. The user finds the pane and `delegate watch` hard to read;
 improving their layout is a later task.
 
+Readable live views (2026-10-26): the user picked an aligned table for `watch`/`status` and
+status-first cards for the pane, trouble first, stalled in the warning colour with `⚠ STALLED`;
+the pane opens when a task starts and closes once no task is left to act on (a card beside
+Environment/Context isn't possible: the mod API has no such slot). Criteria in S030 and S035.
+
+| id | task | status | depends on | tier | acceptance | notes |
+|----|------|--------|------------|------|------------|-------|
+| t016 | Pane: status-first cards, attention order, opens/closes by itself | running | – | standard | `claude plugin test`, mirror identical; S030 by hand | `.claude/skills/delegate-pane/` + template |
+| t017 | `watch`/`status`: aligned table, attention order, colour in a terminal | running | – | standard | `evals/run S035 S024 S025 P009` | `status.rs`, `watch.rs` |
+
 ## Open questions
 - None.
