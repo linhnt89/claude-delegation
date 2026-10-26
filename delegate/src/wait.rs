@@ -123,8 +123,12 @@ fn event_line(ctx: &Ctx, view: &TaskView) -> Option<String> {
 
 fn stalled_line(ctx: &Ctx, view: &TaskView) -> String {
     let last = last_step(ctx, view).unwrap_or_else(|| "none".to_string());
+    let next = view
+        .next
+        .clone()
+        .unwrap_or_else(|| format!("delegate status {}", view.id));
     format!(
-        "{} stalled in {} for {}; last step: {last}",
+        "{} stalled in {} for {}; last step: {last}; next: {next}",
         view.id,
         view.phase,
         duration(view.activity_age_secs)
@@ -221,6 +225,44 @@ mod tests {
     fn durations_are_short_and_readable() {
         assert_eq!(duration(6), "6s");
         assert_eq!(duration(65), "1m5s");
+    }
+
+    #[test]
+    fn stalled_event_preserves_details_and_offers_the_live_hint() {
+        let ctx = Ctx {
+            root: "unused".into(),
+            dhome: "unused".into(),
+            gitdir: "unused".into(),
+        };
+        let view = TaskView {
+            id: "t001".into(),
+            phase: "implement".into(),
+            outcome: None,
+            worker: None,
+            tier: "custom".into(),
+            pid: Some(12345),
+            started_at: None,
+            last_activity_at: None,
+            stalled: true,
+            changed_files: vec![],
+            steps: vec![serde_json::json!({
+                "kind": "edit", "target": "shop/pricing.py", "result": "ok",
+            })],
+            steps_available: true,
+            ready_to_merge: false,
+            merge_blockers: vec![],
+            next: Some("delegate status t001  ·  kill 12345".into()),
+            log: String::new(),
+            log_tail: String::new(),
+            elapsed_secs: 500,
+            activity_age_secs: 425,
+        };
+        assert_eq!(
+            event_line(&ctx, &view).as_deref(),
+            Some(
+                "t001 stalled in implement for 7m5s; last step: edit shop/pricing.py ok; next: delegate status t001  ·  kill 12345"
+            )
+        );
     }
 
     #[test]

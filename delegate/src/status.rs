@@ -416,6 +416,13 @@ pub fn collect(ctx: &Ctx, id: Option<&str>, depth: Depth) -> Result<Vec<TaskView
                 steps.drain(..steps.len() - 5);
             }
             view.steps = steps;
+            // Stream steps can clear a filesystem-based stall; derive the live
+            // hint only after both sources of activity have been considered.
+            if let Some(pid) = view.pid {
+                view.next = view
+                    .stalled
+                    .then(|| format!("delegate status {}  ·  kill {pid}", view.id));
+            }
             Ok(view)
         })
         .collect()
@@ -874,10 +881,9 @@ pub fn render_rows(tasks: &[TaskView], color: bool) -> String {
         let hint = if t.stalled {
             Some(format!(
                 "→ {}",
-                t.next.clone().unwrap_or_else(|| format!(
-                    "delegate status {}  ·  delegate discard {}",
-                    t.id, t.id
-                ))
+                t.next
+                    .clone()
+                    .unwrap_or_else(|| format!("delegate status {}", t.id))
             ))
         } else if table_state(t).0 == 1 {
             t.next.as_ref().map(|next| format!("→ {next}"))
@@ -1157,7 +1163,8 @@ mod tests {
     fn hints_steps_detail_and_terminal_only_colour() {
         let mut stalled = view("t001", "implement", None);
         stalled.stalled = true;
-        stalled.next = None;
+        stalled.pid = Some(12345);
+        stalled.next = Some("delegate status t001  ·  kill 12345".into());
         let failed = view("t002", "done", Some("fail"));
         let mut running = view("t003", "implement", None);
         running.steps = vec![
@@ -1170,7 +1177,8 @@ mod tests {
         blocked.ready_to_merge = false;
         let tasks = [stalled, failed, running, review, blocked];
         let plain = render_rows(&tasks, false);
-        assert!(plain.contains("→ delegate status t001  ·  delegate discard t001"));
+        assert!(plain.contains("→ delegate status t001  ·  kill 12345"));
+        assert!(!plain.contains("delegate discard t001"));
         assert!(plain.contains("→ delegate run t002"));
         assert!(plain.contains("└ edit file  shop/ code  ok now"));
         assert!(plain.contains("✓ done · pass · needs review"));
@@ -1186,6 +1194,16 @@ mod tests {
         let detail = render_detail(&tasks[0], false);
         assert!(detail.starts_with(&render_rows(&tasks[..1], false)));
         assert!(detail.contains("tier: standard\noutcome: -\nstarted: -\nlast activity: -"));
+    }
+
+    #[test]
+    fn stalled_table_without_next_only_offers_status() {
+        let mut task = view("t001", "implement", None);
+        task.stalled = true;
+        task.next = None;
+        let text = render_rows(&[task], false);
+        assert!(text.contains("→ delegate status t001\n"));
+        assert!(!text.contains("delegate discard"));
     }
 
     #[test]
@@ -1214,13 +1232,25 @@ mod tests {
         atomic_live(&t.dir.join("status.json"), &live)?;
         let views = collect(&ctx, None, Depth::Phase)?;
         assert!(views[0].stalled);
+        assert_eq!(views[0].pid, Some(live.pid));
+        let expected = format!("delegate status t001  ·  kill {}", live.pid);
+        assert_eq!(views[0].next.as_deref(), Some(expected.as_str()));
+        assert_eq!(serde_json::to_value(&views[0])?["next"], expected.as_str());
+        assert!(render_rows(&views, false).contains(&format!("→ {expected}")));
         assert_eq!(
             views[0].last_activity_at.as_deref(),
             Some(live.started_at.as_str())
         );
+        source.set_modified(SystemTime::now())?;
+        let views = collect(&ctx, None, Depth::Phase)?;
+        assert!(!views[0].stalled);
+        assert!(views[0].next.is_none());
+        source.set_modified(UNIX_EPOCH + Duration::from_secs(start))?;
         live.phase = "checks".into();
         atomic_live(&t.dir.join("status.json"), &live)?;
-        assert!(!collect(&ctx, None, Depth::Phase)?[0].stalled);
+        let views = collect(&ctx, None, Depth::Phase)?;
+        assert!(!views[0].stalled);
+        assert!(views[0].next.is_none());
         fs::remove_dir_all(root)?;
         Ok(())
     }
