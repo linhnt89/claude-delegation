@@ -14,7 +14,8 @@ A project with one open task and hidden scenarios in the vault. The user copies 
 ## Steps
 1. `delegate list` in the copy, then in the original.
 2. `evals/run fast` in the copy.
-3. Delete the copy (`rm -rf shop-experiment`), then run any `delegate` command in the original.
+3. Discard the copy's task, delete the copy (`rm -rf shop-experiment`), then run any `delegate`
+   command in the original.
 
 ## Passes when
 - The copy shows no tasks; the original still shows its task.

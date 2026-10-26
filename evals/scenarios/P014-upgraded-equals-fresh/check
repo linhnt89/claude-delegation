@@ -21,7 +21,10 @@ def files(root):
         p = p[2:]
         if p in kits.PROJECT_OWNED or p == ".claude/settings.json":
             continue
-        res[p] = (m, open(os.path.join(root, p), "rb").read())
+        body = open(os.path.join(root, p), "rb").read()
+        if p == ".delegate-kit.toml":  # each project has its own id (decision 007)
+            body = b"".join(l for l in body.splitlines(True) if not l.startswith(b"project"))
+        res[p] = (m, body)
     return res
 
 want = files(NOW)

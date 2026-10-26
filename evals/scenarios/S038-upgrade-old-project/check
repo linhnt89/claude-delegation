@@ -32,10 +32,13 @@ for f in .claude/skills/distill/SKILL.md .claude/skills/evaluate/SKILL.md evals/
   echo "$OUT" | grep -qF "$f" || fail "upgrade's output doesn't list $f as updated"
 done
 while read -r m h p; do
-  case "$p" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md|.claude/settings.json) continue ;; esac
+  case "$p" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md|.claude/settings.json|.delegate-kit.toml) continue ;; esac
   same_kit_file "$m" "$h" "$PROJ/$p" ||
     fail "after upgrade the project's $p differs from what the newer kit installs"
 done < <(kit_files "$EVALS_WORK/kit2")
+# The kit record matches a fresh init's, apart from the project's own id (decision 007).
+[ "$(grep -v '^project' "$PROJ/.delegate-kit.toml")" = "$(grep -v '^project' "$EVALS_WORK/kit2/.delegate-kit.toml")" ] ||
+  fail "after upgrade the kit record differs from a fresh init's (project id aside)"
 now="$(for f in AGENTS.md CLAUDE.md PLAN.md .delegate.toml evals/jobs.md docs/decisions/001-rounding.md \
   evals/scenarios/S001-split/scenario.md .claude/settings.json; do sha256sum "$f"; done)"
 [ "$own" = "$now" ] || fail "upgrade changed the project's own files: $(diff <(echo "$own") <(echo "$now") | grep '^>' | head -2)"

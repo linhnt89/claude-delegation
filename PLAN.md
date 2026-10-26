@@ -16,10 +16,17 @@ Moving or renaming a repo, or working on another machine, never loses task state
 scenarios (J7, J1; decisions 007, 008). Baseline 2026-10-26: S043–S049, S001 and hidden
 P015, P016 fail (no `delegate setup`); the rest of the set passes.
 
+Plan review 2026-10-26 (Codex): split into four tasks, each gated on its own scenarios; the
+whole fast set is t024's gate. S038/P014 ignore the record's `project` line; S045 discards the
+copy's task before deleting it.
+
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t021 | Central home by id: `checkouts/<id>-<name>/`, checkout id in `.git`, project id in `.delegate-kit.toml`, copies told apart, stale checkouts cleaned, automatic migration of `<repo>.delegate/`, `delegate where`, sandbox hides `~/.local/share/delegate/`, `evals/run` asks `delegate where`. `delegate setup [--vault <url>]` (workers, tools, health check; `init` stops writing `workers.toml`). Vault basics: created when first needed, connected by setup, `delegate hidden add` commits and pushes | todo | – | deep | `evals/run S001 S002 S043 S044 S045 S048 S049`; P015 hidden | `task.rs`, `init.rs`, `harness.rs`, new `setup.rs`/`vault.rs`, `evals/run` + template mirror. Large: split if plan review says so |
-| t022 | Vault sync: hand edits committed and pushed at the next command, `evals/run` pulls first and runs the local copy offline, unpushed hint in `list`, the status line and `setup`, conflicts reported, "not set up / hidden set not here" messages | todo | t021 | standard | `evals/run S046 S047`; P016 hidden | `/evaluate` skill switches to `delegate hidden add` (root + template) |
+| t021 | Project id, vault (created when needed, locked), `delegate setup [--vault]`, `where`, `hidden add`, sandbox hides the data folder, `init` stops writing `workers.toml`, `evals/run` finds hidden via `where` | ready | – | standard | `evals/run S001 S002 S048 S049` + upgrade set | `setup.rs`, `vault.rs`, `init.rs`, `harness.rs` |
+| t022 | Task state in `checkouts/<id>-<name>/`: checkout id in the git common dir, moves repaired, copies told apart, stale folders cleaned; `/delegate` skill and docs | ready | t021 | standard | `evals/run S043 S045`; P015 hidden | `task.rs`, `commands.rs`, skill + mirror |
+| t023 | Migrate old `<repo>.delegate/` on first use, safe to rerun after any interruption | ready | t022 | standard | `evals/run S044` | unit tests interrupt each step |
+| t024 | Vault sync: commit and push at every command, pull before hidden runs, offline copy, unpushed hints, conflicts kept apart, not-set-up messages; `/evaluate` uses `hidden add` | ready | t023 | standard | `evals/run S046 S047` + `fast`; P016 hidden | skill + mirror |
+| t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | t021 | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
 - Task ids are per repo, not per worktree: two worktree leads can take the same id, and

@@ -38,6 +38,12 @@ d list
 now="$(find "$orig_home" -path '*/worktree' -prune -o \( -name SPEC.md -o -name STATE.json -o -name SUMMARY.txt -o -name CHECKS.txt \) -print0 | sort -z | xargs -0 sha256sum)"
 [ "$now" = "$orig_state" ] || fail "work in the copy changed the original's task state: $(diff <(echo "$orig_state") <(echo "$now") | grep '^>' | head -2)"
 
+# The user finishes the experiment before deleting the copy: task state with an open task is
+# never removed (decision 007).
+export PROJ="$COPY"
+d discard t002
+[ "$RC" -eq 0 ] || fail "discarding the copy's task failed: $OUT"
+export PROJ="$ORIG"
 rm -rf "$COPY"
 d list
 [ ! -e "$copy_home" ] || fail "the deleted copy's task-state folder is still there: $copy_home"
