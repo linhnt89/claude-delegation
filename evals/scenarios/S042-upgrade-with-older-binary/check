@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# A project upgraded by a newer delegate, then upgraded again with this (older) one.
+. "$EVALS_LIB/common.sh"
+setup_project
+newer="$(newer_delegate kit2 <<'SH'
+printf '\nNew in kit 2: distill rule.\n' >>.claude/skills/distill/SKILL.md
+SH
+)" || exit 1
+DELEGATE="$newer" d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade with the newer delegate failed: $OUT"
+cd "$PROJ" && git add -A && git commit -qm "Upgrade the kit" && cd "$EVALS_WORK"
+before="$(snapshot_main)"
+d upgrade
+same_main "$before" "the older delegate changed the project"
+[ "$RC" -ne 0 ] || fail "the older delegate's upgrade reported success: $OUT"
+echo "$OUT" | grep -qi "older\|newer" || fail "the message doesn't say the binary is older than the project's kit: $OUT"
+echo "$OUT" | grep -q "cargo build" || fail "the message doesn't give the rebuild command: $OUT"
+pass "an older delegate left the newer kit alone and said how to rebuild"

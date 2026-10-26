@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# A project from the first kit learns that the CLAUDE.md template changed since.
+# Between that kit and today, the CLAUDE.md template gained "Never commit on a task branch";
+# the other project-owned templates didn't change.
+. "$EVALS_LIB/common.sh"
+first="$(python3 "$EVALS_LIB/kits.py" commits | head -1)"
+new_line="Never commit on a task branch"
+grep -qF "$new_line" "$EVALS_ROOT/delegate/templates/project/CLAUDE.md" ||
+  fail "this check expects the current CLAUDE.md template to say '$new_line'; pick a new line"
+
+own_files() {
+  cd "$PROJ"
+  printf '# Shop\n\n## Commands\n- Test: `python3 -m unittest -q`\n' >AGENTS.md
+  printf '\n## Shop notes\nPrices are in cents.\n' >>CLAUDE.md
+  git add -A && git commit -qm "Make the project our own"
+  cd "$EVALS_WORK"
+}
+
+old_kit_project "$first"
+own_files
+mine="$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)"
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+[ "$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)" = "$mine" ] || fail "upgrade changed the project's CLAUDE.md or AGENTS.md"
+echo "$OUT" | grep -qF "CLAUDE.md" || fail "upgrade didn't say the CLAUDE.md template changed"
+echo "$OUT" | grep -qF "$new_line" || fail "upgrade didn't show what changed in the CLAUDE.md template"
+for f in AGENTS.md PLAN.md .delegate.toml evals/jobs.md; do
+  echo "$OUT" | grep -qE "(^|[ /\`])$(printf '%s' "$f" | sed 's/\./\\./g')([ :\`]|$)" &&
+    fail "upgrade mentioned $f, whose template didn't change"
+done
+
+# Without a way to tell the kit version (every kit file edited), it shows the difference
+# from the current template and says it couldn't tell what's new.
+rm -rf "$PROJ" "$DHOME"
+old_kit_project "$first"
+own_files
+cd "$PROJ"
+python3 "$EVALS_LIB/kits.py" install "$first" "$EVALS_WORK/k1"
+(cd "$EVALS_WORK/k1" && find . -type f) | while read -r f; do
+  case "${f#./}" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md) ;; *) printf '\n# ours\n' >>"$f" ;; esac
+done
+git commit -qam "Edit every kit file"
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade of an unrecognised kit failed: $OUT"
+echo "$OUT" | grep -qF "$new_line" || fail "with no known kit version, upgrade didn't show the CLAUDE.md template's difference"
+echo "$OUT" | grep -qiE "(couldn.t|could not|can.t|cannot) tell|unknown" ||
+  fail "with no known kit version, upgrade didn't say it couldn't tell what's new"
+pass "upgrade showed the CLAUDE.md template change and left the project's own files alone"

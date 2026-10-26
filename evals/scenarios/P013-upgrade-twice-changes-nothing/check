@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/common.sh"
+setup_project --no-init
+exec python3 - "$@" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+from kit import *
+import kits
+
+# A second upgrade right after the first changes nothing and says the project is up to date,
+# still naming the edits it keeps.
+save_template()
+rng, s = seed()
+commits = kits.commits()
+
+def state():
+    return sh("find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 sha256sum; git status --porcelain").stdout
+
+for case in range(10):
+    commit = rng.choice(commits)
+    fresh()
+    kits.install(commit, PROJ)
+    git("add", "-A"); git("commit", "-qm", "Add cooperation kit")
+    acts = kits.mess_up(rng, PROJ, commit)
+    where = f"case {case} (seed {s}, kit {commit[:7]}, changes {acts})"
+    rc, out = d("upgrade")
+    if rc != 0:
+        print(where); sys.exit(f"FAIL: first upgrade failed: {' '.join(out.split())[-300:]}")
+    before = state()
+    rc, out = d("upgrade")
+    if rc != 0:
+        print(where); sys.exit(f"FAIL: second upgrade failed: {' '.join(out.split())[-300:]}")
+    if state() != before:
+        print(where); sys.exit(f"FAIL: the second upgrade changed files")
+    if "up to date" not in out.lower():
+        print(where); sys.exit(f"FAIL: the second upgrade didn't say the project is up to date: {' '.join(out.split())[-300:]}")
+    for p, a in acts.items():
+        if a.startswith("edit") and p not in kits.PROJECT_OWNED and p not in out:
+            print(where); sys.exit(f"FAIL: the second upgrade stopped naming the kept edit to {p}")
+print("10 projects: a second upgrade changed nothing, said up to date and still named kept edits")
+PY

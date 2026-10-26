@@ -9,7 +9,7 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 
 | Job | What "it worked" means to them |
 |---|---|
-| J1 Set up a project | One `delegate init` and I'm ready, with nothing overwritten. A missing tool (bwrap, a harness) is named clearly |
+| J1 Set up a project, and keep it current | One `delegate init` and I'm ready, with nothing overwritten. A missing tool (bwrap, a harness) is named clearly. When the kit improves, one `delegate upgrade` brings the kit's own files up to date and keeps my files and my edits |
 | J2 Hand off a ready task | Claude shows me the spec and the tier, then starts it without waiting for a yes. Later I get a commit whose checks passed, without watching the worker |
 | J3 Trust what comes back | Merge refuses failing checks, missing reviews and high-severity findings. Review comes from a different model family. Workers can't touch my checkout, branches or hidden checks |
 | J4 Keep going when a model fails | A model with no quota or broken auth is skipped for the next one. A failed round retries one tier stronger |
@@ -35,5 +35,7 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->
-One per job, chosen from scenarios that pass today, so fix tasks can still see what they fix:
-J1 P003 · J2 S005 · J3 P002 · J4 P004 · J5 P008 · J6 S018 · J7 P006 · J8 P011 (new feature: fails until built)
+Rebuilt 2026-10-26 after the repo moved and the first hidden set was lost. One or two per job,
+chosen from scenarios that pass today, mostly properties and failure paths:
+J1 P012 (new feature: fails until built) · J2 S007 · J3 P001 · J4 S014 · J5 S016 · J7 S021 ·
+J8 P010 S028. J6 has none: its one scenario, S017, stays visible.

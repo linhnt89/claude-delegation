@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/common.sh"
+setup_project --no-init
+fresh_kit "$EVALS_WORK/now"
+exec python3 - "$@" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+from kit import *
+import kits
+
+# Every earlier kit, left untouched and upgraded, ends with the same kit files (paths, contents,
+# modes, the version record) as a project set up by the current init.
+save_template()
+NOW = os.path.join(W, "now")
+
+def files(root):
+    out = sh(f"find . -path ./.git -prune -o -type f -printf '%m %p\\n' | sort", cwd=root).stdout.split("\n")
+    res = {}
+    for line in filter(None, out):
+        m, p = line.split(" ", 1)
+        p = p[2:]
+        if p in kits.PROJECT_OWNED or p == ".claude/settings.json":
+            continue
+        res[p] = (m, open(os.path.join(root, p), "rb").read())
+    return res
+
+want = files(NOW)
+commits = kits.commits()
+for commit in commits:
+    fresh()
+    kits.install(commit, PROJ)
+    git("add", "-A"); git("commit", "-qm", "Add cooperation kit")
+    rc, out = d("upgrade")
+    if rc != 0:
+        sys.exit(f"FAIL: kit {commit[:7]}: upgrade failed: {' '.join(out.split())[-300:]}")
+    got = {p: v for p, v in files(PROJ).items() if p in want or not p.startswith(("shop/", "tests/", "README.md"))}
+    for p in sorted(set(want) | set(got)):
+        if want.get(p) != got.get(p):
+            what = "missing" if p not in got else "extra" if p not in want else "different"
+            sys.exit(f"FAIL: kit {commit[:7]}: after upgrade {p} is {what} compared with a fresh init")
+print(f"all {len(commits)} earlier kits, upgraded, match a fresh init's kit files")
+PY

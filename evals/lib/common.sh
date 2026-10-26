@@ -330,3 +330,45 @@ snapshot_main() {
     git status --porcelain
   })
 }
+
+# old_kit_project <commit>: $PROJ set up by the kit at that commit (see kits.py), committed.
+# Like a project set up before `delegate upgrade` existed: no record of its kit version.
+old_kit_project() {
+  setup_project --no-init
+  cd "$PROJ" && python3 "$EVALS_LIB/kits.py" install "$1" "$PROJ" || fail "could not rebuild the kit at $1"
+  git add -A && git commit -qm "Add cooperation kit" && cd "$EVALS_WORK"
+}
+
+# fresh_kit <dir>: what the current `delegate init` installs, in a new repo at <dir>.
+fresh_kit() {
+  mkdir -p "$1" && git -C "$1" init -q && (cd "$1" && "$DELEGATE" init >/dev/null 2>&1) ||
+    fail "delegate init failed in a new repo"
+}
+
+# newer_delegate <name>: a delegate binary from a copy of this checkout whose kit was changed
+# by the bash commands on stdin (run in the copy's delegate/templates/project/). Prints its
+# path. Builds share one target dir, so only the crate itself recompiles.
+newer_delegate() {
+  local src="$EVALS_WORK/src-$1" out="$EVALS_WORK/bin-$1/delegate"
+  local target="$EVALS_ROOT/delegate/target/evals-newer"
+  mkdir -p "$src" "$(dirname "$out")"
+  tar -C "$EVALS_ROOT" --exclude=delegate/target -cf - delegate | tar -C "$src" -xf -
+  (cd "$src/delegate/templates/project" && bash -e) || fail "could not change the kit for $1"
+  if ! (cd "$src/delegate" && export MISE_STATE_DIR="${MISE_STATE_DIR:-$REAL_HOME/.cache/mise-state}" \
+          MISE_TRUSTED_CONFIG_PATHS="$PWD" HOME="$REAL_HOME" CARGO_TARGET_DIR="$target" &&
+          flock "$EVALS_ROOT/delegate/target" mise exec -- cargo build -q --release --offline &&
+          cp "$target/release/delegate" "$out") >"$EVALS_WORK/build-$1.log" 2>&1; then
+    fail "could not build the newer delegate $1 (see build-$1.log)"
+  fi
+  echo "$out"
+}
+
+# kit_files <dir>: "<mode> <sha256> <path>" for every file under <dir> but .git, sorted.
+kit_files() {
+  (cd "$1" && find . -path ./.git -prune -o -type f -printf '%m %p\n' | sort -k2 |
+    while read -r m p; do echo "$m $(sha256sum "$p" | cut -c1-64) ${p#./}"; done)
+}
+# same_kit_file <mode> <sha256> <file>: the file exists with that mode and content.
+same_kit_file() {
+  [ -f "$3" ] && [ "$(stat -c %a "$3")" = "$1" ] && [ "$(sha256sum "$3" | cut -c1-64)" = "$2" ]
+}

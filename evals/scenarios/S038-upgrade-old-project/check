@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# A project set up and used with one kit, upgraded by a delegate built from a newer kit.
+. "$EVALS_LIB/common.sh"
+setup_project
+cd "$PROJ"
+printf '# Shop\n\n## Commands\n- Test: `python3 -m unittest -q`\n' >AGENTS.md
+printf '# Plan\n\n## Goal\nBill splitting at checkout.\n' >PLAN.md
+printf '[[rules]]\npaths = ["shop/**"]\nreview = "always"\n' >.delegate.toml
+printf '# Jobs\n| J1 Split a bill | Each pays their share |\n' >evals/jobs.md
+printf '# 001 Round shares to cents\nDecided.\n' >docs/decisions/001-rounding.md
+mkdir -p evals/scenarios/S001-split && printf '# S001 Split a bill\n' >evals/scenarios/S001-split/scenario.md
+git add -A && git commit -qm "Make the project our own"
+head="$(git rev-parse HEAD)"
+own="$(for f in AGENTS.md CLAUDE.md PLAN.md .delegate.toml evals/jobs.md docs/decisions/001-rounding.md \
+  evals/scenarios/S001-split/scenario.md .claude/settings.json; do sha256sum "$f"; done)"
+
+# The newer kit changes two skills and the runner. (Added and dropped kit files aren't covered
+# here: making them needs a change to init's file list. P014 covers files added since old kits.)
+newer="$(newer_delegate kit2 <<'SH'
+printf '\nNew in kit 2: distill rule.\n' >>.claude/skills/distill/SKILL.md
+printf '\nNew in kit 2: evaluate rule.\n' >>.claude/skills/evaluate/SKILL.md
+printf '# kit 2\n' >>evals/run
+SH
+)" || exit 1
+DELEGATE="$newer" fresh_kit "$EVALS_WORK/kit2"
+
+DELEGATE="$newer" d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+cd "$PROJ"
+for f in .claude/skills/distill/SKILL.md .claude/skills/evaluate/SKILL.md evals/run; do
+  cmp -s "$f" "$EVALS_WORK/kit2/$f" || fail "upgrade left the old $f in place"
+  echo "$OUT" | grep -qF "$f" || fail "upgrade's output doesn't list $f as updated"
+done
+while read -r m h p; do
+  case "$p" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md|.claude/settings.json) continue ;; esac
+  same_kit_file "$m" "$h" "$PROJ/$p" ||
+    fail "after upgrade the project's $p differs from what the newer kit installs"
+done < <(kit_files "$EVALS_WORK/kit2")
+now="$(for f in AGENTS.md CLAUDE.md PLAN.md .delegate.toml evals/jobs.md docs/decisions/001-rounding.md \
+  evals/scenarios/S001-split/scenario.md .claude/settings.json; do sha256sum "$f"; done)"
+[ "$own" = "$now" ] || fail "upgrade changed the project's own files: $(diff <(echo "$own") <(echo "$now") | grep '^>' | head -2)"
+echo "$OUT" | grep -qi "git diff" || fail "upgrade's output doesn't say to review with git diff"
+[ "$(git rev-parse HEAD)" = "$head" ] || fail "upgrade committed for the user"
+
+mkdir -p "$EVALS_WORK/elsewhere" "$EVALS_WORK/bare"
+DCWD="$EVALS_WORK/elsewhere" DELEGATE="$newer" d upgrade
+[ "$RC" -ne 0 ] && echo "$OUT" | grep -qi "git" || fail "upgrade outside a git repo didn't say so: $OUT"
+git -C "$EVALS_WORK/bare" init -q
+DCWD="$EVALS_WORK/bare" DELEGATE="$newer" d upgrade
+[ "$RC" -ne 0 ] && echo "$OUT" | grep -q "delegate init" || fail "upgrade in a repo never set up didn't point to delegate init: $OUT"
+[ -z "$(ls -A "$EVALS_WORK/bare" | grep -v '^.git$')" ] || fail "upgrade wrote files into a repo never set up"
+pass "upgrade brought the untouched kit files to the newer kit and kept the project's own"

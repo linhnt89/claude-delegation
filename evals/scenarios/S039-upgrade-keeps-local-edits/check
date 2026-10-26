@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Upgrading a project whose team edited, left uncommitted and deleted kit files.
+. "$EVALS_LIB/common.sh"
+setup_project
+cd "$PROJ"
+printf '\n## Our team\nAlways run the slow suite too.\n' >>.claude/skills/delegate/SKILL.md
+git rm -q .claude/skills/evaluate/SKILL.md
+git commit -qam "Tune the delegate skill; we don't use evaluate"
+printf '\nDraft: half-done local tweak.\n' >>.claude/skills/distill/SKILL.md
+ours="$(sha256sum .claude/skills/delegate/SKILL.md .claude/skills/distill/SKILL.md)"
+cd "$EVALS_WORK"
+
+newer="$(newer_delegate kit2 <<'SH'
+printf '\nNew in kit 2: delegate rule.\n' >>.claude/skills/delegate/SKILL.md
+printf '\nNew in kit 2: distill rule.\n' >>.claude/skills/distill/SKILL.md
+printf '\nNew in kit 2: evaluate rule.\n' >>.claude/skills/evaluate/SKILL.md
+printf '# kit 2\n' >>evals/run
+SH
+)" || exit 1
+DELEGATE="$newer" fresh_kit "$EVALS_WORK/kit2"
+
+DELEGATE="$newer" d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+cd "$PROJ"
+[ "$(sha256sum .claude/skills/delegate/SKILL.md .claude/skills/distill/SKILL.md)" = "$ours" ] ||
+  fail "upgrade overwrote a kit file the team edited (committed or not)"
+cmp -s evals/run "$EVALS_WORK/kit2/evals/run" || fail "upgrade didn't update the untouched evals/run"
+[ ! -e .claude/skills/evaluate/SKILL.md ] || fail "upgrade silently added back the evaluate skill the team deleted"
+for f in .claude/skills/delegate/SKILL.md .claude/skills/distill/SKILL.md; do
+  echo "$OUT" | grep -qF "$f" || fail "upgrade's output doesn't name the edited $f"
+done
+echo "$OUT" | grep -F ".claude/skills/evaluate/SKILL.md" | grep -qiE "missing|deleted|removed" ||
+  fail "upgrade's output doesn't say the evaluate skill is missing"
+echo "$OUT" | grep -qE "(git )?diff" || fail "upgrade's output doesn't say how to see the difference"
+
+# Take the new version of the one edited skill, the way the output says.
+take="$(echo "$OUT" | grep -oE "delegate upgrade [^\`'\"]*\.claude/skills/delegate/SKILL\.md" | head -1)"
+[ -n "$take" ] || fail "upgrade's output gives no 'delegate upgrade ... .claude/skills/delegate/SKILL.md' command to take the new version"
+before="$(kit_files "$PROJ" | grep -v ' .claude/skills/delegate/SKILL.md$')"
+# shellcheck disable=SC2086
+DELEGATE="$newer" d ${take#delegate }
+[ "$RC" -eq 0 ] || fail "'$take' failed: $OUT"
+cmp -s .claude/skills/delegate/SKILL.md "$EVALS_WORK/kit2/.claude/skills/delegate/SKILL.md" ||
+  fail "'$take' didn't put the new version in place"
+after="$(kit_files "$PROJ" | grep -v ' .claude/skills/delegate/SKILL.md$')"
+[ "$before" = "$after" ] || fail "'$take' changed other files: $(diff <(echo "$before") <(echo "$after") | grep '^>' | head -2)"
+pass "upgrade kept every edited or deleted kit file, named each, and took one new version on request"

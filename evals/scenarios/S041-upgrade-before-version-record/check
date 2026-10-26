@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# A project set up by the first kit, before upgrades existed, with one skill edited.
+. "$EVALS_LIB/common.sh"
+first="$(python3 "$EVALS_LIB/kits.py" commits | head -1)"
+old_kit_project "$first"
+cd "$PROJ"
+printf '\n## Our team\nAlways run the slow suite too.\n' >>.claude/skills/delegate/SKILL.md
+git commit -qam "Tune the delegate skill"
+ours="$(sha256sum .claude/skills/delegate/SKILL.md)"
+fresh_kit "$EVALS_WORK/now"
+
+OUT="$(cd "$PROJ" && timeout 60 "$DELEGATE" upgrade </dev/null 2>&1)"; RC=$?
+printf '\n$ delegate upgrade  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+[ "$RC" -ne 124 ] || fail "upgrade waited for input on a project with no kit version record"
+[ "$RC" -eq 0 ] || fail "upgrade failed on a project set up before upgrades existed: $OUT"
+[ "$(sha256sum .claude/skills/delegate/SKILL.md)" = "$ours" ] || fail "upgrade overwrote the edited delegate skill"
+echo "$OUT" | grep -qF ".claude/skills/delegate/SKILL.md" || fail "upgrade didn't name the edited delegate skill"
+while read -r m h p; do
+  case "$p" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md|.claude/settings.json|.claude/skills/delegate/SKILL.md) continue ;; esac
+  same_kit_file "$m" "$h" "$PROJ/$p" ||
+    fail "after upgrade $p isn't what the current kit installs (untouched kit files should be updated, the record written)"
+done < <(kit_files "$EVALS_WORK/now")
+pass "upgrade updated the untouched kit files of a pre-record project, kept the edit and recorded the version"
