@@ -24,7 +24,8 @@ set -uo pipefail
 evals="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(dirname "$evals")"
 
-# Delegate home: same rule as the delegate binary, from the main checkout even in a worktree.
+# Compatibility fallback for older binaries. Current delegate finds tasks by checkout id
+# under ~/.local/share/delegate/checkouts/; `where` below is authoritative.
 if [ -n "${DELEGATE_HOME:-}" ]; then
   dhome="$DELEGATE_HOME"
 elif common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
@@ -33,16 +34,22 @@ elif common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 
 else
   dhome="$(dirname "$root")/$(basename "$root").delegate"
 fi
-# Prefer the project-id vault when this delegate supports `where`. Older binaries
-# keep the previous rule. An explicit EVALS_HIDDEN still overrides discovery.
+# Ask delegate for both locations when it supports `where`. Older binaries keep
+# the previous rule. Explicit EVALS_HIDDEN/EVALS_RESULTS still override discovery.
 hidden="$dhome/_evals/hidden"
 if command -v delegate >/dev/null 2>&1 && delegate --help 2>/dev/null | grep -qE '^[[:space:]]+where[[:space:]]'; then
   if locations="$(cd "$root" && delegate where)"; then
+    tasks="$(printf '%s\n' "$locations" | awk '/^tasks / {sub(/^tasks /, ""); print; exit}')"
+    if [ -z "$tasks" ]; then
+      echo "evals: delegate where did not report a tasks folder" >&2
+      exit 1
+    fi
+    dhome="$tasks"
     hidden="$(printf '%s\n' "$locations" | awk '/^hidden / {sub(/^hidden /, ""); if ($0 !~ /^none:/) print; exit}')"
     reason="$(printf '%s\n' "$locations" | awk '/^hidden none:/ {print; exit}')"
     [ -z "$reason" ] || printf '%s\n' "$reason" >&2
   else
-    echo "evals: delegate where failed; cannot locate the hidden set" >&2
+    echo "evals: delegate where failed; cannot locate tasks or the hidden set" >&2
     exit 1
   fi
 fi

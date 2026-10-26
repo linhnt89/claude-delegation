@@ -13,7 +13,7 @@ use crate::config::Tier;
 pub struct Ctx {
     /// Toplevel of the current checkout (possibly a linked worktree).
     pub root: PathBuf,
-    /// Task state: `$DELEGATE_HOME` or `<main checkout>.delegate` beside the main checkout.
+    /// Task state: `$DELEGATE_HOME` or the checkout-id folder under the delegate data dir.
     pub dhome: PathBuf,
     /// Shared git dir (`.git` of the main checkout).
     pub gitdir: PathBuf,
@@ -29,19 +29,16 @@ impl Ctx {
             &root,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?);
-        let dhome = std::env::var_os("DELEGATE_HOME").map_or_else(
-            || {
-                let main = gitdir.parent().unwrap_or(&root);
-                let name = main
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                main.parent()
-                    .unwrap_or(main)
-                    .join(format!("{name}.delegate"))
-            },
-            PathBuf::from,
-        );
+        let dhome = if let Some(path) = std::env::var_os("DELEGATE_HOME") {
+            crate::checkout::cleanup()?;
+            PathBuf::from(path)
+        } else {
+            crate::checkout::resolve(
+                &gitdir,
+                gitdir.parent().unwrap_or(&root),
+                &crate::vault::data_dir(),
+            )?
+        };
         Ok(Ctx {
             root,
             dhome,
@@ -289,10 +286,9 @@ mod tests {
         }
 
         // Discover uses process-global cwd and environment; isolate each call in a child.
-        let temp = TempRepo(std::env::temp_dir().join(format!(
-            "delegate-discover-{}",
-            uuid::Uuid::new_v4()
-        )));
+        let temp = TempRepo(
+            std::env::temp_dir().join(format!("delegate-discover-{}", uuid::Uuid::new_v4())),
+        );
         let main = temp.0.join("project");
         std::fs::create_dir_all(&main)?;
         git(&main, &["init", "-q"])?;
@@ -314,9 +310,16 @@ mod tests {
         let linked = main.join(".claude/worktrees/lead");
         git(
             &main,
-            &["worktree", "add", "-q", "--detach", &linked.to_string_lossy()],
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                &linked.to_string_lossy(),
+            ],
         )?;
-        let shared_home = temp.0.join("project.delegate");
+        let data = temp.0.join("delegate");
+        let shared_home = crate::checkout::resolve(&main.join(".git"), &main, &data)?;
         let override_home = temp.0.join("override");
         for (checkout, expected, overridden) in [
             (&main, &shared_home, false),
@@ -325,9 +328,13 @@ mod tests {
         ] {
             let mut child = Command::new(std::env::current_exe()?);
             child
-                .args(["--exact", "task::tests::discover_shares_home_across_worktrees"])
+                .args([
+                    "--exact",
+                    "task::tests::discover_shares_home_across_worktrees",
+                ])
                 .current_dir(checkout)
                 .env_remove("DELEGATE_HOME")
+                .env("XDG_DATA_HOME", &temp.0)
                 .env(EXPECTED_HOME, expected);
             if overridden {
                 child.env("DELEGATE_HOME", expected);

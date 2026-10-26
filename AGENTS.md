@@ -19,6 +19,8 @@ other models doing the implementation.
 - Rust is pinned in `delegate/mise.toml`; run cargo through `mise exec --`.
 
 ## Layout
+- Task state lives under `~/.local/share/delegate/checkouts/`, found by the checkout's id
+  in the git common dir (linked worktrees share it; `DELEGATE_HOME` overrides it).
 - `delegate/src/` — the CLI: `commands.rs` (subcommands), `config.rs`, `harness.rs` (worker
   commands, bwrap), `task.rs` (state), `status.rs` (live state, `status`), `events.rs`
   (worker stream adapters), `watch.rs`, `wait.rs`, `statusline.rs`, `spec.rs`, `prompts.rs`,

@@ -33,6 +33,8 @@ pub struct Bounds {
     pub hide: Vec<PathBuf>,
     pub ro: Vec<PathBuf>,
     pub rw: Vec<PathBuf>,
+    /// Let nested `delegate where` locate tasks without opening hidden metadata.
+    pub task_home: Option<PathBuf>,
 }
 
 fn state_dirs(harness: Option<Harness>) -> Vec<PathBuf> {
@@ -112,11 +114,25 @@ pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Resul
             sb.extend(["--bind".into(), s(p), s(p)]);
         }
     }
-    // Last mount wins: an XDG data folder under a harness state dir or ~/.cache
-    // must not be re-exposed by the read-write binds above.
+    // Hide the vault and task metadata even when data lives under a writable
+    // harness directory. Then expose only explicitly granted descendants: task
+    // worktrees now live inside data, but their sibling state must stay hidden.
     let data = crate::vault::data_dir();
     if data.exists() {
         sb.extend(["--tmpfs".into(), s(&data)]);
+        for p in &bounds.ro {
+            if p.starts_with(&data) && p != &data && p.exists() {
+                sb.extend(["--ro-bind".into(), s(p), s(p)]);
+            }
+        }
+        for p in &bounds.rw {
+            if p.starts_with(&data) && p != &data && p.exists() {
+                sb.extend(["--bind".into(), s(p), s(p)]);
+            }
+        }
+    }
+    if let Some(task_home) = &bounds.task_home {
+        sb.extend(["--setenv".into(), "DELEGATE_HOME".into(), s(task_home)]);
     }
     sb.extend(["--chdir".into(), s(chdir)]);
     Ok(sb)
@@ -404,6 +420,34 @@ mod tests {
                 sandbox(Some(Harness::Codex), &bounds, &root).unwrap(),
                 Vec::<String>::new()
             );
+            let wt = data.join("checkouts/test-project/t001/worktree");
+            let admin = data.join("git/worktrees/task");
+            std::fs::create_dir_all(&wt).unwrap();
+            std::fs::create_dir_all(&admin).unwrap();
+            let bounds = Bounds {
+                ro: vec![data.join("git")],
+                rw: vec![admin.clone(), wt.clone()],
+                task_home: Some(data.join("checkouts/test-project")),
+                ..Bounds::default()
+            };
+            let args = sandbox(Some(Harness::Pi), &bounds, &wt).unwrap();
+            let hide = args
+                .windows(2)
+                .position(|w| w == ["--tmpfs", data.to_str().unwrap()])
+                .unwrap();
+            for path in [wt, admin] {
+                let bind = args
+                    .windows(3)
+                    .rposition(|w| w == ["--bind", path.to_str().unwrap(), path.to_str().unwrap()])
+                    .unwrap();
+                assert!(bind > hide, "{args:?}");
+            }
+            assert!(args.windows(3).any(|w| w
+                == [
+                    "--setenv",
+                    "DELEGATE_HOME",
+                    data.join("checkouts/test-project").to_str().unwrap()
+                ]));
             return;
         }
         let root =

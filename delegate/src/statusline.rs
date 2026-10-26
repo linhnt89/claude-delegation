@@ -13,8 +13,12 @@ use crate::task::Ctx;
 /// Print the line, if there is one. Never fails: a broken status line must not
 /// break Claude Code's own.
 pub fn run() {
-    if let Some(line) = project().and_then(|ctx| render(&ctx)) {
-        println!("{line}");
+    if let Some(ctx) = project() {
+        if let Some(line) = render(&ctx) {
+            println!("{line}");
+        }
+    } else {
+        let _ = crate::checkout::cleanup();
     }
 }
 

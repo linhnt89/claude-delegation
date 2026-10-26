@@ -20,12 +20,30 @@ pub const PRUNE_TEMPLATE: &str = include_str!("../templates/PRUNE.md");
 const REPORT_TEMPLATE: &str = include_str!("../templates/REPORT.md");
 const CHECK_TIMEOUT: Duration = Duration::from_mins(15);
 
+fn hidden_homes(ctx: &Ctx) -> Vec<std::path::PathBuf> {
+    let mut paths = vec![ctx.dhome.clone()];
+    // Until t023 migrates old homes, they can still contain private scenarios.
+    if let Some(main) = ctx.gitdir.parent() {
+        let legacy = main.with_file_name(format!(
+            "{}.delegate",
+            main.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        if legacy.exists() && legacy != ctx.dhome {
+            paths.push(legacy);
+        }
+    }
+    paths
+}
+
 fn task_bounds(ctx: &Ctx, t: &Task) -> Result<Bounds> {
     let admin = git(&t.wt, &["rev-parse", "--absolute-git-dir"])?;
+    let mut hide = hidden_homes(ctx);
+    hide.push(ctx.root.clone());
     Ok(Bounds {
-        hide: vec![ctx.root.clone(), ctx.dhome.clone()],
+        hide,
         ro: vec![ctx.gitdir.clone()],
         rw: vec![admin.into(), t.wt.clone()],
+        task_home: Some(ctx.dhome.clone()),
     })
 }
 
@@ -934,9 +952,10 @@ pub fn plan_review(
     let log = work.join("run.log");
     let prompt = prompts::PLAN_REVIEW.replace("{specs}", &work.join("specs").to_string_lossy());
     let bounds = Bounds {
-        hide: vec![ctx.dhome.clone()],
+        hide: hidden_homes(ctx),
         ro: vec![ctx.root.clone(), work.clone()],
         rw: vec![],
+        task_home: Some(ctx.dhome.clone()),
     };
 
     for w in &workers {
@@ -1021,6 +1040,7 @@ pub fn list(ctx: &Ctx) -> Result<()> {
             r.worker.as_deref().unwrap_or("-")
         );
     }
+    crate::checkout::list_orphans()?;
     Ok(())
 }
 

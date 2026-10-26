@@ -1,5 +1,6 @@
 //! Delegate task specs to worker models by role and tier. Task state never lives in the repo.
 
+mod checkout;
 mod commands;
 mod config;
 mod harness;
@@ -29,7 +30,8 @@ use crate::task::Ctx;
 /// Delegate task specs to worker models (Pi, Codex, Claude Code, `OpenCode`, Gemini).
 ///
 /// Workers per role and tier: `~/.config/delegate/workers.toml`. Project rules: `.delegate.toml`.
-/// Task state: `$DELEGATE_HOME` or `../<repo>.delegate/<id>/`. All harnesses except codex run in
+/// Task state: `$DELEGATE_HOME` or `~/.local/share/delegate/checkouts/<checkout-id>-<name>/`.
+/// All harnesses except codex run in
 /// a bwrap sandbox (`DELEGATE_SANDBOX=0` disables it).
 #[derive(Debug, Parser)]
 #[command(version)]
@@ -159,6 +161,23 @@ enum HiddenCmd {
 }
 
 fn dispatch(cmd: Cmd) -> Result<ExitCode> {
+    // The status line resolves Claude's stdin project and must always fail silently.
+    if let Cmd::Statusline = &cmd {
+        statusline::run();
+        return Ok(ExitCode::SUCCESS);
+    }
+    // Resolve a moved checkout before sweeping, even for machine-level commands.
+    // Never sweep after a failed repair: its old path may be missing temporarily.
+    let ctx = Ctx::discover();
+    if ctx.is_err()
+        && task::git(&std::env::current_dir()?, &["rev-parse", "--show-toplevel"]).is_err()
+    {
+        if matches!(cmd, Cmd::List) {
+            checkout::list_orphans()?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        checkout::cleanup()?;
+    }
     if let Cmd::Setup { vault } = &cmd {
         setup::run(vault.as_deref())?;
         return Ok(ExitCode::SUCCESS);
@@ -172,12 +191,7 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         upgrade::upgrade(&std::env::current_dir()?, paths)?;
         return Ok(ExitCode::SUCCESS);
     }
-    // The status line also runs outside a project, so it builds its own context.
-    if let Cmd::Statusline = &cmd {
-        statusline::run();
-        return Ok(ExitCode::SUCCESS);
-    }
-    let ctx = Ctx::discover()?;
+    let ctx = ctx?;
     if let Cmd::Wait { ids, timeout } = &cmd {
         return wait::run(&ctx, ids, timeout.as_deref());
     }

@@ -134,8 +134,12 @@ history. Anything worth keeping goes into a decision record or `AGENTS.md` befor
 
 ## Where task files live
 Specs, reports, checks, reviews, logs and worktrees live **outside the repo** in
-`<main checkout>.delegate/<id>/` beside the main checkout, even when the lead runs from a
-worktree (override with `DELEGATE_HOME`), and are deleted on merge or discard. Inside its
+`~/.local/share/delegate/checkouts/<checkout-id>-<name>/<id>/` (or under
+`$XDG_DATA_HOME/delegate/checkouts/`), found by the checkout's id in the git common dir.
+Linked worktrees share it; moving or renaming keeps tasks, while copying starts a separate
+home without touching the original. Override with `DELEGATE_HOME`; task state is deleted
+on merge or discard. Empty homes for deleted checkouts are cleaned up automatically; homes
+with open tasks are kept and mentioned by `delegate list`, even outside a repo. Inside its
 worktree a worker sees only `.task/` (its spec and templates), which git ignores via
 `.git/info/exclude`.
 
@@ -143,17 +147,18 @@ Hidden scenarios live separately in one private git repo at
 `$XDG_DATA_HOME/delegate/vault/` (default `~/.local/share/delegate/vault/`), under
 `<project-id>-<main checkout name>/hidden/scenarios/`. The UUID v4 `project` in
 `.delegate-kit.toml` is shared by clones: commit it. `delegate where` creates the ID if
-missing, but does not create a vault or task folder. Vault folders are found by ID after a
+missing and locates the checkout's task folder, but does not create a vault. Vault folders are found by ID after a
 rename. `delegate hidden add evals/scenarios/<ID>-<slug>` commits the scenario in the vault
 before removing its source and pushes if a remote is connected; a failed push keeps the local
 commit. Use `delegate setup --vault <url>` to connect an empty or existing private remote.
-Task state and results keep their existing location; old hidden homes are not migrated yet.
+Task state and results share the checkout home; old sibling `.delegate` homes are not migrated yet.
 
 ## Sandbox
 All harnesses except Codex (which has its own sandbox) run in bwrap. The filesystem is
 read-only; the main checkout and every task folder, including the running task's own, are
-hidden. The whole delegate data folder (including the vault and its remote URL) is hidden
-after all writable mounts, even if XDG_DATA_HOME is inside a harness state folder.
+hidden. The delegate data folder (including the vault and its remote URL) is hidden even
+if XDG_DATA_HOME is inside a harness state folder; only the worker's worktree and required
+git paths are re-exposed.
 Writes are allowed only to the worktree, the harness's state dir (`~/.pi`,
 `~/.claude`, ...) and `~/.cache`. Git objects are read-only, so workers can't commit or move
 branches. Acceptance checks run in the same sandbox. Network stays on.
