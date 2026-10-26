@@ -147,11 +147,17 @@ Hidden scenarios live separately in one private git repo at
 `$XDG_DATA_HOME/delegate/vault/` (default `~/.local/share/delegate/vault/`), under
 `<project-id>-<main checkout name>/hidden/scenarios/`. The UUID v4 `project` in
 `.delegate-kit.toml` is shared by clones: commit it. `delegate where` creates the ID if
-missing and locates the checkout's task folder, but does not create a vault. Vault folders are found by ID after a
-rename. `delegate hidden add evals/scenarios/<ID>-<slug>` commits the scenario in the vault
+missing and locates the checkout's task folder; it creates a vault only when importing an
+old hidden set. Vault folders are found by ID after a rename. `delegate hidden add evals/scenarios/<ID>-<slug>` commits the scenario in the vault
 before removing its source and pushes if a remote is connected; a failed push keeps the local
 commit. Use `delegate setup --vault <url>` to connect an empty or existing private remote.
-Task state and results share the checkout home; old sibling `.delegate` homes are not migrated yet.
+Task state and results share the checkout home. On first use, old sibling `<repo>.delegate/`
+homes migrate automatically: tasks, plan reviews and results go into the checkout home;
+hidden scenarios are committed together in the vault and pushed if connected. Commit the
+project id in `.delegate-kit.toml`; without a remote, connect it with
+`delegate setup --vault <url>`. Interrupted migrations resume on the next command. Conflicting
+files stop migration with both copies kept; unknown files stay in the old folder, named once.
+`DELEGATE_HOME` disables this automatic migration.
 
 ## Sandbox
 All harnesses except Codex (which has its own sandbox) run in bwrap. The filesystem is

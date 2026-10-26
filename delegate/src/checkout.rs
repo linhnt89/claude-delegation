@@ -30,10 +30,14 @@ fn lock(data: &Path) -> Result<File> {
     Ok(file)
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let pending = path.with_file_name(format!(".checkout-{}.tmp", Uuid::new_v4()));
     let result = (|| {
         fs::write(&pending, bytes)?;
+        if let Ok(metadata) = fs::metadata(path) {
+            fs::set_permissions(&pending, metadata.permissions())?;
+        }
+        File::open(&pending)?.sync_all()?;
         fs::rename(&pending, path)?;
         Ok(())
     })();
@@ -158,11 +162,15 @@ pub(crate) fn resolve(gitdir: &Path, main: &Path, data: &Path) -> Result<PathBuf
             path: main.into(),
         },
     )?;
+    drop(identity);
+    // Keep the data-folder lock through migration, but acquire vault before identity
+    // (the same order as hidden add) to avoid cross-command deadlocks.
+    crate::migration::run(main, gitdir, &desired, data)?;
     sweep(&checkouts)?;
     Ok(desired)
 }
 
-fn repair(main: &Path, folder: &Path) -> Result<()> {
+pub(crate) fn repair(main: &Path, folder: &Path) -> Result<()> {
     git(main, &["worktree", "repair"])?;
     for entry in fs::read_dir(folder)? {
         let entry = entry?;

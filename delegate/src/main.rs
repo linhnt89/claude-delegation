@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod harness;
 mod init;
+mod migration;
 mod prompts;
 mod setup;
 mod sha256;
@@ -168,16 +169,21 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
     }
     // Resolve a moved checkout before sweeping, even for machine-level commands.
     // Never sweep after a failed repair: its old path may be missing temporarily.
-    let ctx = Ctx::discover();
-    if ctx.is_err()
-        && task::git(&std::env::current_dir()?, &["rev-parse", "--show-toplevel"]).is_err()
-    {
-        if matches!(cmd, Cmd::List) {
-            checkout::list_orphans()?;
-            return Ok(ExitCode::SUCCESS);
+    let ctx = match Ctx::discover() {
+        Ok(ctx) => Ok(ctx),
+        Err(error) => {
+            if task::git(&std::env::current_dir()?, &["rev-parse", "--show-toplevel"]).is_ok() {
+                // Machine-level commands must not hide a failed migration/repair.
+                return Err(error);
+            }
+            if matches!(cmd, Cmd::List) {
+                checkout::list_orphans()?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            checkout::cleanup()?;
+            Err(error)
         }
-        checkout::cleanup()?;
-    }
+    };
     if let Cmd::Setup { vault } = &cmd {
         setup::run(vault.as_deref())?;
         return Ok(ExitCode::SUCCESS);

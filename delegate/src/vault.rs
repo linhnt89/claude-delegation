@@ -24,7 +24,18 @@ pub(crate) fn project_id(ctx: &Ctx) -> Result<String> {
     let lock = File::open(&ctx.gitdir)?;
     lock.lock()
         .context("locking project identity; retry delegate")?;
-    let path = ctx.root.join(RECORD);
+    if let Some(id) = read_project_id(ctx)? {
+        return Ok(id);
+    }
+    let id = Uuid::new_v4().to_string();
+    save_project_id(ctx, &id)?;
+    eprintln!("added project id; commit .delegate-kit.toml");
+    Ok(id)
+}
+
+// Caller holds the git-directory identity lock, including when migration reserves an id.
+pub(crate) fn read_project_id(ctx: &Ctx) -> Result<Option<String>> {
+    let path = ctx.gitdir.parent().unwrap_or(&ctx.root).join(RECORD);
     let text = match fs::read_to_string(&path) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -42,24 +53,32 @@ pub(crate) fn project_id(ctx: &Ctx) -> Result<String> {
             if uuid.get_version_num() != 4 || uuid.get_variant() != uuid::Variant::RFC4122 {
                 bail!("project in .delegate-kit.toml must be a UUID v4; repair it and retry");
             }
-            return Ok(uuid.to_string());
+            return Ok(Some(uuid.to_string()));
         }
     }
-    let id = Uuid::new_v4().to_string();
+    Ok(None)
+}
+
+pub(crate) fn save_project_id(ctx: &Ctx, id: &str) -> Result<()> {
+    let path = ctx.gitdir.parent().unwrap_or(&ctx.root).join(RECORD);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
     let body = if let Some(text) = text {
         format!("project = \"{id}\"\n{text}")
     } else {
         let mut record = Record::new();
-        record.project = Some(id.clone());
+        record.project = Some(id.to_owned());
         toml::to_string(&record)?
     };
-    fs::write(&path, body).context("writing project id; check .delegate-kit.toml permissions")?;
-    eprintln!("added project id; commit .delegate-kit.toml");
-    Ok(id)
+    crate::checkout::atomic_write(&path, body.as_bytes())
+        .context("writing project id; check .delegate-kit.toml permissions")
 }
 
 /// Git used for vault operations must never ask for credentials or launch an editor.
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let mut command = Command::new("git");
     command
         .current_dir(dir)
@@ -90,7 +109,7 @@ pub(crate) struct Vault {
 }
 
 impl Vault {
-    fn lock(data: &Path) -> Result<Self> {
+    pub(crate) fn lock(data: &Path) -> Result<Self> {
         fs::create_dir_all(data).context("creating delegate data folder; check its permissions")?;
         let lock = OpenOptions::new()
             .create(true)
@@ -106,7 +125,7 @@ impl Vault {
         })
     }
 
-    fn init(&self) -> Result<()> {
+    pub(crate) fn init(&self) -> Result<()> {
         if !self.root.join(".git").is_dir() {
             fs::create_dir_all(&self.root)?;
             git(&self.root, &["init", "--initial-branch=main"])?;
@@ -132,7 +151,7 @@ impl Vault {
         Ok(())
     }
 
-    fn project(&self, ctx: &Ctx, id: &str) -> Result<Option<PathBuf>> {
+    pub(crate) fn project(&self, ctx: &Ctx, id: &str) -> Result<Option<PathBuf>> {
         let prefix = format!("{id}-");
         let mut matches = Vec::new();
         for entry in fs::read_dir(&self.root)? {
@@ -163,7 +182,7 @@ impl Vault {
         }
     }
 
-    fn remote(&self) -> Result<Option<String>> {
+    pub(crate) fn remote(&self) -> Result<Option<String>> {
         let remotes = git(&self.root, &["remote"])?;
         Ok(remotes
             .lines()
@@ -172,7 +191,7 @@ impl Vault {
             .map(str::to_owned))
     }
 
-    fn push(&self) {
+    pub(crate) fn push(&self) {
         let result = (|| -> Result<()> {
             if let Some(remote) = self.remote()? {
                 let upstream = git(&self.root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).ok();

@@ -22,9 +22,19 @@ pub struct Ctx {
 impl Ctx {
     pub fn discover() -> Result<Self> {
         let cwd = std::env::current_dir()?;
-        let root = PathBuf::from(
+        let mut root = PathBuf::from(
             git(&cwd, &["rev-parse", "--show-toplevel"]).context("not inside a git repository")?,
         );
+        // Migration can move the very worktree this command was started in.
+        // Its administrative backlink is repaired along with the other worktrees.
+        let admin = if root.join(".git").is_file() {
+            Some(PathBuf::from(git(
+                &root,
+                &["rev-parse", "--absolute-git-dir"],
+            )?))
+        } else {
+            None
+        };
         let gitdir = PathBuf::from(git(
             &root,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -39,6 +49,16 @@ impl Ctx {
                 &crate::vault::data_dir(),
             )?
         };
+        if let Some(admin) = admin
+            && let Ok(backlink) = std::fs::read_to_string(admin.join("gitdir"))
+            && let Some(moved) = Path::new(backlink.trim()).parent()
+            && moved != root
+        {
+            let relative = cwd.strip_prefix(&root)?;
+            std::env::set_current_dir(moved.join(relative))
+                .context("following moved task worktree; retry delegate from the main checkout")?;
+            root = moved.into();
+        }
         Ok(Ctx {
             root,
             dhome,
