@@ -23,7 +23,7 @@ A project with `PLAN.md` holding a clear, ready implementation task and an agree
 Claude does the implementation itself, so the user's other models sit unused, or it runs work without saying which model tier.
 
 ## Failure paths
-- An ambiguous or architectural task: Claude keeps it and says why instead of delegating.
+- An ambiguous or architectural task: Claude settles it with the user or turns it into a research task, and doesn't implement it.
 
 ## Properties
 - None.
