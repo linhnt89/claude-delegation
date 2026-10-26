@@ -34,8 +34,8 @@ Then, in each project (a git repo):
 delegate init
 ```
 `init` adds the project files (templates are built into the binary) and creates
-`~/.config/delegate/workers.toml` if missing; it never overwrites. It also sets up Claude
-Code's status line (unless you have your own) and the `/delegate-pane` side pane, which show
+`~/.config/delegate/workers.toml` if missing; it never overwrites a file. It also sets up Claude
+Code's status line (added to your `.claude/settings.json` unless you have your own) and the `/delegate-pane` side pane, which show
 running tasks live; while the pane is closed, a row above the prompt sums the tasks up and
 opens it. Then fill in `AGENTS.md`
 (commands first) and any `.delegate.toml` rules.
@@ -178,6 +178,7 @@ sessions in `~/.pi`, Claude workers in `~/.claude/projects/`.
 | `src/harness.rs` | Worker commands per harness, sessions, bwrap sandbox |
 | `src/commands.rs` | `new`, `run`, `check`, `review`, `plan-review`, `list`, `merge`, `discard` |
 | `src/init.rs`, `src/prompts.rs` | `init` with embedded templates; worker prompts |
+| `src/upgrade.rs`, `src/sha256.rs` | `upgrade`: kit record, earlier kits from `templates/kit-history.txt`; hashing |
 | `templates/` | Spec, report, prune and worker-config templates; `project/` files for `init` |
 
 Strict by design: `unsafe` is forbidden and clippy `all` + `pedantic` are errors (see

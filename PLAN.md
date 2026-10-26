@@ -88,7 +88,7 @@ Baseline 2026-10-26: S038–S042, P013, P014 and hidden P012 fail (no `upgrade` 
 
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t020 | `delegate upgrade`, `.delegate-kit.toml` written by `init`, `kit-history.txt` + `scripts/kit-history`, hand-written sha256 | ready | – | standard | `evals/run S038 S039 S040 S041 S042 P013 P014` | `init.rs`, new `upgrade.rs`; S038/S039/S042 are full tier (build a second binary) |
+| t020 | `delegate upgrade`, `.delegate-kit.toml` written by `init`, `kit-history.txt` + `scripts/kit-history`, hand-written sha256 | done | – | standard | `evals/run S038 S039 S040 S041 S042 P013 P014` | `init.rs`, new `upgrade.rs`; S038/S039/S042 are full tier (build a second binary); 3 rounds: runtime hashing, deletions in recordless projects (decision 006) |
 
 ## Open questions
 - None.
