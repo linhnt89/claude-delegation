@@ -31,6 +31,7 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
+| t042 | In the desktop app the row hands its whole text to the app to fit (S064, decision 012) | running | – | standard | `evals/run S064 S061 S062 S060` | the app measures in code-font columns but draws a proportional font |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
