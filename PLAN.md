@@ -17,14 +17,15 @@
   automatic migration of old homes. This repo migrated on 2026-10-27; its vault has no remote yet.
 - t026 (2026-10-27): checks for the lead guard (J9): S050–S054, P017 fail until the guard is
   built. A pilot of delegating eval writing; the guard and the `evaluate` role are not distilled yet.
+- t040 (2026-10-27): the pane opens only on request, its row shows other sessions dimmed, and
+  it reads one status at a time (J8, decision 012). S030 and S057 are judged by the user again.
 - t033 (2026-10-27): S031's check compares the user's settings and hooks, not the file's bytes,
   so the guard can add its hooks (J1, J9). P017 is now hidden.
 
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t040 | The pane mod opens only on request, its row shows other sessions dimmed, and it reads one status at a time, keeping the last result (decision 012) | todo | – | standard | `evals/run S061 S062`, the mod's own tests | after it, S030 and S057 are judged by the user again |
-| t041 | `init` adds no status line; `upgrade` removes the one older kits added (decision 012) | todo | t040 | standard | `evals/run S060 S063 S031 S029 S055 P009 P013 P014 S038` | after t040: both regenerate `kit-history.txt` |
+| t041 | `init` adds no status line; `upgrade` removes the one older kits added (decision 012) | running | – | standard | `evals/run S060 S063 S031 S029 S055 P009 P013 P014 S038` | after t040: both regenerate `kit-history.txt` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed

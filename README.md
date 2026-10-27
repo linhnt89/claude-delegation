@@ -40,10 +40,10 @@ delegate init
 `setup` creates `~/.config/delegate/workers.toml` from harnesses installed on PATH, never
 replacing an existing config, and checks harnesses, the vault and bwrap. Rerun it as a health
 check. `init` adds only project files (templates are built into the binary), keeping existing
-kit files. It also sets up Claude
-Code's status line (added to your `.claude/settings.json` unless you have your own) and the `/delegate-pane` side pane, which show
-running tasks live; while the pane is closed, a row above the prompt sums the tasks up and
-opens it. Then fill in `AGENTS.md`
+kit files. It also installs the `/delegate-pane` side pane mod: a row above the prompt sums up
+every session's tasks live (yours first, the others dimmed) in the desktop app and the
+terminal, and opens the pane, which opens only when you ask. `init` adds no status line;
+`delegate statusline` is there if you want the tasks in yours too. Then fill in `AGENTS.md`
 (commands first) and any `.delegate.toml` rules.
 
 After rebuilding `delegate`, run `delegate upgrade` in an existing project to update its
@@ -72,7 +72,7 @@ Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
 | `delegate status [id] [--json]` | Where each task stands now: phase, worker, changed files, latest steps, stalled, next step |
 | `delegate watch [id]` | `status`, refreshing in a terminal |
 | `delegate wait [ids] [--timeout D]` | Block until a task finishes, is interrupted or stalls (Claude runs it in the background) |
-| `delegate statusline` | One line for Claude Code's status line (`init` configures it) |
+| `delegate statusline` | One line for a Claude Code status line, if you add it to yours |
 | `delegate list` | Status of every task: round, tier, checks, review |
 | `delegate merge <id>` | Squash-merge if the gates pass, then delete all task state |
 | `delegate discard <id>` | Delete all task state without merging |
