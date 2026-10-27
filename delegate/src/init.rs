@@ -4,7 +4,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::config::user_config_path;
 use crate::task::git;
@@ -73,52 +73,33 @@ pub(crate) const PROJECT_FILES: &[(&str, &str)] = &[
 /// Project files that must be executable.
 pub(crate) const EXECUTABLE: &[&str] = &["evals/run"];
 
-/// Claude Code's settings file and the status line command we install there.
-const CLAUDE_SETTINGS: &str = ".claude/settings.json";
-const STATUS_LINE: &str = "delegate statusline";
+/// Claude Code's user-owned settings and the optional delegate status line command.
+pub(crate) const CLAUDE_SETTINGS: &str = ".claude/settings.json";
+pub(crate) const STATUS_LINE: &str = "delegate statusline";
 
-fn status_line() -> serde_json::Value {
-    serde_json::json!({"type": "command", "command": STATUS_LINE})
-}
-
-/// Add `statusLine` to Claude Code's settings without ever replacing the user's
-/// own line or their other settings; an unreadable file is left untouched.
+/// Explain the optional status line without changing or creating settings.
 fn configure_status_line(root: &Path) -> Result<()> {
+    println!(
+        "status line: delegate adds none; tasks show above the prompt (add `{STATUS_LINE}` to a status line to see them there too)"
+    );
     let path = root.join(CLAUDE_SETTINGS);
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read {CLAUDE_SETTINGS}; check permissions and retry"));
         }
-        let settings = serde_json::json!({"statusLine": status_line()});
-        fs::write(
-            &path,
-            format!("{}\n", serde_json::to_string_pretty(&settings)?),
-        )?;
-        println!("added    {CLAUDE_SETTINGS} (Claude Code status line)");
-        return Ok(());
-    }
-    let Ok(mut settings) = serde_json::from_slice::<serde_json::Value>(&fs::read(&path)?) else {
-        println!(
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Err(_) => println!(
             "kept     {CLAUDE_SETTINGS} (not valid JSON; left as is, fix it and run delegate init again)"
-        );
-        return Ok(());
-    };
-    let Some(object) = settings.as_object_mut() else {
-        println!("kept     {CLAUDE_SETTINGS} (not a JSON object; add the status line by hand)");
-        return Ok(());
-    };
-    if object.contains_key("statusLine") {
-        println!(
-            "kept     {CLAUDE_SETTINGS} (has its own status line; run `{STATUS_LINE}` from yours to show tasks)"
-        );
-        return Ok(());
+        ),
+        Ok(settings) if !settings.is_object() => {
+            println!("kept     {CLAUDE_SETTINGS} (not a JSON object; left as is)");
+        }
+        Ok(_) => {}
     }
-    object.insert("statusLine".into(), status_line());
-    fs::write(
-        &path,
-        format!("{}\n", serde_json::to_string_pretty(&settings)?),
-    )?;
-    println!("added    status line to {CLAUDE_SETTINGS}");
     Ok(())
 }
 
@@ -167,4 +148,33 @@ pub fn init(dir: &Path) -> Result<()> {
         println!("this machine isn't set up: run delegate setup");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_line_advice_never_changes_or_creates_settings() {
+        let root =
+            std::env::temp_dir().join(format!("delegate-init-test-{}", uuid::Uuid::new_v4()));
+        configure_status_line(&root).unwrap();
+        assert!(!root.exists());
+        let path = root.join(CLAUDE_SETTINGS);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for bytes in [
+            "{\"permissions\": {\"allow\": [\"Bash(ls:*)\"]}}\n",
+            "{\"statusLine\": {\"command\": \"delegate statusline\"}}\n",
+            "{\"statusLine\": {\"command\": \"~/bin/my-line\"}}\n",
+            "{\"statusLine\": null}\n",
+            "{invalid json\n",
+            "[]\n",
+            "null\n",
+        ] {
+            fs::write(&path, bytes).unwrap();
+            configure_status_line(&root).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), bytes.as_bytes());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }

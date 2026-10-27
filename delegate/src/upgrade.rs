@@ -1,4 +1,5 @@
-//! Content-addressed kit upgrades. Project-owned files are advice, never write targets.
+//! Content-addressed kit upgrades and cleanup of the legacy kit status line.
+//! Project-owned templates are advice, never write targets.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -11,7 +12,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::init::{EXECUTABLE, PROJECT_FILES};
+use crate::init::{CLAUDE_SETTINGS, EXECUTABLE, PROJECT_FILES, STATUS_LINE};
 use crate::sha256;
 use crate::task::git;
 
@@ -297,8 +298,48 @@ impl Plan {
         Ok(())
     }
 
+    /// Settings cleanup is a migration, not a kit file or record entry.
+    fn remove_status_line(&mut self, root: &Path) -> Result<()> {
+        let Some(bytes) = read_optional(&root.join(CLAUDE_SETTINGS))? else {
+            return Ok(());
+        };
+        let Ok(mut settings) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            self.output.push(format!(
+                "kept     {CLAUDE_SETTINGS} (not valid JSON; left as is, fix it and run delegate upgrade again)"
+            ));
+            return Ok(());
+        };
+        let Some(object) = settings.as_object_mut() else {
+            self.output.push(format!(
+                "kept     {CLAUDE_SETTINGS} (not a JSON object; left as is)"
+            ));
+            return Ok(());
+        };
+        let Some(line) = object.get("statusLine") else {
+            return Ok(());
+        };
+        if line.get("command").and_then(serde_json::Value::as_str) != Some(STATUS_LINE) {
+            self.output.push(format!(
+                "kept     {CLAUDE_SETTINGS} status line (not the kit's command; left as is)"
+            ));
+            return Ok(());
+        }
+        object.remove("statusLine");
+        self.writes.insert(
+            CLAUDE_SETTINGS.into(),
+            format!("{}\n", serde_json::to_string_pretty(&settings)?).into_bytes(),
+        );
+        self.output.push(format!(
+            "removed  status line from {CLAUDE_SETTINGS} (tasks show above the prompt)"
+        ));
+        Ok(())
+    }
+
     fn take(&mut self, paths: &[String], now: &Kit, record: &mut Record) {
         for path in paths {
+            if path == CLAUDE_SETTINGS {
+                continue;
+            }
             if let Some((_, body)) = PROJECT_FILES.iter().find(|(p, _)| *p == path) {
                 self.writes.insert(path.clone(), body.as_bytes().to_vec());
                 record.files.insert(path.clone(), now.files[path].clone());
@@ -347,7 +388,7 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
         .map(|p| p.as_str())
         .collect();
     for path in paths {
-        if !valid.contains(&path.as_str()) {
+        if path != CLAUDE_SETTINGS && !valid.contains(&path.as_str()) {
             bail!("{path} is not a kit file; kit paths: {}", valid.join(", "));
         }
     }
@@ -414,6 +455,9 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
     } else {
         // A targeted upgrade has no side effects on other record entries.
         plan.take(paths, &now, &mut record);
+    }
+    if paths.is_empty() || paths.iter().any(|path| path == CLAUDE_SETTINGS) {
+        plan.remove_status_line(&root)?;
     }
     let serialized = toml::to_string(&record)?;
     let record_changed = existing.as_deref() != Some(serialized.as_bytes());
@@ -535,6 +579,117 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn targeted_unrelated_upgrade_keeps_stock_status_line_byte_for_byte() {
+        let project = Project::new();
+        project.install();
+        fs::write(
+            project.0.join(CLAUDE_SETTINGS),
+            b"{ \"statusLine\": {\"command\": \"delegate statusline\"}, \"ours\": true }\n",
+        )
+        .unwrap();
+        let before = project.snapshot();
+        upgrade(&project.0, &["evals/run".into()]).unwrap();
+        assert_eq!(project.snapshot(), before);
+    }
+
+    #[test]
+    fn targeted_settings_upgrade_removes_stock_line_without_recording_settings() {
+        let project = Project::new();
+        project.install();
+        fs::write(
+            project.0.join(CLAUDE_SETTINGS),
+            b"{\"statusLine\": {\"type\": \"command\", \"command\": \"delegate statusline\"}, \"ours\": true}\n",
+        )
+        .unwrap();
+        let mut expected = project.snapshot();
+        expected.insert(CLAUDE_SETTINGS.into(), b"{\n  \"ours\": true\n}\n".to_vec());
+        upgrade(&project.0, &[CLAUDE_SETTINGS.into()]).unwrap();
+        assert_eq!(project.snapshot(), expected);
+        let record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        assert!(!record.files.contains_key(CLAUDE_SETTINGS));
+        upgrade(&project.0, &[CLAUDE_SETTINGS.into()]).unwrap();
+        assert_eq!(project.snapshot(), expected);
+    }
+
+    #[test]
+    fn full_upgrade_removes_only_stock_status_line_and_is_idempotent() {
+        let project = Project::new();
+        project.install();
+        let other = serde_json::json!({
+            "permissions": {"allow": ["Bash(ls:*)"]},
+            "env": {"SHOP_ENV": "dev"},
+            "hooks": {"PreToolUse": []},
+            "nested": [null, false, 42, {"statusLine": "keep"}]
+        });
+        let mut settings = other.clone();
+        settings["statusLine"] = serde_json::json!({"command": STATUS_LINE, "type": "command"});
+        fs::write(
+            project.0.join(CLAUDE_SETTINGS),
+            serde_json::to_vec(&settings).unwrap(),
+        )
+        .unwrap();
+        let mut expected = project.snapshot();
+        expected.insert(
+            CLAUDE_SETTINGS.into(),
+            format!("{}\n", serde_json::to_string_pretty(&other).unwrap()).into_bytes(),
+        );
+        upgrade(&project.0, &[]).unwrap();
+        assert_eq!(project.snapshot(), expected);
+        upgrade(&project.0, &[]).unwrap();
+        assert_eq!(project.snapshot(), expected);
+    }
+
+    #[test]
+    fn status_line_cleanup_preserves_other_settings_byte_for_byte() {
+        let project = Project::new();
+        project.install();
+        for (bytes, message) in [
+            ("{ \"ours\": true }\n", None),
+            (
+                "{\"statusLine\": {\"command\": \"~/bin/my-line; delegate statusline\"}}",
+                Some("status line"),
+            ),
+            (
+                "{\"statusLine\": {\"command\": \"delegate statusline \"}}",
+                Some("status line"),
+            ),
+            ("{\"statusLine\": {\"command\": 7}}", Some("status line")),
+            ("{\"statusLine\": null}", Some("status line")),
+            (
+                "{\"statusLine\": \"delegate statusline\"}",
+                Some("status line"),
+            ),
+            ("{invalid JSON\n", Some("settings.json")),
+            ("[]\n", Some("settings.json")),
+            ("null\n", Some("settings.json")),
+        ] {
+            fs::write(project.0.join(CLAUDE_SETTINGS), bytes).unwrap();
+            let mut plan = Plan::default();
+            plan.remove_status_line(&project.0).unwrap();
+            assert!(plan.writes.is_empty());
+            assert_eq!(plan.removals, Vec::<String>::new());
+            if let Some(message) = message {
+                assert_eq!(plan.output.len(), 1);
+                assert!(plan.output[0].contains(message));
+            } else {
+                assert_eq!(plan.output, Vec::<String>::new());
+            }
+            let before = project.snapshot();
+            upgrade(&project.0, &[]).unwrap();
+            assert_eq!(project.snapshot(), before);
+        }
+        fs::remove_file(project.0.join(CLAUDE_SETTINGS)).unwrap();
+        let before = project.snapshot();
+        upgrade(&project.0, &[]).unwrap();
+        assert_eq!(project.snapshot(), before);
+        let mut plan = Plan::default();
+        plan.remove_status_line(&project.0).unwrap();
+        assert_eq!(plan.output, Vec::<String>::new());
+        assert!(plan.writes.is_empty());
     }
 
     #[test]
