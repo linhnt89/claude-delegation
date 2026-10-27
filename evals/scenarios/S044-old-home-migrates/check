@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A project used with the old layout (<repo>.delegate/ beside it) meets the new delegate.
 . "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/vault_transport.sh"
 # The last delegate with the old layout; it makes the starting state.
 OLD_LAYOUT=93e3ba8
 old="$(delegate_at "$OLD_LAYOUT")" || exit 1
@@ -33,33 +34,63 @@ B
 
 # With a vault remote on this machine.
 remote="$(bare_remote vault)"
-setup_machine "$remote"
+recording_vault "$remote"
+setup_machine "$VAULT_URL"
 old_layout_project shop
+before="$(vault_connections)"
 d list
 first="$OUT"
 [ "$RC" -eq 0 ] || fail "the first delegate list after the update failed: $first"
+[ "$(vault_connections)" -eq "$before" ] || fail "the first delegate list contacted the vault remote during migration: $first"
 echo "$first" | grep -q 't001' || fail "the first delegate list doesn't show the task: $first"
 echo "$first" | grep -qF "$HOME/.local/share/delegate" || echo "$first" | grep -qF "~/.local/share/delegate" ||
   fail "the first delegate list doesn't say where it moved the task state and hidden set: $first"
+move_note="$(printf '%s\n' "$first" | grep -iE 'mov|migrat')"
+[ "$(printf '%s\n' "$move_note" | grep -c .)" -eq 1 ] || fail "the first delegate list doesn't announce the move exactly once: $first"
+printf '%s\n' "$first" | grep 't001' | grep -qF "$HOME/.local/share/delegate" &&
+  printf '%s\n' "$first" | grep 'hidden' | grep -qF "$HOME/.local/share/delegate" ||
+  fail "the move message doesn't name the destinations of both the task state and hidden set: $first"
 [ ! -e "$OLDHOME" ] || fail "the old home is still beside the repo: $(ls -A "$OLDHOME" | head -5 | tr '\n' ' ')"
-remote_has "$remote" "S901 Hidden check" && remote_has "$remote" "S902 Hidden check" ||
-  fail "the hidden scenarios aren't committed and pushed to the vault remote"
+hidden="$(hidden_of "$PROJ")"
+[ -n "$hidden" ] && vroot="$(git -C "$hidden" rev-parse --show-toplevel)" || fail "the moved hidden set isn't in a local vault"
+for id in S901 S902; do
+  git -C "$vroot" grep -q -F "$id Hidden check" HEAD -- || fail "$id isn't committed in the local vault"
+  remote_has "$remote" "$id Hidden check" && fail "$id was pushed before evals/run used the hidden set"
+done
+[ -z "$(git -C "$vroot" status --porcelain)" ] || fail "the migration left uncommitted hidden scenarios in the vault"
+[ -f "$DHOME/t001/SUMMARY.txt" ] || fail "the task's round results didn't come along to $DHOME"
+[ -d "$DHOME/_evals/results" ] || fail "the old eval results didn't come along to $DHOME"
 grep -qE '^project *= *"[^"]+"' "$PROJ/.delegate-kit.toml" || fail "no project id written to .delegate-kit.toml"
 echo "$first" | grep -F ".delegate-kit.toml" | grep -qi "commit" || fail "the output doesn't say to commit the project id: $first"
+before="$(vault_connections)"
 d list
-[ "$OUT" = "$LISTED" ] || fail "the second delegate list isn't the plain task list from before: $OUT"
+[ "$(vault_connections)" -eq "$before" ] || fail "the second delegate list contacted the vault remote"
+[ "$RC" -eq 0 ] || fail "the second delegate list failed: $OUT"
+printf '%s\n' "$OUT" | hidden_pending_note S901 || printf '%s\n' "$OUT" | hidden_pending_note S902 ||
+  fail "the second delegate list doesn't name the moved hidden scenarios as not pushed yet: $OUT"
+# Only the pending note may accompany the unchanged task list. Test each line with the
+# shared note recognizer so a move notice, project-id hint or warning cannot be ignored.
+plain="$(while IFS= read -r line; do
+  printf '%s\n' "$line" | hidden_pending_note S901 || printf '%s\n' "$line" | hidden_pending_note S902 || printf '%s\n' "$line"
+done <<<"$OUT")"
+[ "$plain" = "$LISTED" ] || fail "the second delegate list has a message other than the pending hidden note, or changed the task list: $OUT"
 # The project's evals/run is still the old kit's, which only knows the old layout: the user
 # gets the new one the usual way after rebuilding delegate.
 d upgrade
 [ "$RC" -eq 0 ] || fail "delegate upgrade after the migration failed: $OUT"
 project_evals "$PROJ"
-echo "$EV" | grep -q "S901, hidden" && echo "$EV" | grep -q "S902, hidden" || fail "after the move, evals/run doesn't run the hidden scenarios: $(echo "$EV" | tail -3)"
-[ -f "$DHOME/t001/SUMMARY.txt" ] || fail "the task's round results didn't come along to $DHOME"
+[ "$ERC" -eq 0 ] || fail "after the move, evals/run failed: $EV"
+echo "$EV" | grep -qi 'pass.*S901, hidden' && echo "$EV" | grep -qi 'pass.*S902, hidden' || fail "after the move, evals/run doesn't run both hidden scenarios successfully: $(echo "$EV" | tail -3)"
+remote_has "$remote" "S901 Hidden check" && remote_has "$remote" "S902 Hidden check" ||
+  fail "evals/run didn't push both moved hidden scenarios to the vault remote"
 
 # A machine without a vault remote: a local vault, and how to connect it.
 use_machine other
 old_layout_project shop-b
+before="$(vault_connections)"
 d list
+[ "$(vault_connections)" -eq "$before" ] || fail "without a vault remote, delegate list attempted a vault connection"
+[ "$RC" -eq 0 ] || fail "without a vault remote, delegate list failed: $OUT"
 echo "$OUT" | grep -q 't001' || fail "without a vault remote, delegate list doesn't show the task: $OUT"
 echo "$OUT" | grep -q "delegate setup --vault" || fail "without a vault remote, the output doesn't say how to connect one: $OUT"
 [ ! -e "$OLDHOME" ] || fail "without a vault remote, the old home is still beside the repo"
