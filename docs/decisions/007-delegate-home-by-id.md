@@ -1,7 +1,7 @@
 # 007: The delegate home is found by id, and hidden sets live in a vault
 
 - Date: 2026-10-26
-- Status: accepted
+- Status: superseded by 010
 
 ## Context
 The delegate home is `<main checkout>.delegate/`, named by path (t018). Moving the repo from

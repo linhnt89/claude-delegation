@@ -58,12 +58,13 @@ connected. `delegate setup --vault <url>` connects the vault on each machine. Co
 `delegate where` prints `hidden <path>` (or `hidden none: <why>`). The folder is
 `$XDG_DATA_HOME/delegate/vault/<project-id>-<main checkout name>/hidden/`, defaulting to
 `~/.local/share/delegate/vault/.../hidden/`, with scenarios under `scenarios/`. `evals/run`
-asks `delegate where` when supported, otherwise uses the old
-`<repo>.delegate/_evals/hidden/` rule. `EVALS_HIDDEN` overrides discovery. Workers cannot read
-the delegate data folder, so they cannot tailor work to these checks. Results stay in the
-existing task-state folder. Old hidden homes and further vault syncing are not migrated yet.
+asks `delegate where` (an older `delegate` falls back to `<repo>.delegate/_evals/hidden/`, which
+no longer exists once a newer one has migrated it: update the binary). `EVALS_HIDDEN` overrides
+discovery. It pulls the vault first and says so if it can't. Inside a worker's sandbox
+(`DELEGATE_SANDBOXED=1`) it skips hidden scenarios. Workers cannot read the delegate data
+folder, so they cannot tailor work to these checks.
 
 ## Results
 `evals/run` prints a table and writes it, with one log per check, to
-`<repo>.delegate/_evals/results/`. Only the latest run per selection is kept; results are
+the checkout's task-state folder (`delegate where` prints it), under `_evals/results/`. Only the latest run per selection is kept; results are
 review-time state and never committed.
