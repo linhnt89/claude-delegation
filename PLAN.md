@@ -20,7 +20,8 @@
 - t040–t041 (2026-10-27): tasks show once, in the row above the prompt, with other sessions
   dimmed; the pane opens only on request and reads one status at a time; `init` adds no status
   line and `upgrade` removes the kit's (J8, J1, decision 012). t042: in the desktop app the row
-  hands its whole text to the app to fit (S064). The user passed S030 and S057 in the
+  hands its whole text to the app to fit (S064). t043: each pane card shows its worker on its own dim line, so a long
+  title can't push it off (S065). The user passed S030 and S057 in the
   desktop app on 2026-10-27.
 - t033 (2026-10-27): S031's check compares the user's settings and hooks, not the file's bytes,
   so the guard can add its hooks (J1, J9). P017 is now hidden.
@@ -33,7 +34,6 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t043 | Pane cards: the worker on its own dim line under the id and title, so a long title never pushes it off | todo | – | quick | `evals/run S065`; S030 still passes by hand | S030's card wording changes at merge |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
