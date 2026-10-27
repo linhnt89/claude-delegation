@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# The desktop app's row: the mod must not cut it by code-font columns the app doesn't draw in.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/mod.sh"
+setup_project
+mod_check "$EVALS_SCENARIO/mod.test.tsx"
+pass "in the desktop app the mod handed the whole row to the app to fit, own counts and button kept whole"
