@@ -17,6 +17,8 @@
   automatic migration of old homes. This repo migrated on 2026-10-27; its vault has no remote yet.
 - t026 (2026-10-27): checks for the lead guard (J9): S050–S054, P017 fail until the guard is
   built. A pilot of delegating eval writing; the guard and the `evaluate` role are not distilled yet.
+- t033 (2026-10-27): S031's check compares the user's settings and hooks, not the file's bytes,
+  so the guard can add its hooks (J1, J9). P017 is now hidden.
 
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
