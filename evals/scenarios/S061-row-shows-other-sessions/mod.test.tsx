@@ -52,8 +52,9 @@ test('a session with no tasks of its own still shows the row, with only the dimm
   expect(r?.parts.some((p: any) => p.props.color)).toBe(false)
 })
 
-test('a narrow row cuts the other groups before this session\'s counts', async ($, on) => {
-  const r = await row($, on, SESS_A, A, SURFACES[0], 58)
+// The terminal, where columns are exact; the desktop app cuts at its own edge (S064).
+test('a narrow row in the terminal cuts the other groups before this session\'s counts', async ($, on) => {
+  const r = await row($, on, SESS_A, A, SURFACES[1], 58)
   const text = r?.text ?? '(no row)'
   expect(text).toContain('1 ready to merge')
   expect(text).toContain('1 running')
