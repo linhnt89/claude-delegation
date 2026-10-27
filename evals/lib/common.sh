@@ -44,7 +44,7 @@ printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$DELEGATE" >"$EVALS_WORK/bin/del
 chmod +x "$EVALS_WORK/bin/delegate"
 export PATH="$EVALS_WORK/bin:$PATH"
 # The lead running the evals is itself a Claude Code session: its id must not own test tasks.
-unset DELEGATE_HOME DELEGATE_WORKERS DELEGATE_SANDBOX XDG_DATA_HOME XDG_CONFIG_HOME CLAUDE_CODE_SESSION_ID
+unset DELEGATE_HOME DELEGATE_WORKERS DELEGATE_SANDBOX DELEGATE_SANDBOXED XDG_DATA_HOME XDG_CONFIG_HOME CLAUDE_CODE_SESSION_ID
 # Nothing a check starts (delegate, workers, a Claude under test) may find the hidden set
 # or write into this run's results.
 unset EVALS_HIDDEN EVALS_RESULTS
