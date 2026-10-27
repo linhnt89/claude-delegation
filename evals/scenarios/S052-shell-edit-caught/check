@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/lead_guard.sh"
+setup_project
+exec python3 - <<'PY'
+import os, re, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, os.environ['EVALS_LIB'])
+from lead_guard import Hooks, fixtures, expect, finish
+root = Path(os.environ['PROJ'])
+fixtures(root)
+subprocess.run(['git', 'add', '-A'], cwd=root, check=True)
+subprocess.run(['git', 'commit', '-qm', 'Agreed shop plan and cart'], cwd=root, check=True)
+pricing = root / 'shop/pricing.py'
+pricing.write_text(pricing.read_text() + '\n# user edit before the turn\n')
+user_before = pricing.read_bytes()
+cart = root / 'shop/cart.py'
+cart_before = cart.read_bytes()
+hooks = Hooks(root)
+hooks.start()
+subprocess.run(['sh', '-c', "printf '\\n# lead shell change\\n' >> shop/cart.py; "
+                "printf '\\nLead plan note\\n' >> PLAN.md"], cwd=root, check=True)
+stop = hooks.call('Stop')
+expect(stop['blocked'] and not stop['error'],
+       'Stop after the lead shell-edited shop/cart.py was allowed; expected turn held')
+if stop['blocked']:
+    expect('shop/cart.py' in stop['reason'], f"Stop did not name shop/cart.py: {stop['reason']!r}")
+    expect(bool(re.search(r'undo|revert|restore', stop['reason'], re.I)) and
+           bool(re.search(r'delegat', stop['reason'], re.I)),
+           f"Stop did not say to undo and delegate the change: {stop['reason']!r}")
+    expect('PLAN.md' not in stop['reason'] and 'shop/pricing.py' not in stop['reason'],
+           f"Stop blamed lead files or the user's earlier edits: {stop['reason']!r}")
+cart.write_bytes(cart_before)
+stop = hooks.call('Stop', active=True)
+expect(not stop['blocked'] and not stop['error'], 'Stop still held after shop/cart.py was restored to its turn-start contents')
+expect(pricing.read_bytes() == user_before, "guard changed the user's pre-turn pricing edit")
+# Another user edit between turns must become the new baseline, not lead work.
+pricing.write_text(pricing.read_text() + '\n# user edit between turns\n')
+user_between = pricing.read_bytes()
+hooks.start()
+(root / 'PLAN.md').write_text((root / 'PLAN.md').read_text() + '\nPlan-only turn\n')
+stop = hooks.call('Stop')
+expect(not stop['blocked'] and not stop['error'] and not stop['messages'],
+       f"turn with only lead-file changes blamed the user or was held: {stop['messages']!r}")
+hooks.start()
+stop = hooks.call('Stop')
+expect(not stop['blocked'] and not stop['error'] and not stop['messages'],
+       f"unchanged turn was held or produced a message: {stop['messages']!r}")
+expect(pricing.read_bytes() == user_between, "guard changed the user's between-turn pricing edit")
+finish('shell product edit held until undone; plan edits and user edits between turns not blamed')
+PY

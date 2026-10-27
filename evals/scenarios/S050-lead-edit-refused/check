@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/lead_guard.sh"
+setup_project
+exec python3 - <<'PY'
+import os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ['EVALS_LIB'])
+from lead_guard import Hooks, TOOLS, fixtures, finish
+root = Path(os.environ['PROJ'])
+fixtures(root)
+hooks = Hooks(root)
+hooks.start()
+product = ['shop/pricing.py', 'tests/test_split.py', 'shop/api/handlers.py',
+           'evals/run', 'evals/scenarios/S001-shop/check', '.claude/settings.json', '.delegate.toml']
+lead = ['PLAN.md', 'docs/decisions/009-x.md', 'evals/jobs.md',
+        'evals/scenarios/S001-shop/scenario.md', 'CLAUDE.md', 'AGENTS.md']
+for tool in TOOLS:
+    for path in product:
+        hooks.edit(tool, path, False)
+    for path in lead:
+        hooks.edit(tool, path, True)
+    # A scratchpad outside the repo, but still entirely inside EVALS_WORK.
+    hooks.edit(tool, str(root.parent / 'scratchpad.py'), True)
+    hooks.edit(tool, 'docs/../shop/pricing.py', False)
+    hooks.edit(tool, 'docs/link/pricing.py', False)
+finish('lead product edits refused with spec and /delegate guidance; lead files and scratchpad allowed')
+PY

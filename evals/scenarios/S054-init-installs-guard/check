@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/lead_guard.sh"
+setup_project --no-init
+# A real earlier kit, reconstructed by the existing upgrade-eval helper.
+first="$(python3 "$EVALS_LIB/kits.py" commits | head -1)"
+export GUARD_OLD_KIT="$first"
+exec python3 - <<'PY'
+import json, os, re, shutil, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, os.environ['EVALS_LIB'])
+import kits
+from lead_guard import Hooks, expect, finish, preserve_settings
+base = Path(os.environ['PROJ'])
+initial = {
+    'statusLine': {'type': 'command', 'command': '~/bin/our-status-line'},
+    'permissions': {'allow': ['Bash(ls:*)']},
+    'env': {'OUR_PROJECT_SETTING': 'unchanged'},
+    'hooks': {
+        'PreToolUse': [{'matcher': 'Edit|Write', 'hooks': [
+            {'type': 'command', 'command': ': # our pre-tool hook'},
+            {'type': 'command', 'command': ': # our second pre-tool hook'}]}],
+        'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': ': # our prompt hook'}]}],
+        'Stop': [{'hooks': [{'type': 'command', 'command': ': # our stop hook'}]}]}}
+for mode in ('init', 'upgrade'):
+    root = base if mode == 'init' else base.parent / 'old-shop'
+    if mode == 'upgrade':
+        root.mkdir()
+        subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+        kits.install(os.environ['GUARD_OLD_KIT'], str(root))
+        (root / 'shop').mkdir()
+        (root / 'shop/pricing.py').write_text('# Old project pricing\n')
+    settings = root / '.claude/settings.json'
+    settings.parent.mkdir(exist_ok=True)
+    settings.write_text(json.dumps(initial, indent=2) + '\n')
+    subprocess.run(['git', 'add', '-A'], cwd=root, check=True)
+    subprocess.run(['git', 'commit', '-qm', 'Project before guard installation'], cwd=root, check=True)
+    def run():
+        p = subprocess.run([os.environ['DELEGATE'], mode], cwd=root,
+                           capture_output=True, text=True, timeout=30)
+        print(f'$ delegate {mode}\n{p.stdout}{p.stderr}')
+        return p
+    # Keep the pre-guard starting state for the invalid-JSON failure path too.
+    invalid_root = base.parent / f'{mode}-invalid-settings'
+    shutil.copytree(root, invalid_root, symlinks=True)
+    p = run()
+    expect(p.returncode == 0, f'{mode} failed while installing the guard')
+    after = json.loads(settings.read_text())
+    preserve_settings(initial, after)
+    for event in ('PreToolUse', 'UserPromptSubmit', 'Stop'):
+        old = sum(len(g.get('hooks', [])) for g in initial['hooks'][event])
+        new = sum(len(g.get('hooks', [])) for g in after.get('hooks', {}).get(event, []))
+        expect(new > old, f'{mode} did not install the guard\'s {event} hook')
+    output = p.stdout + p.stderr
+    expect(bool(re.search(r'guard', output.replace('DELEGATE_GUARD', ''), re.I))
+           and bool(re.search(r'add|install|enabl', output, re.I)) and 'DELEGATE_GUARD=off' in output,
+           f'{mode} did not announce the added guard and DELEGATE_GUARD=off switch')
+    for off in (False, True, False):
+        # Only the environment of this particular lead controls the off switch.
+        env = {**os.environ, 'DELEGATE_GUARD': 'off'} if off else dict(os.environ)
+        hooks = Hooks(root)
+        hooks.start(env=env)
+        hooks.edit('Edit', 'shop/pricing.py', off, env=env)
+    p = run()
+    expect(p.returncode == 0, f'second {mode} failed')
+    expect(json.loads(settings.read_text()) == after, f'running {mode} twice duplicated or changed hooks/settings')
+    root = invalid_root
+    settings = root / '.claude/settings.json'
+    invalid = b'{ "hooks": not-valid-json\n'
+    settings.write_bytes(invalid)
+    p = run()
+    expect(settings.read_bytes() == invalid, f'{mode} rewrote an invalid settings.json')
+    output = p.stdout + p.stderr
+    expect('settings.json' in output and bool(re.search(r'invalid|parse|read|JSON', output, re.I))
+           and bool(re.search(r'left|leav|skip|kept|untouch|not (?:chang|writ)', output, re.I)),
+           f'{mode} did not explain that invalid settings.json was left alone')
+finish('init and upgrade installed guard hooks once, preserved user settings, and respected only the environment off switch')
+PY

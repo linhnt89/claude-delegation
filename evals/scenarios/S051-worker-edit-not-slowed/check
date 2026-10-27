@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/lead_guard.sh"
+setup_project
+simple_workers
+stub_worker gpt-good <<'B'
+work() { python3 "$EVALS_LIB/lead_guard.py" worker; }
+B
+write_spec t001 'Worker hook probe' 'Change pricing and add a split test through the project hooks.' \
+  "grep -q 'worker pricing change' shop/pricing.py" \
+  "grep -q 'worker split test' tests/test_split.py"
+d run t001
+export GUARD_RUN_RC="$RC" GUARD_RUN_OUT="$OUT"
+exec python3 - <<'PY'
+import json, os, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, os.environ['EVALS_LIB'])
+from lead_guard import Hooks, expect, finish
+root = Path(os.environ['PROJ'])
+receipt = Path.home() / '.cache/stub/guard-worker.json'
+expect(receipt.exists(), 'runner-started worker did not exercise the installed hooks')
+if receipt.exists():
+    evidence = json.loads(receipt.read_text())
+    for failure in evidence['failures']:
+        expect(False, failure)
+expect(os.environ['GUARD_RUN_RC'] == '0',
+       'worker task did not finish with allowed edits: ' + os.environ['GUARD_RUN_OUT'][-300:])
+for path, marker in [('shop/pricing.py', 'worker pricing change'),
+                     ('tests/test_split.py', 'worker split test')]:
+    p = subprocess.run(['git', 'show', f'refs/heads/task/t001:{path}'], cwd=root,
+                       capture_output=True, text=True)
+    expect(p.returncode == 0 and marker in p.stdout, f"worker's task commit lacks its change to {path}")
+# Start directly in the very same worktree, with the lead's environment. Merely
+# living in a task worktree is not the runner's worker credential.
+worktrees = subprocess.run(['git', 'worktree', 'list', '--porcelain'], cwd=root,
+                           capture_output=True, text=True).stdout.splitlines()
+others = [Path(line[9:]) for line in worktrees if line.startswith('worktree ') and Path(line[9:]) != root]
+expect(bool(others), 'worker task did not leave a worktree for the hand-started lead probe')
+if others:
+    lead = Hooks(others[0])
+    lead.start()
+    lead.edit('Edit', 'shop/pricing.py', False, who='hand-started lead in a task worktree')
+finish('runner-started worker edits committed and turn ended; hand-started worktree lead refused')
+PY
