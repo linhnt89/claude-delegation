@@ -1,7 +1,7 @@
 # 008: Machine setup is `delegate setup`, apart from `init`
 
 - Date: 2026-10-26
-- Status: accepted
+- Status: accepted; "pushed by the next delegate command" superseded by 011
 
 ## Context
 `delegate init` sets up a project but also writes the machine's `~/.config/delegate/workers.toml`

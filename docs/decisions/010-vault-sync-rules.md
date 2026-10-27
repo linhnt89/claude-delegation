@@ -1,7 +1,7 @@
 # 010: Vault sync rules, as built
 
 - Date: 2026-10-27
-- Status: accepted
+- Status: accepted; its sync rule superseded by 011
 
 ## Context
 Decision 007 put task state in `~/.local/share/delegate/checkouts/` and hidden sets in one vault

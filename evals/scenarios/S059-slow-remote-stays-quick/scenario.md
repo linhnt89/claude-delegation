@@ -30,10 +30,10 @@ Every `delegate` command waits on the network and on other sessions, so the stat
 checking a task takes many seconds, and background runs fail to start at all.
 
 ## Failure paths
-- The remote is unreachable: the same limits hold, and `delegate list` says the vault has
-  unpushed commits or couldn't be reached.
-- Once the remote is quick again, one more command leaves the vault in sync with it (decision
-  010 still holds).
+- The remote is unreachable: the same limits hold, and `delegate list` names a hidden hand
+  edit as not on the remote yet.
+- None of steps 1–3 contacts the remote at all (decision 011).
+- Once the remote is quick again, one `evals/run` leaves the vault in sync with it.
 
 ## Properties
 - None.
