@@ -2,7 +2,7 @@
 - Job: J9
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 The guard, as Claude Code calls it.

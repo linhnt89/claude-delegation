@@ -2,7 +2,7 @@
 - Job: J9
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 A developer setting up a new project, and one upgrading a project made before the guard.

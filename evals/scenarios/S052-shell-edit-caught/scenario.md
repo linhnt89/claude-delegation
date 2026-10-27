@@ -2,7 +2,7 @@
 - Job: J9
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude Code as lead, who changes a product file with a shell command (`sed -i`, a heredoc,

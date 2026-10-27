@@ -2,7 +2,7 @@
 - Job: J9
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude Code as lead in a project set up with `delegate init`, after the plan is agreed.

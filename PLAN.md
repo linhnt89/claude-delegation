@@ -15,6 +15,8 @@
 - t021–t024 (2026-10-27): the delegate home survives moves and machines (J7, J1; decisions
   007, 008, 010): task state by checkout id, one vault repo for hidden sets, `delegate setup`,
   automatic migration of old homes. This repo migrated on 2026-10-27; its vault has no remote yet.
+- t026 (2026-10-27): checks for the lead guard (J9): S050–S054, P017 fail until the guard is
+  built. A pilot of delegating eval writing; the guard and the `evaluate` role are not distilled yet.
 
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |

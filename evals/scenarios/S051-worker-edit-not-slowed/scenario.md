@@ -2,7 +2,7 @@
 - Job: J9
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 A Claude Code worker running a delegated task. It loads the same project settings as the lead

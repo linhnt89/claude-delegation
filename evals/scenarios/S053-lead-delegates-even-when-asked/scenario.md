@@ -2,7 +2,7 @@
 - Job: J9
 - Tier: full
 - Judged by: auto
-- Status: agreed
+- Status: automated
 - Timeout: 1200
 
 ## Who
