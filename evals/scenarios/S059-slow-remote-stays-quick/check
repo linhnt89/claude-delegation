@@ -96,6 +96,8 @@ export S059_HIDDEN="$(hidden_of "$PROJ")"
 [ -d "$S059_HIDDEN" ] || fail 'setup: hidden scenario folder is missing'
 export S059_VAULT="$(git -C "$S059_HIDDEN" rev-parse --show-toplevel)"
 
+# Bootstrap connections are allowed; everything until recovery must be local.
+export S059_BASE_CONNECTIONS="$(find "$S059_CONNECTIONS" -type f | wc -l)"
 printf '3\n' >"$S059_CONTROL"
 for session in 1 2; do
   setsid bash -c '
@@ -128,6 +130,7 @@ control = Path(os.environ["S059_CONTROL"])
 connections = Path(os.environ["S059_CONNECTIONS"])
 loops = [int(pid) for pid in sys.argv[1:]]
 deadline = time.monotonic() + 180
+baseline_connections = int(os.environ["S059_BASE_CONNECTIONS"])
 
 
 class Failure(Exception):
@@ -144,11 +147,18 @@ def sessions_alive():
         os.kill(pid, 0)
 
 
-def command(args, remote, limit=None, budget=15, stdin=None):
+def no_remote_connections(label):
+    count = len(list(connections.glob("[0-9]*")))
+    require(count == baseline_connections,
+            f"{label}: ordinary commands contacted the vault remote ({count - baseline_connections} connections)")
+
+
+def command(args, remote, limit=None, budget=15, stdin=None, evals=False):
     sessions_alive()
-    label = "delegate " + " ".join(args)
+    label = ("evals/run " if evals else "delegate ") + " ".join(args)
     start = time.monotonic()
-    proc = subprocess.Popen([delegate, *args], cwd=project, text=True,
+    executable = str(Path(project) / "evals/run") if evals else delegate
+    proc = subprocess.Popen([executable, *args], cwd=project, text=True,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, start_new_session=True)
     expired = False
@@ -161,8 +171,10 @@ def command(args, remote, limit=None, budget=15, stdin=None):
     elapsed = time.monotonic() - start
     with (work / "transcript.log").open("a") as log:
         log.write(f"\n$ {label} ({remote}, {elapsed:.3f}s, exit {proc.returncode})\n{output}\n")
-    # Timing comes first, so a timeout or subsequent CLI error cannot hide which
-    # latency limit broke. Do not round a passing duration before comparing it.
+    # Contact is itself a failure, even if the product returned within its budget.
+    # Keep all latency limits too, without rounding passing durations.
+    if not evals:
+        no_remote_connections(label)
     if limit is not None:
         require(elapsed < limit,
                 f"{label} took {elapsed:.3f}s with {remote}; limit {limit:g}s")
@@ -176,11 +188,6 @@ def set_delay(seconds):
     pending = control.with_suffix(".next")
     pending.write_text(f"{seconds}\n")
     pending.replace(control)
-
-
-def used_transport(delay):
-    return any(json.loads(p.read_text())["delay"] == delay
-               for p in connections.glob("[0-9]*"))
 
 
 def exercise(task, remote):
@@ -211,8 +218,7 @@ try:
         sessions_alive()
         time.sleep(0.01)
     exercise("t001", "a 3s remote")
-    require(used_transport(3),
-            "the slow transport was never exercised")
+    no_remote_connections("steps 1–3 with a slow remote")
 
     # A genuinely hanging connection, not an immediate missing-repo failure. A
     # local hand edit makes both the offline warning and recovery meaningful.
@@ -220,24 +226,28 @@ try:
     scenario = next(Path(os.environ["S059_HIDDEN"]).rglob("scenario.md"))
     scenario.write_text(scenario.read_text().replace("before-outage", "during-outage"))
     listing = exercise("t002", "a hanging remote")
-    require(re.search(r"not pushed|unpushed|could(?:n.t| not) (?:check|reach)|unreachable|offline", listing, re.I),
-            f"offline delegate list did not warn about the vault: {listing}")
-    require(used_transport(600),
-            "the hanging transport was never exercised")
+    require(re.search(r"not pushed|unpushed|not on the remote", listing, re.I)
+            and (re.search(r"\bS901\b", listing)
+                 or (re.search(r"hidden|vault", listing, re.I)
+                     and any(re.search(r"\b[0-9]+\b", line)
+                             for line in listing.splitlines()
+                             if re.search(r"not pushed|unpushed|not on the remote", line, re.I)))),
+            f"unreachable-remote delegate list did not name the hidden edit as not on the remote: {listing}")
+    no_remote_connections("steps 1–3 with an unreachable remote")
 
     # No retries or direct git sync: exactly one user command must converge.
     set_delay(0)
-    command(["list"], "the recovered quick remote")
+    command(["fast"], "the recovered quick remote", budget=30, evals=True)
     vault = os.environ["S059_VAULT"]
     remote = os.environ["S059_REMOTE"]
     local_head = subprocess.check_output(["git", "-C", vault, "rev-parse", "HEAD"], text=True).strip()
     remote_head = subprocess.check_output(["git", "--git-dir", remote, "rev-parse", "refs/heads/main"], text=True).strip()
-    require(local_head == remote_head, "one command after recovery left vault and remote commits different")
+    require(local_head == remote_head, "one evals/run after recovery left vault and remote commits different")
     require(not subprocess.check_output(["git", "-C", vault, "status", "--porcelain"], text=True).strip(),
-            "one command after recovery left uncommitted vault changes")
+            "one evals/run after recovery left uncommitted vault changes")
     contents = subprocess.check_output(["git", "--git-dir", remote, "grep", "during-outage", "main"], text=True)
     require("during-outage" in contents, "recovery lost the offline hidden-scenario edit")
-    print("statusline, list and status stayed quick with slow and hanging remotes; background runs finished; one recovered command synced the vault")
+    print("ordinary commands stayed quick and made no remote connections; background runs finished; one recovered evals/run synced the vault")
 except (Failure, OSError, subprocess.SubprocessError, StopIteration, ValueError) as error:
     print(f"FAIL: {error}")
     sys.exit(1)
