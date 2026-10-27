@@ -21,7 +21,7 @@
   dimmed; the pane opens only on request and reads one status at a time; `init` adds no status
   line and `upgrade` removes the kit's (J8, J1, decision 012). t042: in the desktop app the row
   hands its whole text to the app to fit (S064). The user passed S030 and S057 in the
-  desktop app on 2026-10-27. S030 and S057 are judged by the user again.
+  desktop app on 2026-10-27.
 - t033 (2026-10-27): S031's check compares the user's settings and hooks, not the file's bytes,
   so the guard can add its hooks (J1, J9). P017 is now hidden.
 - t034–t038 (2026-10-27): the vault syncs only when the hidden set is changed or run (J8, J7,
