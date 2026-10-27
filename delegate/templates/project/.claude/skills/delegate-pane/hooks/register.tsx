@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ThemeKey } from 'claude-code'
 
-import type { PaneState, Task, View } from '../types'
+import type { Task, View } from '../types'
 
 // Shows `delegate status --json` in a pane beside the chat, read again every few seconds.
 const PANE = 'delegate'
@@ -13,27 +13,21 @@ const view = atom({ plugin: 'delegate-pane', key: 'view' } as const, {
   readAt: 0,
 } as View)
 
-const pane = atom({ plugin: 'delegate-pane', key: 'pane' } as const, {
-  running: [],
-  autoOpened: false,
-} as PaneState)
+const reading = new Set<string | null>()
 
-async function syncPane($: EngineInterface, tasks: Task[]): Promise<void> {
-  const previous = await read($, pane)
-  const running = tasks.filter(t => LIVE.has(t.phase)).map(t => t.id)
-  // Moving between running phases must not undo a person's close.
-  const started = running.some(id => !previous.running.includes(id))
-  await update($, pane, state => ({ ...state, running }))
-  if (started && !(await $.ui.panes()).some(p => p.id === PANE)) {
-    await $.ui.open({ id: PANE, title: 'Delegate tasks' })
-    await update($, pane, state => ({ ...state, autoOpened: true }))
-  } else if (!tasks.some(t => t.phase !== 'not_started') && previous.autoOpened) {
-    await $.ui.close({ id: PANE })
-    await update($, pane, state => ({ ...state, autoOpened: false }))
+async function refresh($: EngineInterface): Promise<void> {
+  const id = await sessionId($)
+  // Skip busy ticks, rather than queueing reads behind a slow delegate.
+  if (reading.has(id)) return
+  reading.add(id)
+  try {
+    await readStatus($)
+  } finally {
+    reading.delete(id)
   }
 }
 
-async function refresh($: EngineInterface): Promise<View> {
+async function readStatus($: EngineInterface): Promise<void> {
   let next: View
   try {
     const out = await $.process.run(['delegate', 'status', '--json'], { timeoutMs: 20000 })
@@ -47,9 +41,6 @@ async function refresh($: EngineInterface): Promise<View> {
     next = { tasks: [], error: `delegate isn't available here (${String(err)})`, readAt: Date.now() }
   }
   await update($, view, () => next)
-  // A failed read says nothing about whether the workers stopped.
-  if (!next.error) await syncPane($, next.tasks)
-  return next
 }
 
 function ago(iso: string | null, now: number): string {
@@ -149,7 +140,7 @@ function identity(t: Task, mine: boolean, columns: number) {
   }).filter(p => p.text)
 }
 
-type SummaryPart = { text: string; color?: ThemeKey }
+type SummaryPart = { text: string; color?: ThemeKey; other?: boolean }
 
 function summary(tasks: Task[]): SummaryPart[] {
   const groups = [
@@ -177,6 +168,33 @@ function summary(tasks: Task[]): SummaryPart[] {
   return parts
 }
 
+function rowSummary(tasks: Task[], id: string | null): SummaryPart[] {
+  const parts = summary(id === null ? tasks : tasks.filter(t => t.session === id))
+  if (id === null) return parts
+  const groups = new Map<string | null, { name: string; count: number; stalled: number }>()
+  for (const t of tasks) {
+    if (t.session === id || t.phase === 'not_started' || (t.phase === 'done' && t.outcome !== 'pass')) continue
+    const g = groups.get(t.session) ?? { name: t.session === null ? 'by hand' : t.session_name, count: 0, stalled: 0 }
+    g.count += 1
+    g.stalled += Number(t.stalled)
+    groups.set(t.session, g)
+  }
+  // Rust's string order compares Unicode scalar values, not the host's locale.
+  const compare = (a: string, b: string): number => {
+    const x = Array.from(a), y = Array.from(b)
+    for (let i = 0; i < Math.min(x.length, y.length); i++) {
+      const order = (x[i].codePointAt(0) ?? 0) - (y[i].codePointAt(0) ?? 0)
+      if (order) return order
+    }
+    return x.length - y.length
+  }
+  const other = [...groups.entries()].sort(([a, x], [b, y]) => Number(a === null) - Number(b === null)
+    || compare(x.name, y.name) || compare(a ?? '', b ?? ''))
+    .map(([, g]) => `${g.name} ${g.count}${g.stalled ? ` (${g.stalled} stalled)` : ''}`).join(' · ')
+  if (other) parts.push({ text: `${parts.length > 1 ? ' ' : ''}│ ${other}`, other: true })
+  return parts
+}
+
 function textWidth(text: string): number {
   return Array.from(graphemes.segment(text), p => cellWidth(p.segment)).reduce((a, b) => a + b, 0)
 }
@@ -184,6 +202,12 @@ function textWidth(text: string): number {
 function clipSummary(parts: SummaryPart[], columns: number): SummaryPart[] {
   if (columns <= 0) return []
   if (parts.reduce((n, p) => n + textWidth(p.text), 0) <= columns) return parts
+  if (parts.length > 1 && parts[parts.length - 1].other) {
+    const own = parts.slice(0, -1)
+    const left = columns - own.reduce((n, p) => n + textWidth(p.text), 0)
+    // An ellipsis for the other groups must never displace a count that fits.
+    return left >= 0 ? [...own, ...clipSummary(parts.slice(-1), left)] : clipSummary(own, columns)
+  }
   let remaining = Math.max(0, columns - 1)
   const clipped: SummaryPart[] = []
   for (const p of parts) {
@@ -204,14 +228,13 @@ export const register: Register = on => {
     const ran = await next(e)
     await $.command.register({ name: 'delegate-pane', description: 'Show delegate tasks in a pane' })
     await refresh($)
-    $.clock.every(EVERY_MS, () => refresh($))
+    $.clock.every(EVERY_MS, () => { void refresh($) })
     return ran
   })
 
   on('command.run', { command: 'delegate-pane' }, async $ => {
-    await refresh($)
     await $.ui.open({ id: PANE, title: 'Delegate tasks' })
-    await update($, pane, state => ({ ...state, autoOpened: false }))
+    void refresh($)
     return { text: 'Delegate tasks pane opened.' }
   })
 
@@ -224,15 +247,12 @@ export const register: Register = on => {
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const closed = await next(e)
-    if (e.origin.kind === 'person')
-      await update($, pane, state => ({ ...state, autoOpened: false }))
     $.ui.invalidate('ui.render')
     return closed
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const v = await read($, view)
-    await read($, pane)
     if (e.props.hasSurvey || (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
       || (!v.error && !v.tasks.some(t => t.phase !== 'not_started')))
       return next(e)
@@ -244,7 +264,7 @@ export const register: Register = on => {
     const buttonWidth = columns >= controlWidth ? controlWidth : 0
     const id = await sessionId($)
     const source = v.error ? [{ text: 'delegate: status unavailable' }]
-      : summary(id === null ? v.tasks : v.tasks.filter(t => t.session === id))
+      : rowSummary(v.tasks, id)
     const total = source.reduce((n, p) => n + textWidth(p.text), 0)
     // Reserve the control first; shorten the keyboard hint before clipping counts.
     let hint = normal ? '/delegate-pane or ctrl+x tab, Enter to open' : ''
@@ -254,7 +274,6 @@ export const register: Register = on => {
     const parts = clipSummary(source, columns - tailWidth)
     const button = <Button key="delegate-open" label={label} autoFocus onPress={async () => {
       await $.ui.open({ id: PANE, title: 'Delegate tasks' })
-      await update($, pane, state => ({ ...state, autoOpened: false }))
     }} />
     return (
       <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">

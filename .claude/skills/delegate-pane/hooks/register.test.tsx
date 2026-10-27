@@ -54,14 +54,17 @@ function engine(on: any, stdout: string, exitCode = 0, sessionId: string | null 
   const opened: string[] = []
   const closed: string[] = []
   let closeHook: any
+  let openHook: any
   // The test engine has no surface-close entry point; dispatch the registered hook.
   register(((event: string, ...args: any[]) => {
     if (event === 'ui.close') closeHook = args[args.length - 1]
+    if (event === 'ui.open') openHook = args[args.length - 1]
   }) as any)
   on('command.register', () => ({ value: { command: 'delegate-pane' } }))
-  on('ui.open', (_: unknown, e: { id: string }) => {
+  on('ui.open', async (_: unknown, e: { id: string }) => {
     open = true
     opened.push(e.id)
+    await openHook({ ui: { invalidate(event: string) { expect(event).toBe('ui.render') } } }, e, async () => undefined)
     return { value: { isPlaced } }
   })
   on('ui.panes', () => ({ value: open ? [{ id: 'delegate', title: 'Delegate tasks', isPlaced, isShown: true, isFocused: false }] : [] }))
@@ -75,23 +78,36 @@ function engine(on: any, stdout: string, exitCode = 0, sessionId: string | null 
     return { value: sessionId }
   })
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('process.run', () => ({ value: { exitCode, stdout, stderr: exitCode ? 'error: not inside a git repository' : '' } }))
+  let pending: Promise<void> | null = null
+  const reads = { count: 0, active: 0, max: 0 }
+  on('process.run', async () => {
+    reads.count += 1
+    reads.active += 1
+    reads.max = Math.max(reads.max, reads.active)
+    try {
+      if (pending) await pending
+      return { value: { exitCode, stdout, stderr: exitCode ? 'error: not inside a git repository' : '' } }
+    } finally {
+      reads.active -= 1
+    }
+  })
   return {
-    opened, closed,
+    opened, closed, reads,
+    hold() {
+      let resolve!: () => void
+      let reject!: (reason: Error) => void
+      pending = new Promise<void>((yes, no) => { resolve = yes; reject = no })
+      return {
+        release() { pending = null; resolve() },
+        reject() { pending = null; reject(new Error('process timed out')) },
+      }
+    },
+    stdout(value: string) { stdout = value; exitCode = 0 },
     async personClose() {
-      let state = { running: ['t001'], autoOpened: true }
-      const fixture = { ui: { invalidate() {} }, state: {
-        get: async () => ({ value: state, version: 1 }),
-        set: async (_: unknown, value: typeof state) => {
-          state = value
-          return { isSet: true, version: 2 }
-        },
-      } }
-      await closeHook(fixture, { id: 'delegate', origin: { kind: 'person' } }, async () => {
+      await closeHook({ ui: { invalidate() {} } }, { id: 'delegate', origin: { kind: 'person' } }, async () => {
         open = false
         closed.push('person')
       })
-      expect(state).toEqual({ running: ['t001'], autoOpened: false })
     },
     placed(value: boolean) { isPlaced = value },
     status(tasks: Task[]) { stdout = JSON.stringify({ tasks }); exitCode = 0 },
@@ -119,19 +135,15 @@ function summaryEngine($: any, on: any, stdout: string, sessionId: string | null
   return {
     ...e,
     async change(kind: 'person' | 'plugin' | 'open', ui?: { redraw(): Promise<void> }) {
-      if (kind === 'open') return $.command.run(command())
+      if (kind === 'open') {
+        await $.command.run(command())
+        if (ui) await ui.redraw()
+        return
+      }
       // Like engine.personClose, dispatch the missing surface-close entry point.
       // Honor the mod's redraw request only after the registry has changed.
       let invalidated = false
-      let state = { running: [], autoOpened: true }
       const fixture = {
-        state: {
-          get: async () => ({ value: state, version: 1 }),
-          set: async (_: unknown, value: typeof state) => {
-            state = value
-            return { isSet: true, version: 2 }
-          },
-        },
         ui: { invalidate(event: string) { expect(event).toBe('ui.render'); invalidated = true } },
       }
       const event = { id: 'delegate', origin: { kind } }
@@ -139,7 +151,6 @@ function summaryEngine($: any, on: any, stdout: string, sessionId: string | null
         ? e.personClose() : closeHooks[i](fixture, event, () => run(i + 1))
       await run(0)
       expect(invalidated).toBe(true)
-      expect(state.autoOpened).toBe(kind !== 'person')
       if (ui) await ui.redraw()
     },
   }
@@ -399,14 +410,14 @@ test('an unreadable session id treats all cards as mine in one priority-sorted g
   }
 })
 
-test('the pane opens when a task starts, follows refreshes, and closes when only unstarted tasks remain', async ($, on) => {
+test('the pane never opens or closes by itself as tasks start, finish, and disappear', async ($, on) => {
   const clock = mock.clock(on)
   const e = engine(on, JSON.stringify({ tasks: [task('t001', { phase: 'not_started' })] }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   expect(e.opened).toEqual([])
   e.status([task('t001')])
   await clock.advance(3000)
-  expect(e.opened).toEqual(['delegate'])
+  expect(e.opened).toEqual([])
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: /^● implementing$/ })).toBeTruthy()
   e.status([task('t001', { phase: 'done', outcome: 'pass', ready_to_merge: true })])
@@ -415,17 +426,19 @@ test('the pane opens when a task starts, follows refreshes, and closes when only
   expect(e.closed).toEqual([])
   e.status([task('t002', { phase: 'not_started' })])
   await clock.advance(3000)
-  expect(e.closed).toEqual(['plugin'])
+  expect(e.closed).toEqual([])
   await clock.advance(3000)
-  expect(e.closed).toEqual(['plugin'])
+  expect(e.closed).toEqual([])
+  expect(e.opened).toEqual([])
   await ui.unmount()
 })
 
-test('a person can close the pane without it reopening until another task starts', async ($, on) => {
+test('a person can close the pane and it never reopens, even when another task starts', async ($, on) => {
   const clock = mock.clock(on)
   const e = engine(on, JSON.stringify(STATUS))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(e.opened).toEqual(['delegate'])
+  expect(e.opened).toEqual([])
+  await $.command.run(command())
   await e.personClose()
   await clock.advance(3000)
   e.status([task('t001', { phase: 'checks' })])
@@ -433,10 +446,10 @@ test('a person can close the pane without it reopening until another task starts
   expect(e.opened).toEqual(['delegate'])
   e.status([task('t001', { phase: 'checks' }), task('t004')])
   await clock.advance(3000)
-  expect(e.opened).toEqual(['delegate', 'delegate'])
+  expect(e.opened).toEqual(['delegate'])
   e.status([])
   await clock.advance(3000)
-  expect(e.closed).toEqual(['person', 'plugin'])
+  expect(e.closed).toEqual(['person'])
 })
 
 test('a command-opened pane stays open even when no tasks remain or another task starts', async ($, on) => {
@@ -455,11 +468,13 @@ test('a command-opened pane stays open even when no tasks remain or another task
   await ui.unmount()
 })
 
-test('the command takes ownership of an auto-opened pane', async ($, on) => {
+test('the command opens once on request even when tasks were already running', async ($, on) => {
   const clock = mock.clock(on)
   const e = engine(on, JSON.stringify(STATUS))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  expect(e.opened).toEqual([])
   await $.command.run(command())
+  expect(e.opened).toEqual(['delegate'])
   e.status([])
   await clock.advance(3000)
   expect(e.closed).toEqual([])
@@ -472,6 +487,8 @@ test('finished tasks alone do not auto-open, and a failed refresh does not close
   expect(e.opened).toEqual([])
   e.status([task('t002')])
   await clock.advance(3000)
+  expect(e.opened).toEqual([])
+  await $.command.run(command())
   e.fail()
   await clock.advance(3000)
   expect(e.closed).toEqual([])
@@ -479,6 +496,70 @@ test('finished tasks alone do not auto-open, and a failed refresh does not close
   await clock.advance(3000)
   expect(e.opened).toEqual(['delegate'])
 })
+
+test('slow reads are skipped, preserve both views, and do not delay the command', async ($, on) => {
+  const clock = mock.clock(on)
+  const e = engine(on, JSON.stringify({ tasks: [task('t001')] }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const held = e.hold()
+  await clock.advance(3000)
+  for (let i = 0; i < 6; i++) await clock.advance(3000)
+  expect(e.reads).toEqual({ count: 2, active: 1, max: 1 })
+  expect(await band.find({ type: 'Text', text: '● 1 running' })).toBeTruthy()
+  expect(await pane.find({ type: 'Text', text: /^◆ t001 / })).toBeTruthy()
+  expect(await band.find({ type: 'Text', text: /unavailable/ })).toBeUndefined()
+  const opened = await Promise.race([
+    $.command.run(command()).then(() => true),
+    new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1000)),
+  ])
+  expect(opened).toBe(true)
+  expect(e.opened).toEqual(['delegate'])
+  expect(e.reads.count).toBe(2)
+  e.status([task('t002', { phase: 'done', outcome: 'pass', ready_to_merge: true })])
+  held.release()
+  await clock.advance(3000)
+  expect(await pane.find({ type: 'Text', text: '✓ ready to merge' })).toBeTruthy()
+  expect(e.reads.max).toBe(1)
+  await band.unmount()
+  await pane.unmount()
+})
+
+for (const failure of ['rejection', 'non-zero exit', 'unparseable stdout'] as const) {
+  test(`a ${failure} releases the read guard, reports an error, and a good tick clears it`, async ($, on) => {
+    const clock = mock.clock(on)
+    const e = engine(on, JSON.stringify({ tasks: [task('t001')] }))
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+    const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const held = e.hold()
+    await clock.advance(3000)
+    for (let i = 0; i < 3; i++) await clock.advance(3000)
+    expect(e.reads).toEqual({ count: 2, active: 1, max: 1 })
+    expect(await band.find({ type: 'Text', text: '● 1 running' })).toBeTruthy()
+    if (failure === 'rejection') held.reject()
+    else {
+      if (failure === 'non-zero exit') e.fail()
+      else e.stdout('not json')
+      held.release()
+    }
+    await clock.advance(0)
+    expect(await band.find({ type: 'Text', text: 'delegate: status unavailable' })).toBeTruthy()
+    expect((await pane.findAll({ type: 'Text' })).some(t => /timed out|not inside a git repository|available/.test(t.text))).toBe(true)
+    expect(e.reads.active).toBe(0)
+    e.status([task('t002', { phase: 'done', outcome: 'pass', ready_to_merge: true })])
+    await clock.advance(3000)
+    expect(e.reads).toEqual({ count: 3, active: 0, max: 1 })
+    expect(await band.find({ type: 'Text', text: '✓ 1 ready to merge' })).toBeTruthy()
+    expect(await band.find({ type: 'Text', text: /unavailable/ })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: '✓ ready to merge' })).toBeTruthy()
+    expect(e.opened).toEqual([])
+    expect(e.closed).toEqual([])
+    await band.unmount()
+    await pane.unmount()
+  })
+}
 
 const HINT = '/delegate-pane or ctrl+x tab, Enter to open'
 const SHORT_HINT = '/delegate-pane to open'
@@ -527,7 +608,7 @@ for (const { surface, viewport, name, normal } of [
     await ui.unmount()
   })
 
-  test(`summary counts only my session but remains visible for actionable tasks elsewhere on ${name}`, async ($, on) => {
+  test(`summary counts my session and shows other groups dimmed on ${name}`, async ($, on) => {
     const clock = mock.clock(on)
     const mine = task('t001', { phase: 'done', outcome: 'pass', ready_to_merge: true })
     const other = task('t002', { session: 'other', session_name: 'other', stalled: true })
@@ -537,7 +618,8 @@ for (const { surface, viewport, name, normal } of [
     await e.change('person')
     const ui = await $.ui.mount({ ...BAND, surface, viewport })
     expect(await ui.find({ type: 'Text', text: '✓ 1 ready to merge' })).toMatchObject({ props: { color: 'success' } })
-    expect(await ui.find({ type: 'Text', text: /stalled|failed/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: ' │ other 1 (1 stalled)' })).toMatchObject({ props: { dimColor: true } })
+    expect(await ui.find({ type: 'Text', text: /failed|by hand/ })).toBeUndefined()
     e.status([task('t001', { phase: 'not_started' }), other])
     await clock.advance(3000)
     expect(await ui.find({ type: 'Text', text: '1 not started' })).toBeTruthy()
@@ -545,12 +627,64 @@ for (const { surface, viewport, name, normal } of [
     e.status([other, manual])
     await clock.advance(3000)
     expect(await ui.find({ type: 'Text', text: 'delegate  ' })).toBeTruthy()
-    expect(await ui.find({ type: 'Text', text: /stalled|failed|not started|ready to merge/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '│ other 1 (1 stalled)' })).toMatchObject({ props: { dimColor: true } })
+    expect(await ui.find({ type: 'Text', text: /failed|not started|ready to merge/ })).toBeUndefined()
     expect(await ui.find({ type: 'Button' })).toBeTruthy()
     e.status([task('t001', { phase: 'not_started' })])
     await clock.advance(3000)
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await ui.unmount()
+  })
+
+  test(`other groups match statusline filtering, sorting and counts on ${name}`, async ($, on) => {
+    mock.clock(on)
+    summaryEngine($, on, JSON.stringify({ tasks: [
+      task('t001', { session: null, session_name: 'ignored', phase: 'interrupted' }),
+      task('t002', { session: 'z', session_name: 'zebra' }),
+      task('t003', { session: 'c', session_name: 'alpha' }),
+      task('t004', { session: 'b', session_name: 'alpha', stalled: true }),
+      task('t005', { session: 'b', session_name: 'alpha', phase: 'done', outcome: 'pass', ready_to_merge: false }),
+      task('t006', { session: 'b', session_name: 'alpha', phase: 'done', outcome: 'fail', ready_to_merge: true, stalled: true }),
+      task('t007', { session: 'b', session_name: 'alpha', phase: 'not_started', stalled: true }),
+      task('t008', { session: 'b', session_name: 'alpha', phase: 'done', outcome: null }),
+      task('t009', { session: 'unicode-a', session_name: '\u{10000}' }),
+      task('t010', { session: 'unicode-b', session_name: '\ue000' }),
+    ] }))
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    const ui = await $.ui.mount({ ...BAND, surface, viewport })
+    expect(await ui.find({ type: 'Text', text: '│ alpha 2 (1 stalled) · alpha 1 · zebra 1 · \ue000 1 · \u{10000} 1 · by hand 1' }))
+      .toMatchObject({ props: { dimColor: true } })
+    expect(await ui.find({ type: 'Text', text: 'delegate  ' })).toBeTruthy()
+    for (const part of await ui.findAll({ type: 'Text' })) expect(part.props.color).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`other groups clip before own counts and keep their dim style on ${name}`, async ($, on) => {
+    mock.clock(on)
+    summaryEngine($, on, JSON.stringify({ tasks: [
+      task('t001', { phase: 'done', outcome: 'pass', ready_to_merge: true }),
+      task('t002'), task('t003', { session: 'other', session_name: '界👩‍💻'.repeat(50), stalled: true }),
+    ] }))
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    const own = 'delegate  ✓ 1 ready to merge · ● 1 running'
+    const control = (normal ? 4 : 10) + (surface === 'terminal' ? 4 : 0)
+    const exact = widthOf(own) + control + 2
+    for (const bodyColumns of [58, 80, 100, 150, exact, exact + 1]) {
+      const ui = await $.ui.mount({ ...BAND, surface, viewport, props: { ...BAND.props, bodyColumns } })
+      const texts = await ui.findAll({ type: 'Text' })
+      const text = texts.map(t => t.text).join('')
+      expect(widthOf(text) + control <= bodyColumns).toBe(true)
+      if (!normal && bodyColumns === exact) expect(text).toBe(`${own}  `)
+      if (!normal && bodyColumns === exact + 1) expect(text).toBe(`${own}…  `)
+      if (!normal && bodyColumns >= 80) {
+        expect(text).toContain('✓ 1 ready to merge · ● 1 running')
+        const other = texts.find(t => t.text.includes('│'))
+        expect(other?.text.endsWith('…')).toBe(true)
+        expect(other).toMatchObject({ props: { dimColor: true } })
+        expect(other?.props.color).toBeUndefined()
+      }
+      await ui.unmount()
+    }
   })
 
   test(`summary falls back to counting every session when its id is unreadable on ${name}`, async ($, on) => {
@@ -581,6 +715,8 @@ for (const { surface, viewport, name, normal } of [
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     e.status([task('t001')])
     await clock.advance(3000)
+    expect(await ui.find({ type: 'Button' })).toBeTruthy()
+    await e.change('open', ui)
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await e.change('person', ui)
     expect(await ui.find({ type: 'Button' })).toBeTruthy()
@@ -595,11 +731,13 @@ for (const { surface, viewport, name, normal } of [
     await ui.unmount()
   })
 
-  test(`summary shows while the auto-opened pane is listed but not placed on ${name}`, async ($, on) => {
+  test(`summary shows while the requested pane is listed but not placed on ${name}`, async ($, on) => {
     mock.clock(on)
     const e = summaryEngine($, on, JSON.stringify(STATUS))
     e.placed(false)
     await $.session.start({ cwd: '/', surface, isInteractive: true })
+    expect(e.opened).toEqual([])
+    await $.command.run(command())
     expect(e.opened).toEqual(['delegate'])
     const ui = await $.ui.mount({
       ...BAND, surface,
@@ -610,6 +748,7 @@ for (const { surface, viewport, name, normal } of [
     expect(await ui.find({ type: 'Button', key: 'delegate-open' })).toBeTruthy()
     e.placed(true)
     await ui.press({ key: 'delegate-open' })
+    await ui.redraw()
     expect(e.opened).toEqual(['delegate', 'delegate'])
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await ui.unmount()
@@ -622,6 +761,7 @@ for (const { surface, viewport, name, normal } of [
     const ui = await $.ui.mount({ ...BAND, surface, viewport })
     expect(await ui.find({ type: 'Button' })).toMatchObject({ text: normal ? 'Open' : 'Open tasks', props: { autoFocus: true } })
     await ui.press({ key: 'delegate-open' })
+    await ui.redraw()
     expect(e.opened).toEqual(['delegate'])
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     // A summary-opened pane stays open, like a command-opened one.
@@ -632,7 +772,7 @@ for (const { surface, viewport, name, normal } of [
     await clock.advance(3000)
     await e.change('person', ui)
     expect(await ui.find({ type: 'Button' })).toBeTruthy()
-    await e.change('open')
+    await e.change('open', ui)
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await e.change('plugin', ui)
     expect(await ui.find({ type: 'Button' })).toBeTruthy()
@@ -659,6 +799,7 @@ for (const { surface, viewport, name, normal } of [
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await ui.redraw(BAND.props)
     await ui.press({ key: 'delegate-open' })
+    await ui.redraw()
     expect(await ui.find({ type: 'Button' })).toBeUndefined()
     await e.change('person', ui)
     expect(await ui.find({ type: 'Text', text: /^delegate: status unavailable$/ })).toBeTruthy()
@@ -699,6 +840,7 @@ for (const { surface, viewport, name, normal } of [
         expect(await ui.find({ type: 'Box', text: 'Open' })).toBeTruthy()
       if (button) {
         await ui.press({ key: 'delegate-open' })
+        await ui.redraw()
         expect(await ui.find({ type: 'Button' })).toBeUndefined()
         await e.change('plugin', ui)
       }

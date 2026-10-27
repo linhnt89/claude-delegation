@@ -24,11 +24,8 @@ export type Task = {
 /** What the pane last read: the tasks, or why there are none. */
 export type View = { tasks: Task[]; error: string | null; readAt: number }
 
-/** Pane ownership and the running tasks seen at the last successful refresh. */
-export type PaneState = { running: string[]; autoOpened: boolean }
-
 declare module 'claude-code' {
   interface PluginState {
-    'delegate-pane': { view: View; pane: PaneState }
+    'delegate-pane': { view: View }
   }
 }
