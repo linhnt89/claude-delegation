@@ -11,7 +11,7 @@
   `wait`, the status line, the side pane and the summary row above the prompt.
 - t020 (2026-10-26): `delegate upgrade` and `.delegate-kit.toml` (J1, decisions 005, 006).
 - t030–t032 (2026-10-27): each Claude Code session sees its own tasks, by title, in the status
-  line and the pane, other sessions' apart (J8, decision 009). S057 and S030 are judged by the user.
+  line and the pane, other sessions' apart (J8, decision 009).
 - t021–t024 (2026-10-27): the delegate home survives moves and machines (J7, J1; decisions
   007, 008, 010): task state by checkout id, one vault repo for hidden sets, `delegate setup`,
   automatic migration of old homes. This repo migrated on 2026-10-27; its vault's remote is on GitHub.
@@ -20,7 +20,8 @@
 - t040–t041 (2026-10-27): tasks show once, in the row above the prompt, with other sessions
   dimmed; the pane opens only on request and reads one status at a time; `init` adds no status
   line and `upgrade` removes the kit's (J8, J1, decision 012). t042: in the desktop app the row
-  hands its whole text to the app to fit (S064). S030 and S057 are judged by the user again.
+  hands its whole text to the app to fit (S064). The user passed S030 and S057 in the
+  desktop app on 2026-10-27. S030 and S057 are judged by the user again.
 - t033 (2026-10-27): S031's check compares the user's settings and hooks, not the file's bytes,
   so the guard can add its hooks (J1, J9). P017 is now hidden.
 - t034–t038 (2026-10-27): the vault syncs only when the hidden set is changed or run (J8, J7,
