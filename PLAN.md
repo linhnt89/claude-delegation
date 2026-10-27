@@ -33,6 +33,7 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
+| t043 | Pane cards: the worker on its own dim line under the id and title, so a long title never pushes it off | todo | – | quick | `evals/run S065`; S030 still passes by hand | S030's card wording changes at merge |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# The pane's cards: the worker has its own line, so a long title never pushes it off.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/mod.sh"
+setup_project
+mod_check "$EVALS_SCENARIO/mod.test.tsx"
+pass "every card showed its worker in full on its own dim line under the id and title"
