@@ -206,6 +206,11 @@ fn prune_empty(path: &Path, tick: &mut impl FnMut() -> Result<()>) -> Result<()>
 }
 
 pub(crate) fn run(main: &Path, gitdir: &Path, home: &Path, data: &Path) -> Result<()> {
+    // Inside the worker sandbox legacy homes stay where they are: migration commits hidden
+    // material to the vault, and the sandbox must not touch or name it (the lead moves homes).
+    if vault::sandboxed() {
+        return Ok(());
+    }
     migrate(main, gitdir, home, data, &mut || Ok(()))
 }
 
@@ -230,9 +235,19 @@ fn migrate(
     if saved.as_ref().is_some_and(|j| j.done) || (saved.is_none() && !source.exists()) {
         return Ok(());
     }
-    // The lock order is data -> vault -> git identity everywhere in this import.
-    let vault = Vault::lock(data)?;
-    vault.ensure_no_conflict()?;
+    // Hidden material is the only reason to touch the vault, and nothing here waits for it:
+    // a busy vault delays the hidden set to the next command (see below).
+    let hidden_ahead = match &saved {
+        Some(journal) => journal.entries.iter().any(|e| e.hidden),
+        None => {
+            fs::symlink_metadata(&source).is_ok_and(|m| m.is_dir())
+                && discover(&source)?.iter().any(|e| e.hidden)
+        }
+    };
+    let mut vault = Vault::at(data);
+    if hidden_ahead {
+        vault.ensure_no_conflict()?;
+    }
     let identity = File::open(gitdir)?;
     identity.lock()?;
     let ctx = Ctx {
@@ -292,6 +307,14 @@ fn migrate(
     let has_hidden = journal.entries.iter().any(|e| e.hidden);
     let mut hidden_dest = None;
     if has_hidden {
+        // Another process owns the vault: the task state is moved, the journal stays open and
+        // the next command moves the hidden set. Reserve the project id so it can't change.
+        if !vault.try_lock()? {
+            if vault::read_project_id(&ctx)?.is_none() {
+                vault::save_project_id(&ctx, &journal.project)?;
+            }
+            return Ok(());
+        }
         vault.init()?;
         tick()?;
         let project = vault.project(&ctx, &journal.project)?.unwrap_or_else(|| {
@@ -350,7 +373,7 @@ fn migrate(
             )?;
         }
         tick()?;
-        vault.push();
+        // Local only: the push waits for the next sync point (decision 011).
         tick()?;
         for entry in journal.entries.iter().filter(|e| e.hidden) {
             remove_copied(&journal.source.join(&entry.path), &to, tick)?;
@@ -703,30 +726,98 @@ mod tests {
         Ok(())
     }
 
+    /// Run the migration on another thread: a bug here must fail the test, not hang it.
+    fn run_without_waiting(f: Fixture) -> Fixture {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = f.run(&mut || Ok(())).map_err(|e| format!("{e:#}"));
+            let _ = sender.send((f, result));
+        });
+        let (f, result) = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the migration waited on vault.lock");
+        result.unwrap();
+        f
+    }
+
     #[test]
-    fn pushes_one_migration_commit_and_keeps_it_when_push_fails() -> Result<()> {
-        for reachable in [true, false] {
-            let f = Fixture::new()?;
-            let remote = f.base.join("remote.git");
-            if reachable {
-                fs::create_dir(&remote)?;
-                git(&remote, &["init", "--bare", "--initial-branch=main"])?;
-            }
-            {
-                let v = Vault::lock(&f.data)?;
-                v.init()?;
-                git(
-                    &v.root,
-                    &["remote", "add", "origin", &remote.to_string_lossy()],
-                )?;
-            }
-            f.run(&mut || Ok(()))?;
-            f.assert_finished()?;
-            if reachable {
-                assert_eq!(git(&remote, &["rev-list", "--count", "main"])?, "2");
-                assert!(git(&remote, &["grep", "hidden two", "main"])?.contains("S902"));
-            }
+    fn a_busy_vault_delays_only_the_hidden_set_to_the_next_command() -> Result<()> {
+        let f = Fixture::new()?;
+        let held = Vault::lock(&f.data)?;
+        let f = run_without_waiting(f);
+        // The task state moved at once; the hidden set and the journal wait.
+        assert!(f.home.join("t001/SPEC.md").is_file());
+        assert!(f.home.join("t002/SPEC.md").is_file());
+        assert!(!f.old.join("t001").exists());
+        assert!(
+            f.old
+                .join("_evals/hidden/scenarios/S901/scenario.md")
+                .is_file()
+        );
+        assert!(!f.data.join("vault/.git").exists());
+        let journal: Journal = serde_json::from_slice(&fs::read(f.home.join(JOURNAL))?)?;
+        assert!(!journal.done);
+        let ctx = Ctx {
+            root: f.main.clone(),
+            gitdir: f.main.join(".git"),
+            dhome: f.home.clone(),
+        };
+        assert_eq!(
+            vault::read_project_id(&ctx)?.as_deref(),
+            Some(&*journal.project)
+        );
+        drop(held);
+        f.run(&mut || Ok(()))?;
+        f.assert_finished()
+    }
+
+    #[test]
+    fn nothing_hidden_means_no_vault_lock_at_all() -> Result<()> {
+        let f = Fixture::new()?;
+        fs::remove_dir_all(f.old.join("_evals/hidden"))?;
+        let held = Vault::lock(&f.data)?;
+        let f = run_without_waiting(f);
+        assert!(!f.old.exists());
+        assert!(f.home.join("t001/SPEC.md").is_file());
+        let journal: Journal = serde_json::from_slice(&fs::read(f.home.join(JOURNAL))?)?;
+        assert!(journal.done);
+        drop(held);
+        Ok(())
+    }
+
+    #[test]
+    fn an_empty_old_home_needs_no_vault_lock() -> Result<()> {
+        let f = Fixture::new()?;
+        fs::remove_dir_all(&f.old)?;
+        fs::create_dir(&f.old)?;
+        let held = Vault::lock(&f.data)?;
+        let f = run_without_waiting(f);
+        assert!(!f.old.exists());
+        drop(held);
+        Ok(())
+    }
+
+    #[test]
+    fn commits_one_migration_commit_locally_and_never_pushes() -> Result<()> {
+        let f = Fixture::new()?;
+        let remote = f.base.join("remote.git");
+        fs::create_dir(&remote)?;
+        git(&remote, &["init", "--bare", "--initial-branch=main"])?;
+        {
+            let v = Vault::lock(&f.data)?;
+            v.init()?;
+            git(
+                &v.root,
+                &["remote", "add", "origin", &remote.to_string_lossy()],
+            )?;
         }
+        f.run(&mut || Ok(()))?;
+        f.assert_finished()?;
+        let vault = f.data.join("vault");
+        assert_eq!(git(&vault, &["rev-list", "--count", "HEAD"])?, "2");
+        assert!(git(&vault, &["grep", "hidden two", "HEAD"])?.contains("S902"));
+        // The push waits for the next sync point (decision 011).
+        assert!(git(&remote, &["rev-parse", "--verify", "main"]).is_err());
         Ok(())
     }
 

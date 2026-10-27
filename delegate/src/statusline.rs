@@ -76,12 +76,8 @@ fn parse_input(input: &str) -> Input {
 
 fn render(ctx: &Ctx, session: Option<&str>) -> Option<String> {
     let views = status::collect(ctx, None, Depth::Phase).ok()?;
-    let tasks = render_views(&views, session);
-    let vault = crate::vault::hint().ok().flatten();
-    match (tasks, vault) {
-        (Some(tasks), Some(vault)) => Some(format!("{tasks} · {vault}")),
-        (tasks, vault) => tasks.or(vault),
-    }
+    // No vault note here: the status line stays off the vault, local or not.
+    render_views(&views, session)
 }
 
 /// Own unfinished tasks and ready count, followed by dimmed counts for other sessions.

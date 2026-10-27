@@ -1022,7 +1022,8 @@ fn failed_checks_problem(t: &Task) -> String {
     message
 }
 
-pub fn list(ctx: &Ctx) -> Result<()> {
+/// `vault_notes`: say what the vault holds that isn't on its remote (off inside the sandbox).
+pub fn list(ctx: &Ctx, vault_notes: bool) -> Result<()> {
     let mut ids: Vec<String> = fs::read_dir(&ctx.dhome)
         .map(|rd| {
             rd.filter_map(Result::ok)
@@ -1067,7 +1068,11 @@ pub fn list(ctx: &Ctx) -> Result<()> {
         );
     }
     crate::checkout::list_orphans()?;
-    if let Some(hint) = crate::vault::hint()? {
+    if !vault_notes {
+        return Ok(());
+    }
+    // A note, never a failure: a vault that is busy or odd just goes without it.
+    if let Ok(Some(hint)) = crate::vault::hint() {
         eprintln!("{hint}");
     }
     crate::vault::notices(ctx)?;
@@ -2049,7 +2054,7 @@ mod tests {
                 assert!(views[0].ready_to_merge);
                 assert_eq!(views[1].phase, "implement");
             }
-            list(&ctx)?;
+            list(&ctx, true)?;
             assert_eq!(
                 merge_readiness(&ctx, &t, false, None).blockers,
                 Vec::<String>::new()
@@ -2078,7 +2083,7 @@ mod tests {
         fs::create_dir(t.dir.join(".status-directory.tmp"))?;
         let before = file_snapshot(&repo.0)?;
         status::collect(&ctx, None, status::Depth::Full)?;
-        list(&ctx)?;
+        list(&ctx, true)?;
         assert_eq!(file_snapshot(&repo.0)?, before);
         let operation = Operation::acquire(&t, "checks")?;
         assert!(!t.dir.join(".status-killed.tmp").exists());
@@ -2167,7 +2172,7 @@ mod tests {
         let (_repo, ctx, t) = merge_fixture()?;
         fs::write(t.dir.join("status.json"), "")?;
         assert!(status::collect(&ctx, None, status::Depth::Phase).is_ok());
-        assert!(list(&ctx).is_ok());
+        assert!(list(&ctx, true).is_ok());
         assert!(discard(&ctx, &t.id).is_ok());
         Ok(())
     }

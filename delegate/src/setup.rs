@@ -99,7 +99,8 @@ fn check_bwrap() {
     }
 }
 
-pub(crate) fn run(url: Option<&str>) -> Result<()> {
+/// `with_vault`: also connect or check the vault (off inside the sandbox, which never names it).
+pub(crate) fn run(url: Option<&str>, with_vault: bool) -> Result<()> {
     let installed: Vec<Harness> = HARNESSES
         .into_iter()
         .filter(|h| harness::on_path(h.name()))
@@ -151,6 +152,9 @@ pub(crate) fn run(url: Option<&str>) -> Result<()> {
         ),
     }
     check_bwrap();
+    if !with_vault {
+        return Ok(());
+    }
     if let Some(url) = url {
         if let Err(e) = vault::connect(url) {
             println!(

@@ -171,12 +171,13 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         statusline::run();
         return Ok(ExitCode::SUCCESS);
     }
-    if !matches!(cmd, Cmd::Where { .. }) {
-        vault::sync()?;
-    }
+    // Inside the worker sandbox nothing of the vault is read, synced or named: one gate here.
+    let sandboxed = vault::sandboxed();
     // Resolve a moved checkout before sweeping, even for machine-level commands.
     // Never sweep after a failed repair: its old path may be missing temporarily.
-    let readonly = matches!(cmd, Cmd::List | Cmd::Where { .. }) && vault::machine_not_setup()?;
+    // The sandbox never looks at the vault, not even to decide how to discover.
+    let readonly =
+        matches!(cmd, Cmd::List | Cmd::Where { .. }) && (sandboxed || vault::machine_not_setup()?);
     let discovered = if readonly {
         Ctx::inspect()
     } else {
@@ -191,11 +192,13 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
             }
             if matches!(cmd, Cmd::List) {
                 checkout::list_orphans()?;
-                if let Some(hint) = vault::hint()? {
-                    eprintln!("{hint}");
-                }
-                if vault::machine_not_setup()? {
-                    eprintln!("this machine isn't set up: run delegate setup --vault <url>");
+                if !sandboxed {
+                    if let Ok(Some(hint)) = vault::hint() {
+                        eprintln!("{hint}");
+                    }
+                    if vault::machine_not_setup()? {
+                        eprintln!("this machine isn't set up: run delegate setup --vault <url>");
+                    }
                 }
                 return Ok(ExitCode::SUCCESS);
             }
@@ -204,8 +207,12 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         }
     };
     if let Cmd::Setup { vault } = &cmd {
-        setup::run(vault.as_deref())?;
+        setup::run(vault.as_deref(), !sandboxed)?;
         return Ok(ExitCode::SUCCESS);
+    }
+    // The commands that look at the vault themselves report a conflict in their own way.
+    if !sandboxed && !matches!(cmd, Cmd::Where { .. } | Cmd::List | Cmd::Hidden { .. }) {
+        vault::conflict_notice()?;
     }
     if let Cmd::Init { dir } = &cmd {
         let dir = dir.clone().map_or_else(std::env::current_dir, Ok)?;
@@ -227,6 +234,13 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         | Cmd::Wait { .. }
         | Cmd::Statusline => {
             unreachable!("handled above")
+        }
+        Cmd::Where { .. } if sandboxed => {
+            vault::where_sandboxed(&ctx);
+            Ok(())
+        }
+        Cmd::Hidden { .. } if sandboxed => {
+            anyhow::bail!("delegate hidden add isn't available in the sandbox; run it outside")
         }
         Cmd::Where { pull: true } => vault::where_pulled(&ctx),
         Cmd::Where { pull: false } => vault::where_paths(&ctx),
@@ -277,7 +291,7 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         } => commands::plan_review(&ctx, &ids, tier, worker.as_deref(), dry_run),
         Cmd::Status { id, json } => status::run(&ctx, id.as_deref(), json),
         Cmd::Watch { id, interval } => watch::run(&ctx, id.as_deref(), interval),
-        Cmd::List => commands::list(&ctx),
+        Cmd::List => commands::list(&ctx, !sandboxed),
         Cmd::Merge {
             id,
             accept_findings,
