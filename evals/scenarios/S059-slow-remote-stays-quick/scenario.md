@@ -2,7 +2,7 @@
 - Job: J8
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 - Timeout: 300
 
 ## Who
