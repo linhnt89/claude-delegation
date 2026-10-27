@@ -19,7 +19,8 @@
   built. A pilot of delegating eval writing; the guard and the `evaluate` role are not distilled yet.
 - t040–t041 (2026-10-27): tasks show once, in the row above the prompt, with other sessions
   dimmed; the pane opens only on request and reads one status at a time; `init` adds no status
-  line and `upgrade` removes the kit's (J8, J1, decision 012). S030 and S057 are judged by the user again.
+  line and `upgrade` removes the kit's (J8, J1, decision 012). t042: in the desktop app the row
+  hands its whole text to the app to fit (S064). S030 and S057 are judged by the user again.
 - t033 (2026-10-27): S031's check compares the user's settings and hooks, not the file's bytes,
   so the guard can add its hooks (J1, J9). P017 is now hidden.
 - t034–t038 (2026-10-27): the vault syncs only when the hidden set is changed or run (J8, J7,
@@ -31,7 +32,6 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t042 | In the desktop app the row hands its whole text to the app to fit (S064, decision 012) | running | – | standard | `evals/run S064 S061 S062 S060` | the app measures in code-font columns but draws a proportional font |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
