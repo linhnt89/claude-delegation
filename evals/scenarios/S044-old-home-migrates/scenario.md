@@ -18,9 +18,11 @@ results, and two hidden scenarios. `.delegate-kit.toml` has no project id yet.
 ## Passes when
 - The first `delegate list` shows the task as before and says, once, that it moved the task
   state and the hidden set and where to: under `~/.local/share/delegate/`.
-- `shop.delegate/` is gone; the hidden scenarios are committed in the vault and pushed.
+- `shop.delegate/` is gone; the hidden scenarios are committed in the vault, without contacting
+  its remote (decision 011).
 - The project id is written to `.delegate-kit.toml`, and the output says to commit it.
-- The second `delegate list` shows the task with no message; `evals/run` runs the hidden scenarios.
+- The second `delegate list` shows the task and names the moved hidden scenarios as not pushed
+  yet, with no other message; `evals/run` runs the hidden scenarios and pushes them.
 
 ## If this fails
 Upgrading to the new home layout would strand today's open tasks and hidden sets in the old
