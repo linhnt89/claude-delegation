@@ -210,9 +210,9 @@ test('cards sort trouble, finished, running, then not started, by id within each
     for (const text of ['✗ interrupted', '✗ failed', '✓ passed · review required', '● questions', '● checks', '● review', 'not started'])
       expect(await ui.find({ type: 'Text', text: new RegExp(`^${text}$`) })).toBeTruthy()
     const bars = await ui.findAll({ type: 'Text', text: /^┃$/ })
-    expect(bars.filter(b => b.props.color === 'warning')).toHaveLength(4)
-    expect(bars.filter(b => b.props.color === 'error')).toHaveLength(8)
-    expect(await ui.findAll({ type: 'Text', text: /^ $/ })).toHaveLength(17)
+    expect(bars.filter(b => b.props.color === 'warning')).toHaveLength(5)
+    expect(bars.filter(b => b.props.color === 'error')).toHaveLength(10)
+    expect(await ui.findAll({ type: 'Text', text: /^ $/ })).toHaveLength(23)
     expect(await ui.find({ type: 'Text', text: /^→ delegate run t003$/ })).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /^→ delegate run t004$/ })).toBeTruthy()
     for (const text of [/^⚠/, /^✗/, /^✓/, /^●/, /^not started$/, /^→/, /^t\d+$/])
@@ -290,20 +290,20 @@ test('session dividers put mine first, other sessions by name, and by hand last;
     expect(boxes.filter(b => b.key?.startsWith('t')).map(b => b.key))
       .toEqual(['t007', 't005', 't006', 't003', 't004', 't009', 't008', 't002', 't001'])
     for (const id of ['t005', 't006', 't007'])
-      expect(await ui.find({ type: 'Text', text: new RegExp(`^◆ ${id} Task ${id}  pi:gpt-x@high$`) })).toBeTruthy()
+      expect(await ui.find({ type: 'Text', text: new RegExp(`^◆ ${id} Task ${id}$`) })).toBeTruthy()
     for (const id of ['t001', 't002', 't003', 't004', 't008', 't009'])
-      expect(await ui.find({ type: 'Text', text: new RegExp(`^○ ${id} Task ${id}  pi:gpt-x@high$`) })).toBeTruthy()
+      expect(await ui.find({ type: 'Text', text: new RegExp(`^○ ${id} Task ${id}$`) })).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: '✗ failed' })).toMatchObject({ props: { color: 'error' } })
     expect(await ui.find({ type: 'Text', text: '✓ ready to merge' })).toMatchObject({ props: { color: 'success' } })
     expect(await ui.find({ type: 'Text', text: '● implementing' })).toMatchObject({ props: { color: 'suggestion' } })
     const bars = await ui.findAll({ type: 'Text', text: '┃' })
-    expect(bars.filter(b => b.props.color === 'warning')).toHaveLength(8)
-    expect(bars.filter(b => b.props.color === 'error')).toHaveLength(6)
+    expect(bars.filter(b => b.props.color === 'warning')).toHaveLength(10)
+    expect(bars.filter(b => b.props.color === 'error')).toHaveLength(8)
     await ui.unmount()
   }
 })
 
-test('a sole session still has a divider; identity has a bold id, title, dim worker, then a dim nonempty goal', async ($, on) => {
+test('a sole session still has a divider; identity has a bold id and title, then a dim worker and goal', async ($, on) => {
   mock.clock(on)
   engine(on, JSON.stringify({ tasks: [
     task('t001', { title: 'Fix pricing', goal: 'Charge the correct amount' }),
@@ -313,19 +313,20 @@ test('a sole session still has a divider; identity has a bold id, title, dim wor
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Text', text: /^◆ ── This session · my-project ─/ })).toBeTruthy()
-    expect(await ui.find({ type: 'Text', text: '◆ t001 Fix pricing  pi:gpt-x@high' })).toBeTruthy()
-    const identity = await ui.find({ type: 'Text', text: /^◆ t001 Fix pricing  pi:gpt-x@high$/ })
+    expect(await ui.find({ type: 'Text', text: '◆ t001 Fix pricing' })).toBeTruthy()
+    const identity = await ui.find({ type: 'Text', text: /^◆ t001 Fix pricing$/ })
     expect(identity?.children[1]).toMatchObject({ props: { bold: true }, children: ['t001'] })
-    expect(identity?.children[3]).toMatchObject({ props: { dimColor: true }, children: ['  pi:gpt-x@high'] })
+    expect(identity?.text).not.toContain('pi:gpt-x@high')
+    expect(await ui.find({ type: 'Text', text: 'pi:gpt-x@high' })).toMatchObject({ props: { dimColor: true } })
     expect(await ui.find({ type: 'Text', text: 'Charge the correct amount' })).toMatchObject({ props: { dimColor: true } })
     const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.props.flexDirection === 'row')
-    expect(rows).toHaveLength(7)
-    expect(rows.slice(0, 3).map(r => r.text.trimStart())).toEqual([
-      '● implementing', '◆ t001 Fix pricing  pi:gpt-x@high', 'Charge the correct amount',
+    expect(rows).toHaveLength(8)
+    expect(rows.slice(0, 4).map(r => r.text.trimStart())).toEqual([
+      '● implementing', '◆ t001 Fix pricing', 'pi:gpt-x@high', 'Charge the correct amount',
     ])
-    expect(rows[3].text.trimStart()).toMatch(/^running .* · quiet .* · no files yet$/)
-    expect(rows.slice(4, 6).map(r => r.text.trimStart())).toEqual(['● implementing', '◆ t002 Add tests'])
-    expect(rows[6].text.trimStart()).toMatch(/^running .* · quiet .* · no files yet$/)
+    expect(rows[4].text.trimStart()).toMatch(/^running .* · quiet .* · no files yet$/)
+    expect(rows.slice(5, 7).map(r => r.text.trimStart())).toEqual(['● implementing', '◆ t002 Add tests'])
+    expect(rows[7].text.trimStart()).toMatch(/^running .* · quiet .* · no files yet$/)
     expect(await ui.findAll({ type: 'Text', text: '┃' })).toHaveLength(0)
     await ui.unmount()
   }
@@ -379,9 +380,9 @@ test('every divider and card line clips to pane width, including Unicode, status
       expect(dividers).toHaveLength(1)
       expect(widthOf(dividers[0].text) <= bodyColumns).toBe(true)
       if (bodyColumns >= 20) {
-        // Long identity, goal, step, next, blocker/status, and second identity lines.
-        for (const index of [1, 2, 4, 5, 6, 7]) expect(rows[index].text.endsWith('…')).toBe(true)
-        if (bodyColumns === 20) expect(rows[3].text.endsWith('…')).toBe(true)
+        // Long identity, worker, goal, step, next, blocker/status, and second identity/worker lines.
+        for (const index of [1, 2, 3, 5, 6, 7, 8, 9]) expect(rows[index].text.endsWith('…')).toBe(true)
+        if (bodyColumns === 20) expect(rows[4].text.endsWith('…')).toBe(true)
       }
       await ui.unmount()
     }

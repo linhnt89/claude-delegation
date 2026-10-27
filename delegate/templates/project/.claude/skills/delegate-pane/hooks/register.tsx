@@ -129,7 +129,6 @@ function identity(t: Task, mine: boolean, columns: number) {
     { text: `${mine ? '◆' : '○'} ` },
     { text: t.id, bold: true },
     { text: ` ${t.title}` },
-    { text: t.worker ? `  ${t.worker}` : '', dimColor: true },
   ]
   const clipped = clip(parts.map(p => p.text).join(''), columns)
   let offset = 0
@@ -335,6 +334,7 @@ export const register: Register = on => {
                 <Text color={l.color} bold={t.stalled}>{clip(l.text, columns)}</Text>,
                 <Text>{identity(t, g.mine, columns).map(p => <Text bold={p.bold} dimColor={p.dimColor}>{p.text}</Text>)}</Text>,
               ]
+              if (t.worker) lines.push(<Text dimColor>{clip(t.worker, columns)}</Text>)
               if (t.goal) lines.push(<Text dimColor>{clip(t.goal, columns)}</Text>)
               if (t.phase !== 'not_started')
                 lines.push(<Text dimColor>{clip(live
