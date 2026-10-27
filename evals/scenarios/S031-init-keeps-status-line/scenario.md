@@ -1,4 +1,4 @@
-# S031 init keeps the user's own status line
+# S031 init leaves the status line alone
 - Job: J1
 - Tier: fast
 - Judged by: auto
@@ -15,8 +15,10 @@ A project with `.claude/settings.json` holding a custom `statusLine` and other s
 
 ## Passes when
 - Their status line and every other setting are unchanged.
-- `init` says it didn't install delegate's status line and how to add it (for example, the command to append to their own).
-- Without an existing status line, `init` installs delegate's.
+- Without an existing status line, `init` adds none either: tasks show in the row above the
+  prompt (S030, S060), in the desktop app and in the terminal, so they aren't shown twice.
+- `init` says, in one line, that `delegate statusline` can be added to a status line for
+  those who want it there.
 
 ## If this fails
 Setting up the kit silently breaks the user's own Claude Code setup.

@@ -19,12 +19,11 @@ bg_in() {
   printf '\n$ (in %s) delegate run --background %s  (exit %s)\n%s\n' "${DCWD:-$PROJ}" "$*" "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
 }
 
-# line_as <session id|""> <dir>: the status line init configured, run as Claude Code runs it
-# from that session. Sets LINE (as printed), PLAIN (colours stripped), MS and LRC.
+# line_as <session id|""> <dir>: `delegate statusline`, run as Claude Code runs it from that
+# session for a user who added it to their status line. Sets LINE (as printed), PLAIN (colours
+# stripped), MS and LRC.
 line_as() {
-  local cmd t0 json
-  cmd="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["command"])' "$PROJ/.claude/settings.json" 2>/dev/null)"
-  [ -n "$cmd" ] || fail "delegate init didn't configure a Claude Code status line in .claude/settings.json"
+  local cmd="delegate statusline" t0 json
   json="$(python3 -c 'import json,sys
 d={"cwd":sys.argv[2],"workspace":{"current_dir":sys.argv[2]}}
 if sys.argv[1]: d["session_id"]=sys.argv[1]

@@ -24,8 +24,8 @@ As in S055, seen from session A, in the Claude Code desktop app and in the termi
   the Goal. Lines are cut to the pane's width with `…`.
 - Within a group, tasks that need the user come first, as in S030.
 - The coloured `┃` bar marks only stalled, interrupted or failed tasks, in any group.
-- The row above the prompt (pane closed) counts this session's tasks the same way as the
-  status line.
+- The row above the prompt (pane closed) shows this session's counts, then the other groups
+  dimmed (S061).
 
 ## If this fails
 The user can't tell at a glance which tasks are theirs, or loses sight of trouble in another

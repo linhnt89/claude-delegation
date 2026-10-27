@@ -8,13 +8,14 @@
 A developer (or Claude as lead) in a git repo of their own, with `delegate` on PATH and a `workers.toml` naming their harnesses. They lead from Claude Code, often with two or more sessions open on the same project (some in worktrees).
 
 ## Starting state
-A project set up with `delegate init`. Session A (the main checkout) created and ran t021
+A project set up with `delegate init`, its status line set to `delegate statusline` by the
+user (S029). Session A (the main checkout) created and ran t021
 (running) and t022 (ready to merge). Session B (a worktree on branch `pane-polish`) created and
 ran t030 (running) and t032 (stalled). t031 was created and run from a plain terminal, outside
 Claude Code (running).
 
 ## Steps
-1. Run the status line command that `init` configured, the way Claude Code runs it, with
+1. Run `delegate statusline` the way Claude Code runs it, with
    session A's `session_id` in the stdin JSON.
 2. The same with session B's `session_id`, from B's worktree.
 3. The same with no `session_id` (an older Claude Code).

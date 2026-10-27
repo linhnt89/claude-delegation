@@ -46,7 +46,7 @@ def wait_phase(tid, want, secs):
     return False
 
 def statusline():
-    cmd = json.load(open(SETTINGS))["statusLine"]["command"]
+    cmd = "delegate statusline"
     p = subprocess.run(["bash", "-c", cmd], cwd=PROJ, input=json.dumps({"cwd": PROJ, "workspace": {"current_dir": PROJ}}),
                        capture_output=True, text=True, timeout=10)
     return p.stdout

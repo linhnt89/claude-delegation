@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Projects set up by a kit that added `delegate statusline`, upgraded by this delegate.
+. "$EVALS_LIB/common.sh"
+# The last kit whose init added delegate's status line to .claude/settings.json.
+KIT=1b75a2e710500009068a17a4fbbdd12993204793
+OTHER='"permissions": {"allow": ["Bash(ls:*)"]}, "env": {"SHOP_ENV": "dev"}'
+old_project() { # <status line command>: $PROJ as that kit left it, the user's settings added
+  rm -rf "$PROJ"; old_kit_project "$KIT"
+  mkdir -p "$PROJ/.claude"
+  printf '{"statusLine": {"type": "command", "command": "%s"}, %s}\n' "$1" "$OTHER" >"$PROJ/.claude/settings.json"
+  (cd "$PROJ" && git add -A && git commit -qm "Settings")
+}
+settings() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])), sort_keys=True))' "$PROJ/.claude/settings.json" 2>/dev/null; }
+
+old_project "delegate statusline"
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+python3 - "$PROJ/.claude/settings.json" <<'PY' || exit 1
+import json, sys
+s = json.load(open(sys.argv[1]))
+if "statusLine" in s: print(f"FAIL: upgrade left the status line the kit added, so the terminal still shows every task twice: {s['statusLine']}"); sys.exit(1)
+if s.get("permissions") != {"allow": ["Bash(ls:*)"]} or s.get("env") != {"SHOP_ENV": "dev"}:
+    print(f"FAIL: upgrade changed the user's other settings: {s}"); sys.exit(1)
+PY
+[ "$(printf '%s\n' "$OUT" | grep -ci 'status line')" -eq 1 ] || fail "upgrade didn't say, in one line, that it removed the kit's status line: $OUT"
+before="$(settings)"
+d upgrade
+[ "$(settings)" = "$before" ] || fail "a second upgrade changed the settings again"
+
+old_project "~/bin/my-line; delegate statusline"
+before="$(settings)"
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+[ "$(settings)" = "$before" ] || fail "upgrade changed a status line the user made their own (or their other settings): $(settings)"
+[ "$(printf '%s\n' "$OUT" | grep -ci 'status line')" -eq 1 ] || fail "upgrade didn't say, in one line, why it left the user's status line alone: $OUT"
+
+old_project "delegate statusline"
+printf '{ "statusLine": oops\n' >"$PROJ/.claude/settings.json"
+before="$(sha256sum <"$PROJ/.claude/settings.json")"
+d upgrade
+[ "$(sha256sum <"$PROJ/.claude/settings.json")" = "$before" ] || fail "upgrade rewrote a settings.json it couldn't parse"
+echo "$OUT" | grep -q "settings.json" || fail "upgrade didn't say it left an invalid settings.json alone: $OUT"
+pass "upgrade removed the status line the kit added, kept the user's own and every other setting, and left invalid JSON alone"

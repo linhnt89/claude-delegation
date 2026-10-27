@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Two sessions and a plain terminal share a project; each session's row shows the others dimmed.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/sessions.sh"
+. "$EVALS_LIB/mod.sh"
+setup_project
+trap 'flag end; kill_runs' EXIT
+sessions_scene
+# What each session's mod reads: `delegate status --json` from its own checkout.
+A="$(cd "$PROJ" && "$DELEGATE" status --json 2>/dev/null)" || fail "setup: delegate status failed in session A's checkout"
+B="$(cd "$WT_B" && "$DELEGATE" status --json 2>/dev/null)" || fail "setup: delegate status failed in session B's checkout"
+mod_setup
+printf 'export const SESS_A = %s\nexport const SESS_B = %s\nexport const A = %s\nexport const B = %s\n' \
+  "\"$SESS_A\"" "\"$SESS_B\"" "$A" "$B" >"$MOD/hooks/scene.ts"
+mod_check "$EVALS_SCENARIO/mod.test.tsx"
+pass "each session's row showed its own counts, then the other sessions' counts dimmed, like its status line"

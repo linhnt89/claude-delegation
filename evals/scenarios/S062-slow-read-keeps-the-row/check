@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# `delegate status` gets slow: the pane reads one at a time and keeps showing what it had.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/mod.sh"
+setup_project
+mod_check "$EVALS_SCENARIO/mod.test.tsx"
+pass "with delegate slow the session read one status at a time, kept the last result, and showed new ones once they came"

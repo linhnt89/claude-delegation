@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Run the status line command init configured, the way Claude Code does.
+# Run `delegate statusline` the way Claude Code does, as a user who added it to their status line.
 . "$EVALS_LIB/common.sh"
 setup_project
 simple_workers standard gpt-held gpt-held gpt-held
 ln -sf "$DELEGATE" "$EVALS_WORK/bin/delegate"
 trap 'flag end; kill_runs' EXIT
-cmd="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["command"])' "$PROJ/.claude/settings.json" 2>/dev/null)"
-[ -n "$cmd" ] || fail "delegate init didn't configure a Claude Code status line in .claude/settings.json"
+cmd="delegate statusline"
 line_in() { # <dir>: run the status line from that dir with Claude Code's stdin JSON; sets LINE, MS, LRC
   local t0; t0=$(date +%s%N)
   LINE="$(cd "$1" && printf '{"cwd":"%s","workspace":{"current_dir":"%s"}}' "$1" "$1" | bash -c "$cmd" 2>&1)"; LRC=$?

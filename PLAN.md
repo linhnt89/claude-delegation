@@ -23,6 +23,8 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
+| t040 | The pane mod opens only on request, its row shows other sessions dimmed, and it reads one status at a time, keeping the last result (decision 012) | todo | – | standard | `evals/run S061 S062`, the mod's own tests | after it, S030 and S057 are judged by the user again |
+| t041 | `init` adds no status line; `upgrade` removes the one older kits added (decision 012) | todo | t040 | standard | `evals/run S060 S063 S031 S029 S055 P009 P013 P014 S038` | after t040: both regenerate `kit-history.txt` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
