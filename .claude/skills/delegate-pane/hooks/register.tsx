@@ -263,8 +263,29 @@ export const register: Register = on => {
     const controlWidth = label.length + (e.surface === 'terminal' ? 4 : 0)
     const buttonWidth = columns >= controlWidth ? controlWidth : 0
     const id = await sessionId($)
-    const source = v.error ? [{ text: 'delegate: status unavailable' }]
+    const source: SummaryPart[] = v.error ? [{ text: 'delegate: status unavailable' }]
       : rowSummary(v.tasks, id)
+    const button = <Button key="delegate-open" label={label} autoFocus onPress={async () => {
+      await $.ui.open({ id: PANE, title: 'Delegate tasks' })
+    }} />
+    // Remote surfaces use proportional fonts: only the app knows what fits.
+    if (e.surface !== 'terminal')
+      return (
+        <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
+          <Box flexDirection="row" flexShrink={0}>
+            {source.filter(p => !p.other).map(p => <Text color={p.color} dimColor={!p.color}>{p.text}</Text>)}
+          </Box>
+          {source.filter(p => p.other).map(p => (
+            <Box minWidth={0} flexShrink={1}>
+              <Text dimColor wrap="truncate-end">{p.text}</Text>
+            </Box>
+          ))}
+          <Box flexDirection="row" flexShrink={0}>
+            <Text dimColor>{'  '}</Text>
+            {button}
+          </Box>
+        </Box>
+      )
     const total = source.reduce((n, p) => n + textWidth(p.text), 0)
     // Reserve the control first; shorten the keyboard hint before clipping counts.
     let hint = normal ? '/delegate-pane or ctrl+x tab, Enter to open' : ''
@@ -272,9 +293,6 @@ export const register: Register = on => {
     if (hint.length + buttonWidth + 4 > columns) hint = ''
     const tailWidth = (hint ? hint.length + 2 : 0) + (buttonWidth ? buttonWidth + 2 : 0)
     const parts = clipSummary(source, columns - tailWidth)
-    const button = <Button key="delegate-open" label={label} autoFocus onPress={async () => {
-      await $.ui.open({ id: PANE, title: 'Delegate tasks' })
-    }} />
     return (
       <Box flexDirection="row" flexWrap="nowrap" width={columns} height={1} overflow="hidden">
         {parts.map(p => <Text color={p.color} dimColor={!p.color}>{p.text}</Text>)}

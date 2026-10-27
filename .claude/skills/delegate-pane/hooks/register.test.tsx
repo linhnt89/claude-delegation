@@ -566,6 +566,8 @@ const SHORT_HINT = '/delegate-pane to open'
 
 for (const { surface, viewport, name, normal } of [
   { surface: 'desktop', viewport: undefined, name: 'desktop', normal: false },
+  { surface: 'vscode', viewport: undefined, name: 'VS Code', normal: false },
+  { surface: 'mobile', viewport: undefined, name: 'mobile', normal: false },
   { surface: 'terminal', viewport: { columns: 200, rows: 40, isFullscreen: true }, name: 'fullscreen terminal', normal: false },
   { surface: 'terminal', viewport: { columns: 200, rows: 40, isFullscreen: false }, name: 'normal terminal', normal: true },
   { surface: 'terminal', viewport: undefined, name: 'unmeasured terminal', normal: true },
@@ -595,8 +597,11 @@ for (const { surface, viewport, name, normal } of [
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
     const texts = await ui.findAll({ type: 'Text' })
     expect(texts.map(t => t.text).join('')).toBe(`delegate  ⚠ 2 stalled · ✗ 1 interrupted · ✗ 1 failed · ✓ 1 ready to merge · ✓ 1 passed · ● 2 running · 1 not started${normal ? `  ${HINT}` : ''}  `)
-    // Counts are direct Text children of the row, never Button children.
-    expect(row?.children.filter((c: any) => c.type === 'Text')).toHaveLength(texts.length)
+    // Counts never become Button children; the app's own-count group cannot shrink.
+    if (surface === 'terminal')
+      expect(row?.children.filter((c: any) => c.type === 'Text')).toHaveLength(texts.length)
+    else
+      expect(row?.children[0]).toMatchObject({ props: { flexDirection: 'row', flexShrink: 0 } })
     for (const [text, color] of [
       ['⚠ 2 stalled', 'warning'], ['✗ 1 interrupted', 'error'], ['✗ 1 failed', 'error'],
       ['✓ 1 ready to merge', 'success'], ['✓ 1 passed', 'success'], ['● 2 running', 'suggestion'],
@@ -659,7 +664,7 @@ for (const { surface, viewport, name, normal } of [
     await ui.unmount()
   })
 
-  test(`other groups clip before own counts and keep their dim style on ${name}`, async ($, on) => {
+  test(`other groups ${surface === 'terminal' ? 'clip before own counts' : 'reach the app in full'} and keep their dim style on ${name}`, async ($, on) => {
     mock.clock(on)
     summaryEngine($, on, JSON.stringify({ tasks: [
       task('t001', { phase: 'done', outcome: 'pass', ready_to_merge: true }),
@@ -673,10 +678,27 @@ for (const { surface, viewport, name, normal } of [
       const ui = await $.ui.mount({ ...BAND, surface, viewport, props: { ...BAND.props, bodyColumns } })
       const texts = await ui.findAll({ type: 'Text' })
       const text = texts.map(t => t.text).join('')
-      expect(widthOf(text) + control <= bodyColumns).toBe(true)
-      if (!normal && bodyColumns === exact) expect(text).toBe(`${own}  `)
-      if (!normal && bodyColumns === exact + 1) expect(text).toBe(`${own}…  `)
-      if (!normal && bodyColumns >= 80) {
+      if (surface !== 'terminal') {
+        const other = ` │ ${'界👩‍💻'.repeat(50)} 1 (1 stalled)`
+        expect(text).toBe(`${own}${other}  `)
+        expect(await ui.find({ type: 'Text', text: other }))
+          .toMatchObject({ props: { dimColor: true, wrap: 'truncate-end' } })
+        const row = await ui.find({ type: 'Box' })
+        expect(row?.children).toHaveLength(3)
+        expect(row?.children[0]).toMatchObject({ props: { flexShrink: 0 } })
+        expect(row?.children[1]).toMatchObject({ props: { minWidth: 0, flexShrink: 1 } })
+        expect(row?.children[1].children).toHaveLength(1)
+        expect(row?.children[2]).toMatchObject({ props: { flexShrink: 0 } })
+        expect(row?.children[2].children[1]).toMatchObject({ type: 'Button', props: { key: 'delegate-open' } })
+        for (const part of texts.filter(t => /ready to merge|running/.test(t.text)))
+          expect(part.props.wrap === 'truncate-end').toBe(false)
+        expect(await ui.find({ type: 'Button' })).toBeTruthy()
+      } else {
+        expect(widthOf(text) + control <= bodyColumns).toBe(true)
+        if (!normal && bodyColumns === exact) expect(text).toBe(`${own}  `)
+        if (!normal && bodyColumns === exact + 1) expect(text).toBe(`${own}…  `)
+      }
+      if (surface === 'terminal' && !normal && bodyColumns >= 80) {
         expect(text).toContain('✓ 1 ready to merge · ● 1 running')
         const other = texts.find(t => t.text.includes('│'))
         expect(other?.text.endsWith('…')).toBe(true)
@@ -792,6 +814,11 @@ for (const { surface, viewport, name, normal } of [
     await clock.advance(3000)
     expect(await ui.find({ type: 'Text', text: /^delegate: status unavailable$/ })).toMatchObject({ props: { dimColor: true } })
     expect((await ui.find({ type: 'Button' }))?.text).toBe(normal ? 'Open' : 'Open tasks')
+    if (surface !== 'terminal') {
+      await ui.redraw({ ...BAND.props, bodyColumns: 1 })
+      expect(await ui.find({ type: 'Text', text: /^delegate: status unavailable$/ })).toBeTruthy()
+      expect(await ui.find({ type: 'Button' })).toBeTruthy()
+    }
     if (normal) expect(await ui.find({ type: 'Text', text: HINT })).toMatchObject({ props: { dimColor: true } })
     for (const text of await ui.findAll({ type: 'Text' }))
       expect(text.props.dimColor).toBe(true)
@@ -809,7 +836,7 @@ for (const { surface, viewport, name, normal } of [
     await ui.unmount()
   })
 
-  test(`summary stays one row, preserving the button and shortening the hint on ${name}`, async ($, on) => {
+  test(`summary stays one row, preserving the button${surface === 'terminal' ? ' and shortening the hint' : ' without clipping counts'} on ${name}`, async ($, on) => {
     mock.clock(on)
     const e = summaryEngine($, on, JSON.stringify({ tasks: [task('t001', { phase: 'done', outcome: 'pass', ready_to_merge: true })] }))
     await $.session.start({ cwd: '/', surface, isInteractive: true })
@@ -817,7 +844,7 @@ for (const { surface, viewport, name, normal } of [
       const ui = await $.ui.mount({ ...BAND, surface, viewport, props: { ...BAND.props, bodyColumns } })
       const button = await ui.find({ type: 'Button', key: 'delegate-open' })
       const buttonWidth = (normal ? 4 : 10) + (surface === 'terminal' ? 4 : 0)
-      const shownButton = bodyColumns >= buttonWidth
+      const shownButton = surface !== 'terminal' || bodyColumns >= buttonWidth
       expect(Boolean(button)).toBe(normal || shownButton)
       if (button) {
         expect(button.props.autoFocus).toBe(true)
@@ -827,12 +854,12 @@ for (const { surface, viewport, name, normal } of [
       const width = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), p =>
         /\p{Extended_Pictographic}/u.test(p.segment) ? 2 : 1).reduce((a, b) => a + b, 0)
         + (shownButton ? buttonWidth : 0)
-      expect(width <= bodyColumns).toBe(true)
+      if (surface === 'terminal') expect(width <= bodyColumns).toBe(true)
+      else expect(text).toBe('delegate  ✓ 1 ready to merge  ')
       expect(/[\r\n\t]/.test(text)).toBe(false)
       expect(await ui.find({ type: 'Box' })).toMatchObject({ props: { width: bodyColumns, height: 1, overflow: 'hidden' } })
-      if (bodyColumns === 20) expect(text).toBe(normal ? 'delegate …  '
-        : surface === 'terminal' ? 'del…  ' : 'delegat…  ')
-      if (bodyColumns === 60) expect(text).toBe(normal
+      if (bodyColumns === 20 && surface === 'terminal') expect(text).toBe(normal ? 'delegate …  ' : 'del…  ')
+      if (bodyColumns === 60 && surface === 'terminal') expect(text).toBe(normal
         ? `delegate  ✓ 1 ready to me…  ${SHORT_HINT}  ` : 'delegate  ✓ 1 ready to merge  ')
       if (bodyColumns === 100 && normal) expect(text).toContain(HINT)
       if (bodyColumns === 40 && normal) expect(text).toContain(`…  ${SHORT_HINT}`)
