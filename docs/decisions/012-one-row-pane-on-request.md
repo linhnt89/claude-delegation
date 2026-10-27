@@ -27,8 +27,9 @@ waiting for the last one; reads piled up, timed out, and the row said "status un
   row keep the last result, and `/delegate-pane` opens the pane at once with it. Only a read that
   fails or gives up shows `delegate: status unavailable`.
 
-This changes decision 002 (init installs the status line) and decision 009 (the row counts
-only this session's tasks; the status line is where other sessions show).
+This changes decision 002 (init installs the status line), decision 005 (upgrade never
+touches `.claude/settings.json`: it now removes the kit's own status line there) and decision
+009 (the row counts only this session's tasks; the status line is where other sessions show).
 
 ## Rejected options
 - Status line in the terminal, row in the app — the mod can't tell whether delegate's status

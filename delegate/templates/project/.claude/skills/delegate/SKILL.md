@@ -82,8 +82,9 @@ Independent tasks with separate files can run in parallel. Check each run with
 `delegate status <id> --json`: `phase` says what is happening, `outcome` says how it
 finished, `stalled` warns of no recent file activity, and `next` gives the next action.
 A stalled run is not automatically stopped. `delegate list` shows the batch at a glance.
-For the user: `delegate watch` in a terminal, the Claude Code status line, and the
-`/delegate-pane` side pane (all installed by `delegate init`) show the same status live.
+For the user: `delegate watch` in a terminal, and the `/delegate-pane` mod (installed by
+`delegate init`): a row above the prompt with every session's counts, and a side pane that
+opens when they ask. Both show the same status live.
 
 ## 5. Review
 Run `delegate review <id>` when the risk calls for it: `deep` tasks, public API or schema
