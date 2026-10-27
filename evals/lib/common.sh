@@ -120,6 +120,8 @@ EOF
   if [ "${1:-}" != "--no-init" ]; then
     "$DELEGATE" init >/dev/null 2>&1 || fail "delegate init failed in setup"
     git add -A && git commit -qm "Add cooperation kit"
+    # Checks that leave the delegate calls to Claude never refresh DHOME through d().
+    DHOME="$(dhome_of "$PROJ")"
   fi
   cd "$EVALS_WORK"
 }
