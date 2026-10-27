@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+# Exercise the real CLI against a local SSH stand-in, never a network service.
+if [ "${S059_BOUNDED:-0}" != 1 ]; then
+  export S059_BOUNDED=1
+  timeout --kill-after=5s 225s "$0"
+  rc=$?
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    echo 'FAIL: S059 exceeded its 225s wall-clock budget'
+  fi
+  exit "$rc"
+fi
+. "$EVALS_LIB/common.sh"
+
+export S059_REMOTE="$(bare_remote slow-vault)"
+export S059_CONTROL="$EVALS_WORK/remote-delay"
+export S059_CONNECTIONS="$EVALS_WORK/connections"
+mkdir -p "$S059_CONNECTIONS"
+printf '0\n' >"$S059_CONTROL"
+# GIT_SSH_VARIANT suppresses Git's SSH capability probe. The stand-in validates the
+# repository and executable before exec: even a malformed URL cannot reach a network.
+export GIT_SSH_VARIANT=ssh
+export GIT_SSH_COMMAND="\"$EVALS_WORK/bin/s059-vault-ssh\""
+cat >"$EVALS_WORK/bin/s059-vault-ssh" <<'PY'
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import shlex
+import sys
+import time
+
+command = shlex.split(sys.argv[-1])
+if (len(command) != 2 or command[0] not in ("git-upload-pack", "git-receive-pack")
+        or command[1] != os.environ["S059_REMOTE"]):
+    sys.exit("unexpected local vault transport command")
+delay = float(Path(os.environ["S059_CONTROL"]).read_text())
+# Record process identity as well as the chosen delay, for cleanup of orphaned
+# transports if Git's timeout kills only its immediate child.
+identity = Path("/proc/self/stat").read_text().split()[21]
+record = Path(os.environ["S059_CONNECTIONS"], str(os.getpid()))
+pending = record.with_name("." + record.name)
+pending.write_text(json.dumps({"start": identity, "delay": delay}))
+pending.replace(record)
+time.sleep(delay)
+os.execvp(command[0], command)
+PY
+chmod +x "$EVALS_WORK/bin/s059-vault-ssh"
+
+loop_pids=()
+cleanup() {
+  trap - EXIT INT TERM
+  local pid
+  for pid in "${loop_pids[@]}"; do
+    kill -KILL -- "-$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  printf '0\n' >"$S059_CONTROL"
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+import signal
+
+for record in Path(os.environ["S059_CONNECTIONS"]).glob("[0-9]*"):
+    try:
+        pid = int(record.name)
+        if Path(f"/proc/{pid}/stat").read_text().split()[21] == json.loads(record.read_text())["start"]:
+            os.kill(pid, signal.SIGKILL)
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+PY
+  # A failed assertion may leave a detached runner. Do not let cleanup itself
+  # wait indefinitely on the vault when inspecting its PID.
+  export -f kill_runs sj
+  timeout --kill-after=1s 5s bash -c kill_runs >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+
+# Bootstrap quickly, through precisely the same URL and inherited transport that
+# every foreground command, competing session and detached runner will use.
+setup_machine "ssh://vault.invalid$S059_REMOTE"
+setup_project
+simple_workers standard gpt-s059 gpt-s059 gpt-s059
+stub_worker gpt-s059 <<'B'
+work() {
+  sleep 2
+  printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py
+}
+B
+write_spec t001 "Split a bill" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
+# A second ready task exercises background execution while the transport hangs.
+write_spec t002 "Split a bill offline" "Add divide_bill." "grep -q divide_bill shop/pricing.py"
+hide_scenario S901 before-outage
+export S059_HIDDEN="$(hidden_of "$PROJ")"
+[ -d "$S059_HIDDEN" ] || fail 'setup: hidden scenario folder is missing'
+export S059_VAULT="$(git -C "$S059_HIDDEN" rev-parse --show-toplevel)"
+
+printf '3\n' >"$S059_CONTROL"
+for session in 1 2; do
+  setsid bash -c '
+    cd "$PROJ" || exit 1
+    while :; do
+      "$DELEGATE" list &
+      child=$!
+      : >"$EVALS_WORK/session-$1.ready"
+      wait "$child"
+      sleep 0.05
+    done
+  ' s059-session "$session" >"$EVALS_WORK/session-$session.log" 2>&1 &
+  loop_pids+=("$!")
+done
+
+python3 - "${loop_pids[@]}" <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import time
+
+work = Path(os.environ["EVALS_WORK"])
+project = os.environ["PROJ"]
+delegate = os.environ["DELEGATE"]
+control = Path(os.environ["S059_CONTROL"])
+connections = Path(os.environ["S059_CONNECTIONS"])
+loops = [int(pid) for pid in sys.argv[1:]]
+deadline = time.monotonic() + 180
+
+
+class Failure(Exception):
+    pass
+
+
+def require(condition, reason):
+    if not condition:
+        raise Failure(reason)
+
+
+def sessions_alive():
+    for pid in loops:
+        os.kill(pid, 0)
+
+
+def command(args, remote, limit=None, budget=15, stdin=None):
+    sessions_alive()
+    label = "delegate " + " ".join(args)
+    start = time.monotonic()
+    proc = subprocess.Popen([delegate, *args], cwd=project, text=True,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, start_new_session=True)
+    expired = False
+    try:
+        output, _ = proc.communicate(stdin, timeout=max(0.01, min(budget, deadline - start)))
+    except subprocess.TimeoutExpired:
+        expired = True
+        os.killpg(proc.pid, signal.SIGKILL)
+        output, _ = proc.communicate()
+    elapsed = time.monotonic() - start
+    with (work / "transcript.log").open("a") as log:
+        log.write(f"\n$ {label} ({remote}, {elapsed:.3f}s, exit {proc.returncode})\n{output}\n")
+    # Timing comes first, so a timeout or subsequent CLI error cannot hide which
+    # latency limit broke. Do not round a passing duration before comparing it.
+    if limit is not None:
+        require(elapsed < limit,
+                f"{label} took {elapsed:.3f}s with {remote}; limit {limit:g}s")
+    require(not expired, f"{label} took {elapsed:.3f}s with {remote}; command timed out")
+    require(proc.returncode == 0,
+            f"{label} took {elapsed:.3f}s with {remote}; exit {proc.returncode}: {output[-700:]}")
+    return output
+
+
+def set_delay(seconds):
+    pending = control.with_suffix(".next")
+    pending.write_text(f"{seconds}\n")
+    pending.replace(control)
+
+
+def used_transport(delay):
+    return any(json.loads(p.read_text())["delay"] == delay
+               for p in connections.glob("[0-9]*"))
+
+
+def exercise(task, remote):
+    # Claude Code sends JSON on stdin while running in the project. Include both
+    # documented workspace paths, rather than timing a help or missing-input path.
+    payload = json.dumps({"workspace": {"current_dir": project, "project_dir": project},
+                          "cwd": project, "session_id": "s059-lead"})
+    for _ in range(5):
+        command(["statusline"], remote, limit=0.5, stdin=payload)
+    listing = command(["list"], remote, limit=2)
+    require(task in listing, f"delegate list omitted ready task {task}: {listing}")
+    status = command(["status", "t001"], remote, limit=2)
+    require("t001" in status, f"delegate status omitted t001: {status}")
+    started = command(["run", task, "--background"], remote, budget=25)
+    require(task in started and re.search(r"running", started, re.I),
+            f"run --background did not report {task} running: {started}")
+    done = command(["wait", task], remote, budget=45)
+    for expected in (task, "done", "pass", f"delegate merge {task}"):
+        require(expected in done.lower(), f"wait did not report '{expected}': {done}")
+    return listing
+
+
+try:
+    # Both other sessions are already executing their loops before step 1.
+    ready_until = time.monotonic() + 5
+    while not all((work / f"session-{i}.ready").exists() for i in (1, 2)):
+        require(time.monotonic() < ready_until, "competing list sessions did not start")
+        sessions_alive()
+        time.sleep(0.01)
+    exercise("t001", "a 3s remote")
+    require(used_transport(3),
+            "the slow transport was never exercised")
+
+    # A genuinely hanging connection, not an immediate missing-repo failure. A
+    # local hand edit makes both the offline warning and recovery meaningful.
+    set_delay(600)
+    scenario = next(Path(os.environ["S059_HIDDEN"]).rglob("scenario.md"))
+    scenario.write_text(scenario.read_text().replace("before-outage", "during-outage"))
+    listing = exercise("t002", "a hanging remote")
+    require(re.search(r"not pushed|unpushed|could(?:n.t| not) (?:check|reach)|unreachable|offline", listing, re.I),
+            f"offline delegate list did not warn about the vault: {listing}")
+    require(used_transport(600),
+            "the hanging transport was never exercised")
+
+    # No retries or direct git sync: exactly one user command must converge.
+    set_delay(0)
+    command(["list"], "the recovered quick remote")
+    vault = os.environ["S059_VAULT"]
+    remote = os.environ["S059_REMOTE"]
+    local_head = subprocess.check_output(["git", "-C", vault, "rev-parse", "HEAD"], text=True).strip()
+    remote_head = subprocess.check_output(["git", "--git-dir", remote, "rev-parse", "refs/heads/main"], text=True).strip()
+    require(local_head == remote_head, "one command after recovery left vault and remote commits different")
+    require(not subprocess.check_output(["git", "-C", vault, "status", "--porcelain"], text=True).strip(),
+            "one command after recovery left uncommitted vault changes")
+    contents = subprocess.check_output(["git", "--git-dir", remote, "grep", "during-outage", "main"], text=True)
+    require("during-outage" in contents, "recovery lost the offline hidden-scenario edit")
+    print("statusline, list and status stayed quick with slow and hanging remotes; background runs finished; one recovered command synced the vault")
+except (Failure, OSError, subprocess.SubprocessError, StopIteration, ValueError) as error:
+    print(f"FAIL: {error}")
+    sys.exit(1)
+PY
