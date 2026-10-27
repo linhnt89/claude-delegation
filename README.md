@@ -155,20 +155,22 @@ file stop consolidation with both copies kept for manual reconciliation.
 `delegate hidden add evals/scenarios/<ID>-<slug>` commits the scenario in the vault
 before removing its source and pushes if a remote is connected; a failed push keeps the local
 commit. Use `delegate setup --vault <url>` to connect an empty or existing private remote.
-Every command except `where`, `statusline` and help commits hand edits (naming the scenario
-IDs), fetches and merges remote changes with a short network timeout, and retries unpushed
-commits. Unchanged remotes are silent; offline commands keep the local copy and warn.
-`list`, `setup` and the status line show unpushed work.
-`evals/run` pulls before using hidden scenarios (about a 10-second network timeout), or runs
-the local copy with a warning if it cannot check it's the latest. It never syncs in workers.
+The vault syncs only when the hidden set is changed or run (decision 011): `setup --vault`,
+`hidden add`, and `delegate where --pull`, which `evals/run` calls before using hidden
+scenarios. A sync commits hand edits (naming the scenario IDs), fetches and merges, and
+pushes; each network call has a hard 10-second limit, and syncs take turns. When the remote
+doesn't answer, `evals/run` runs the local copy with a warning. Every other command and the
+status line never touch the network or wait on the vault. `delegate list` names hidden
+changes not on the remote yet, worked out locally. Nothing syncs or mentions the vault inside
+the sandbox.
 Conflicting merges are aborted: the local commit stays runnable and the remote side stays
-on `refs/delegate/theirs`. Each command reports the files and vault-folder commands to
+on `refs/delegate/theirs`. Each command outside the sandbox reports the files and vault-folder commands to
 merge that ref, edit, stage and commit the resolution; nothing is reset or force-pushed.
 A clone needs no `init`: without machine configuration, `list` and `evals/run` say to run
 `delegate setup --vault <url>` and warn if this project's hidden set is missing.
 Task state and results share the checkout home. On first use, old sibling `<repo>.delegate/`
 homes migrate automatically: tasks, plan reviews and results go into the checkout home;
-hidden scenarios are committed together in the vault and pushed if connected. Commit the
+hidden scenarios are committed together in the vault and pushed at the next sync. Commit the
 project id in `.delegate-kit.toml`; without a remote, connect it with
 `delegate setup --vault <url>`. Interrupted migrations resume on the next command. Conflicting
 files stop migration with both copies kept; unknown files stay in the old folder, named once.
