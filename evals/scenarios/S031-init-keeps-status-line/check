@@ -6,13 +6,48 @@ mkdir -p "$PROJ/.claude"
 cat >"$PROJ/.claude/settings.json" <<'J'
 {
   "statusLine": {"type": "command", "command": "~/bin/my-line"},
-  "permissions": {"allow": ["Bash(ls:*)"]}
+  "permissions": {"allow": ["Bash(ls:*)"]},
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": ": # the user's own hook"}]}
+    ]
+  }
 }
 J
-before="$(sha256sum <"$PROJ/.claude/settings.json")"
+cp "$PROJ/.claude/settings.json" "$EVALS_WORK/s031-settings-before.json"
 d init
 [ "$RC" -eq 0 ] || fail "init failed with an existing settings.json: $OUT"
-[ "$(sha256sum <"$PROJ/.claude/settings.json")" = "$before" ] || fail "init changed a settings.json that already had a status line: $(cat "$PROJ/.claude/settings.json")"
+python3 - "$EVALS_WORK/s031-settings-before.json" "$PROJ/.claude/settings.json" <<'PY' || exit 1
+import collections, json, sys
+
+def load(path, who):
+    try:
+        data = json.load(open(path))
+    except Exception as e:
+        print(f"FAIL: {who} settings.json is not readable JSON: {e}"); sys.exit(1)
+    if not isinstance(data, dict):
+        print(f"FAIL: {who} settings.json is not a JSON object"); sys.exit(1)
+    return data
+
+before = load(sys.argv[1], "the user's")
+after = load(sys.argv[2], "init's")
+for key, value in before.items():
+    if key != "hooks" and after.get(key) != value:
+        print(f"FAIL: init changed the user's setting {key}: {after.get(key)!r}"); sys.exit(1)
+
+def entries(groups):
+    return collections.Counter((group.get("matcher", ""), json.dumps(hook, sort_keys=True))
+                               for group in groups if isinstance(group, dict)
+                               for hook in group.get("hooks", []))
+
+hooks = after.get("hooks") if isinstance(after.get("hooks"), dict) else {}
+for event, groups in before.get("hooks", {}).items():
+    groups = groups if isinstance(groups, list) else []
+    now = hooks.get(event, []) if isinstance(hooks.get(event), list) else []
+    missing = entries(groups) - entries(now)
+    if missing:
+        print(f"FAIL: init dropped or changed one of the user's {event} hooks: {sorted(missing.elements())[0]}"); sys.exit(1)
+PY
 echo "$OUT" | grep -q "delegate statusline" || fail "init didn't say how to add delegate's status line to the user's own: $OUT"
 
 rm -rf "$PROJ" "$DHOME"; setup_project --no-init
