@@ -37,8 +37,16 @@ fi
 # Ask delegate for both locations when it supports `where`. Older binaries keep
 # the previous rule. Explicit EVALS_HIDDEN/EVALS_RESULTS still override discovery.
 hidden="$dhome/_evals/hidden"
-if command -v delegate >/dev/null 2>&1 && delegate --help 2>/dev/null | grep -qE '^[[:space:]]+where[[:space:]]'; then
-  if locations="$(cd "$root" && delegate where)"; then
+# The runner marks workers and acceptance checks, including those without bwrap.
+# A .task/ folder alone also exists during the lead's review, outside the sandbox.
+sandboxed=false
+if [ "${DELEGATE_SANDBOXED:-}" = 1 ]; then
+  sandboxed=true
+  hidden=""
+elif command -v delegate >/dev/null 2>&1 && delegate --help 2>/dev/null | grep -qE '^[[:space:]]+where[[:space:]]'; then
+  where_args=()
+  if delegate where --help 2>/dev/null | grep -q -- '--pull'; then where_args+=(--pull); fi
+  if locations="$(cd "$root" && delegate where "${where_args[@]}")"; then
     tasks="$(printf '%s\n' "$locations" | awk '/^tasks / {sub(/^tasks /, ""); print; exit}')"
     if [ -z "$tasks" ]; then
       echo "evals: delegate where did not report a tasks folder" >&2
@@ -46,16 +54,17 @@ if command -v delegate >/dev/null 2>&1 && delegate --help 2>/dev/null | grep -qE
     fi
     dhome="$tasks"
     hidden="$(printf '%s\n' "$locations" | awk '/^hidden / {sub(/^hidden /, ""); if ($0 !~ /^none:/) print; exit}')"
-    reason="$(printf '%s\n' "$locations" | awk '/^hidden none:/ {print; exit}')"
-    [ -z "$reason" ] || printf '%s\n' "$reason" >&2
   else
     echo "evals: delegate where failed; cannot locate tasks or the hidden set" >&2
     exit 1
   fi
 fi
-hidden="${EVALS_HIDDEN:-$hidden}"
+if ! "$sandboxed"; then hidden="${EVALS_HIDDEN:-$hidden}"; fi
 [ -d "$hidden" ] || hidden=""
 results="${EVALS_RESULTS:-$dhome/_evals/results}"
+# A fresh, unconfigured machine has no registered checkout home. Keep its
+# results temporary too, rather than creating global files just to run evals.
+case "$dhome" in */checkouts/unregistered-*) results="${EVALS_RESULTS:-$(mktemp -d)}" ;; esac
 if ! mkdir -p "$results" 2>/dev/null || [ ! -w "$results" ]; then
   results="$(mktemp -d)"
 fi

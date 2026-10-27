@@ -640,6 +640,7 @@ fn run_with_timeout(cmd: &[String], cwd: &Path) -> Result<(i32, String)> {
         .args(args)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
+        .env("DELEGATE_SANDBOXED", "1")
         .stdout(out.try_clone()?)
         .stderr(out)
         .spawn()
@@ -1066,6 +1067,10 @@ pub fn list(ctx: &Ctx) -> Result<()> {
         );
     }
     crate::checkout::list_orphans()?;
+    if let Some(hint) = crate::vault::hint()? {
+        eprintln!("{hint}");
+    }
+    crate::vault::notices(ctx)?;
     Ok(())
 }
 
@@ -1350,6 +1355,14 @@ pub fn discard(ctx: &Ctx, id: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn acceptance_checks_are_marked_sandboxed_without_bwrap() {
+        let cmd = ["sh", "-c", "printf '%s' \"$DELEGATE_SANDBOXED\""].map(str::to_owned);
+        let (rc, output) = run_with_timeout(&cmd, &std::env::temp_dir()).unwrap();
+        assert_eq!(rc, 0);
+        assert_eq!(output, "1");
+    }
 
     struct TestRepo(PathBuf);
 

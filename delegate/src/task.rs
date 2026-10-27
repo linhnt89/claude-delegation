@@ -20,6 +20,34 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    /// Locate existing state without registering this otherwise unconfigured machine.
+    pub(crate) fn inspect() -> Result<Self> {
+        let cwd = std::env::current_dir()?;
+        let root = PathBuf::from(git(&cwd, &["rev-parse", "--show-toplevel"])?);
+        let gitdir = PathBuf::from(git(
+            &root,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?);
+        let main = gitdir.parent().unwrap_or(&root);
+        let legacy = main.with_file_name(format!(
+            "{}.delegate",
+            main.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        // Existing homes still need their crash-safe migration on first use.
+        if legacy.exists() && std::env::var_os("DELEGATE_HOME").is_none() {
+            return Self::discover();
+        }
+        let dhome = std::env::var_os("DELEGATE_HOME").map_or_else(
+            || crate::checkout::peek(&gitdir, main, &crate::vault::data_dir()),
+            |path| Ok(PathBuf::from(path)),
+        )?;
+        Ok(Self {
+            root,
+            dhome,
+            gitdir,
+        })
+    }
+
     pub fn discover() -> Result<Self> {
         let cwd = std::env::current_dir()?;
         let mut root = PathBuf::from(

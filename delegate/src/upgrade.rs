@@ -362,11 +362,30 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
     }
     // Rerunning init on a legacy project records only newly added files. Those
     // additions must not mask the older kit of the still-unrecorded files.
-    let unrecorded = hashes
+    let mut unrecorded: BTreeMap<_, _> = hashes
         .iter()
         .filter(|(path, _)| saved.as_ref().is_none_or(|r| !r.files.contains_key(*path)))
         .map(|(path, hash)| (path.clone(), hash.clone()))
         .collect();
+    // A missing file can still identify its installed kit through HEAD. This
+    // disambiguates partial records when the newly changed template is precisely
+    // the one the user deleted; do not infer an older kit from unchanged peers.
+    for path in &valid {
+        if !hashes.contains_key(*path)
+            && saved
+                .as_ref()
+                .is_none_or(|record| !record.files.contains_key(*path))
+        {
+            let output = Command::new("git")
+                .current_dir(&root)
+                .args(["show", &format!("HEAD:{path}")])
+                .output()
+                .context("reading installed template history")?;
+            if output.status.success() {
+                unrecorded.insert((*path).to_owned(), sha256::hex(&output.stdout));
+            }
+        }
+    }
     let baseline = identify(&kits, &unrecorded);
     let mut record = saved.unwrap_or_else(|| Record {
         project: None,

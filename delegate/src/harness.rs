@@ -102,6 +102,7 @@ pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Resul
     .map(String::from)
     .to_vec();
     sb.extend(["--tmpfs".into(), "/tmp".into()]);
+    sb.extend(["--setenv".into(), "DELEGATE_SANDBOXED".into(), "1".into()]);
     let s = |p: &Path| p.to_string_lossy().into_owned();
     for p in &bounds.hide {
         sb.extend(["--tmpfs".into(), s(p)]);
@@ -294,6 +295,7 @@ pub(crate) fn run_streamed(
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
+        .env("DELEGATE_SANDBOXED", "1")
         .stdout(Stdio::from(OwnedFd::from(output)))
         .stderr(stderr)
         .spawn()
@@ -347,6 +349,7 @@ pub fn run_logged(
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
+        .env("DELEGATE_SANDBOXED", "1")
         .stdout(stdout)
         .stderr(Stdio::from(lf))
         .status()
@@ -500,6 +503,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn workers_are_marked_sandboxed_without_bwrap() {
+        let dir =
+            std::env::temp_dir().join(format!("delegate-worker-env-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let cmd = ["sh", "-c", "test \"$DELEGATE_SANDBOXED\" = 1"].map(str::to_owned);
+        let log = dir.join("run.log");
+        assert_eq!(run_logged(&cmd, &dir, &log, None).unwrap(), 0);
+        let mut stream = events::Stream::new(&dir, Harness::Codex, &dir);
+        assert_eq!(run_streamed(&cmd, &dir, &log, &mut stream).unwrap(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

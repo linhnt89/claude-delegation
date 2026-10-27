@@ -66,10 +66,10 @@ Set `Status: automated` once `evals/run <id>` gives a real verdict. Pick the tie
 seconds to a few minutes is `fast`.
 
 ## 5. Hidden scenarios
-Move one or two automated scenarios per job, preferably properties and failure paths, to
-`<repo>.delegate/_evals/hidden/scenarios/` (outside the repo; workers can't read it). Note the
-ids, not their content, in `jobs.md` under "Hidden". They catch work tailored to the visible
-checks.
+Hide one or two automated scenarios per job, preferably properties and failure paths, with
+`delegate hidden add evals/scenarios/<ID>-<slug>`. This moves the folder into the private
+vault, commits it and pushes when connected; workers can't read it. Note the ids, not their
+content, in `jobs.md` under "Hidden". They catch work tailored to the visible checks.
 
 ## 6. Run and baseline
 `evals/run fast` (or `full`, `all`). On a new set, failures are expected: they are the work to

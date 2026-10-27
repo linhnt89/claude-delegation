@@ -232,6 +232,7 @@ fn migrate(
     }
     // The lock order is data -> vault -> git identity everywhere in this import.
     let vault = Vault::lock(data)?;
+    vault.ensure_no_conflict()?;
     let identity = File::open(gitdir)?;
     identity.lock()?;
     let ctx = Ctx {
@@ -782,7 +783,7 @@ mod tests {
                 );
             } else {
                 for command in [
-                    crate::Cmd::Where,
+                    crate::Cmd::Where { pull: false },
                     crate::Cmd::Init { dir: None },
                     crate::Cmd::Setup { vault: None },
                     crate::Cmd::Upgrade { paths: Vec::new() },

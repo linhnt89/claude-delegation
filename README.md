@@ -145,12 +145,27 @@ worktree a worker sees only `.task/` (its spec and templates), which git ignores
 
 Hidden scenarios live separately in one private git repo at
 `$XDG_DATA_HOME/delegate/vault/` (default `~/.local/share/delegate/vault/`), under
-`<project-id>-<main checkout name>/hidden/scenarios/`. The UUID v4 `project` in
+`<project-id>-<original checkout name>/hidden/scenarios/`. The UUID v4 `project` in
 `.delegate-kit.toml` is shared by clones: commit it. `delegate where` creates the ID if
 missing and locates the checkout's task folder; it creates a vault only when importing an
-old hidden set. Vault folders are found by ID after a rename. `delegate hidden add evals/scenarios/<ID>-<slug>` commits the scenario in the vault
+old hidden set. Vault folders are found by ID and keep their original names across checkout
+renames and machines. Legacy duplicate folders for an ID are merged into the oldest recorded
+folder, keeping every scenario and reporting the consolidation once; differing copies of a
+file stop consolidation with both copies kept for manual reconciliation.
+`delegate hidden add evals/scenarios/<ID>-<slug>` commits the scenario in the vault
 before removing its source and pushes if a remote is connected; a failed push keeps the local
 commit. Use `delegate setup --vault <url>` to connect an empty or existing private remote.
+Every command except `where`, `statusline` and help commits hand edits (naming the scenario
+IDs), fetches and merges remote changes with a short network timeout, and retries unpushed
+commits. Unchanged remotes are silent; offline commands keep the local copy and warn.
+`list`, `setup` and the status line show unpushed work.
+`evals/run` pulls before using hidden scenarios (about a 10-second network timeout), or runs
+the local copy with a warning if it cannot check it's the latest. It never syncs in workers.
+Conflicting merges are aborted: the local commit stays runnable and the remote side stays
+on `refs/delegate/theirs`. Each command reports the files and vault-folder commands to
+merge that ref, edit, stage and commit the resolution; nothing is reset or force-pushed.
+A clone needs no `init`: without machine configuration, `list` and `evals/run` say to run
+`delegate setup --vault <url>` and warn if this project's hidden set is missing.
 Task state and results share the checkout home. On first use, old sibling `<repo>.delegate/`
 homes migrate automatically: tasks, plan reviews and results go into the checkout home;
 hidden scenarios are committed together in the vault and pushed if connected. Commit the

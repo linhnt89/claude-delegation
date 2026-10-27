@@ -104,6 +104,28 @@ fn find_home(checkouts: &Path, id: &str) -> Result<Option<PathBuf>> {
     Ok(found)
 }
 
+/// Locate registered task state without creating machine-wide files.
+pub(crate) fn peek(gitdir: &Path, main: &Path, data: &Path) -> Result<PathBuf> {
+    let checkouts = data.join("checkouts");
+    if let Some(id) = read_id(gitdir)? {
+        if checkouts.is_dir()
+            && let Some(folder) = find_home(&checkouts, &id)?
+        {
+            return Ok(folder);
+        }
+        return Ok(checkouts.join(format!(
+            "{id}-{}",
+            main.file_name().unwrap_or_default().to_string_lossy()
+        )));
+    }
+    // A read-only invocation has no identity to persist yet. Results can use
+    // this temporary name; the next mutating command registers a real UUID.
+    Ok(checkouts.join(format!(
+        "unregistered-{}",
+        main.file_name().unwrap_or_default().to_string_lossy()
+    )))
+}
+
 /// Resolve before sweeping: a moved checkout with only results must not be swept first.
 /// The machine-wide lock serializes folder renames, copying decisions and cleanup.
 /// The git-directory lock also serializes identity creation across different data roots.

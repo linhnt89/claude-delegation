@@ -50,7 +50,11 @@ enum Cmd {
         vault: Option<String>,
     },
     /// Print this checkout's task-state and hidden-scenario folders
-    Where,
+    Where {
+        /// Refresh the hidden set before an evaluation
+        #[arg(long)]
+        pull: bool,
+    },
     /// Manage hidden scenarios outside the project
     Hidden {
         #[command(subcommand)]
@@ -167,9 +171,18 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         statusline::run();
         return Ok(ExitCode::SUCCESS);
     }
+    if !matches!(cmd, Cmd::Where { .. }) {
+        vault::sync()?;
+    }
     // Resolve a moved checkout before sweeping, even for machine-level commands.
     // Never sweep after a failed repair: its old path may be missing temporarily.
-    let ctx = match Ctx::discover() {
+    let readonly = matches!(cmd, Cmd::List | Cmd::Where { .. }) && vault::machine_not_setup()?;
+    let discovered = if readonly {
+        Ctx::inspect()
+    } else {
+        Ctx::discover()
+    };
+    let ctx = match discovered {
         Ok(ctx) => Ok(ctx),
         Err(error) => {
             if task::git(&std::env::current_dir()?, &["rev-parse", "--show-toplevel"]).is_ok() {
@@ -178,6 +191,12 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
             }
             if matches!(cmd, Cmd::List) {
                 checkout::list_orphans()?;
+                if let Some(hint) = vault::hint()? {
+                    eprintln!("{hint}");
+                }
+                if vault::machine_not_setup()? {
+                    eprintln!("this machine isn't set up: run delegate setup --vault <url>");
+                }
                 return Ok(ExitCode::SUCCESS);
             }
             checkout::cleanup()?;
@@ -209,7 +228,8 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         | Cmd::Statusline => {
             unreachable!("handled above")
         }
-        Cmd::Where => vault::where_paths(&ctx),
+        Cmd::Where { pull: true } => vault::where_pulled(&ctx),
+        Cmd::Where { pull: false } => vault::where_paths(&ctx),
         Cmd::Hidden {
             cmd: HiddenCmd::Add { folder },
         } => vault::add(&ctx, &folder),
