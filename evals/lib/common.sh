@@ -39,7 +39,9 @@ export HOME="$EVALS_WORK/home"
 mkdir -p "$HOME/.cache/stub/calls" "$HOME/.pi" "$HOME/.config/delegate"
 mkdir -p "$EVALS_WORK/bin" "$EVALS_WORK/stub"
 # `delegate` is on the user's PATH, so the project's evals/run and skills can call it.
-ln -sf "$DELEGATE" "$EVALS_WORK/bin/delegate"
+# A script, not a symlink: a check that writes its own wrapper here must not overwrite the build.
+printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$DELEGATE" >"$EVALS_WORK/bin/delegate"
+chmod +x "$EVALS_WORK/bin/delegate"
 export PATH="$EVALS_WORK/bin:$PATH"
 # The lead running the evals is itself a Claude Code session: its id must not own test tasks.
 unset DELEGATE_HOME DELEGATE_WORKERS DELEGATE_SANDBOX XDG_DATA_HOME XDG_CONFIG_HOME CLAUDE_CODE_SESSION_ID
