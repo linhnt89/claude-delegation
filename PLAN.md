@@ -38,6 +38,10 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
+| t050 | Checks for S071–S074, S076, P020 (quota reads and quota-aware picks) | todo | – | fast | each fails today for its reason | decision 014 |
+| t051 | Checks for S075 (out of quota mid-round) | todo | – | fast | fails today for its reason | decision 014 |
+| t052 | Native quota readers, `delegate quota`, quota-aware candidates, `size:` (decision 014) | todo | t050 | standard | S071–S074, S076, P020 + `scripts/check` | adds `ureq` (rustls); `checks_by: t050` |
+| t053 | A worker out of quota mid-round hands over to the next candidate (decision 014) | todo | t051, t052 | standard | S075 + `scripts/check` | `checks_by: t051` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
