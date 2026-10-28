@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "delegate guard pre-tool",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write|NotebookEdit"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "delegate guard stop",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "delegate guard prompt",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
