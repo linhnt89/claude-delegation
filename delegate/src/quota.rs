@@ -238,9 +238,17 @@ pub struct Window {
     pub seconds: i64,
     /// Model ids/names a scoped window applies to; empty for unscoped windows.
     pub scope: Vec<String>,
+    /// The vendor gives no reset for this window. Unlike a reset that could not be
+    /// read, this does not make the account unknown.
+    pub no_reset: bool,
 }
 
 impl Window {
+    /// A window the vendor deliberately leaves without a reset.
+    fn resetless(&self) -> bool {
+        self.no_reset && self.resets_at.is_none()
+    }
+
     /// Whether this window counts for a candidate's model. Unscoped windows do.
     fn applies_to(&self, model: &str) -> bool {
         if self.scope.is_empty() {
@@ -306,6 +314,8 @@ pub struct AccountReport {
     pub daily_cap: Option<f64>,
     pub runway: Runway,
     pub error: Option<String>,
+    /// The login itself failed, so the hint to log in again is useful.
+    login_failed: bool,
 }
 
 /// One candidate that quota says not to start, and the account line for a summary.
@@ -330,8 +340,8 @@ impl SkipReason {
 }
 
 impl AccountReport {
-    fn unknown(account: Account, why: impl Into<String>) -> Self {
-        let why = why.into();
+    fn unknown(account: Account, error: impl Into<QuotaError>) -> Self {
+        let error = error.into();
         AccountReport {
             account: account.name,
             login: account.source,
@@ -341,7 +351,8 @@ impl AccountReport {
             balance: None,
             daily_cap: None,
             runway: Runway::unknown(),
-            error: Some(why),
+            error: Some(error.why),
+            login_failed: error.login,
         }
     }
 
@@ -352,11 +363,8 @@ impl AccountReport {
         daily_cap: Option<f64>,
     ) -> Self {
         let runway = runway_for(&windows);
-        let status = match runway.status {
-            RunwayStatus::ExhaustedNow => ReportStatus::Exhausted,
-            RunwayStatus::Unknown => ReportStatus::Unknown,
-            RunwayStatus::ProjectedExhaustion | RunwayStatus::ThroughReset => ReportStatus::Ok,
-        };
+        let refs = windows.iter().collect::<Vec<_>>();
+        let status = status_for_runway(runway, &refs);
         let error = (status == ReportStatus::Unknown).then(|| {
             if windows.iter().any(|window| !window.percent_left.is_finite()) {
                 "vendor usage was not a number".to_string()
@@ -374,6 +382,7 @@ impl AccountReport {
             daily_cap,
             runway,
             error,
+            login_failed: false,
         }
     }
 
@@ -413,11 +422,8 @@ impl AccountReport {
         if self.login_unknown() {
             return ReportStatus::Unknown;
         }
-        match self.runway_for(worker).status {
-            RunwayStatus::ExhaustedNow => ReportStatus::Exhausted,
-            RunwayStatus::Unknown => ReportStatus::Unknown,
-            RunwayStatus::ProjectedExhaustion | RunwayStatus::ThroughReset => ReportStatus::Ok,
-        }
+        let windows = self.windows_for(worker).collect::<Vec<_>>();
+        status_for_runway(runway_for_iter(windows.iter().copied()), &windows)
     }
 
     /// Why this candidate cannot take a task of `size`, after model scoping.
@@ -498,13 +504,22 @@ impl AccountReport {
         }
     }
 
+    /// A window the vendor deliberately leaves without a reset, not one that failed to read.
+    fn resetless_only(&self) -> bool {
+        !self.windows.is_empty() && self.windows.iter().all(Window::resetless)
+    }
+
     /// Windows, reset and runway columns for a known report.
     fn text_columns(&self) -> (String, String, String) {
-        let reset = format!(
-            "resets {}",
-            self.reset_at()
-                .map_or_else(|| "unknown".to_string(), format_clock)
-        );
+        let reset = if self.resetless_only() {
+            "no reset given".to_string()
+        } else {
+            format!(
+                "resets {}",
+                self.reset_at()
+                    .map_or_else(|| "unknown".to_string(), format_clock)
+            )
+        };
         let runway = format!("runway: {}", self.runway_text());
         let windows = if let (Some(balance), Some(cap)) = (self.balance, self.daily_cap) {
             format!("{}/{} credits", format_number(balance), format_number(cap))
@@ -540,6 +555,7 @@ impl AccountReport {
                     .map_or_else(|| "unknown".to_string(), format_clock)
             ),
             RunwayStatus::ThroughReset => "through reset".to_string(),
+            RunwayStatus::Unknown if self.resetless_only() => "no reset given".to_string(),
             RunwayStatus::Unknown => "unknown".to_string(),
         }
     }
@@ -611,9 +627,13 @@ pub fn text_lines(reports: &[AccountReport]) -> Vec<String> {
         .map(|(report, columns)| match columns {
             None => {
                 let why = report.error.as_deref().unwrap_or("quota unreadable");
-                let hint = report.login.hint();
+                let hint = if report.login_failed {
+                    format!("; {}", report.login.hint())
+                } else {
+                    String::new()
+                };
                 format!(
-                    "{:<account_width$} unknown: {why} ({}); {hint}",
+                    "{:<account_width$} unknown: {why} ({}){hint}",
                     report.account, report.source
                 )
             }
@@ -645,20 +665,20 @@ pub fn read_accounts(accounts: &[Account], config: &QuotaConfig) -> Vec<AccountR
 
 fn read_account(account: Account, config: &QuotaConfig) -> AccountReport {
     let result = match account.source {
-        LoginSource::ClaudeCredentials => {
-            read_claude_login().and_then(|login| fetch_claude(account, &login))
-        }
-        LoginSource::PiCodex | LoginSource::CodexAuth => {
-            read_codex_login(account.source).and_then(|login| fetch_codex(account, &login))
-        }
-        LoginSource::PiCopilot => {
-            read_copilot_login().and_then(|login| fetch_copilot(account, &login))
-        }
-        LoginSource::PiHyper => {
-            read_hyper_login().and_then(|login| fetch_hyper(account, &login, config.hyper))
-        }
+        LoginSource::ClaudeCredentials => read_claude_login()
+            .map_err(QuotaError::login)
+            .and_then(|login| fetch_claude(account, &login)),
+        LoginSource::PiCodex | LoginSource::CodexAuth => read_codex_login(account.source)
+            .map_err(QuotaError::login)
+            .and_then(|login| fetch_codex(account, &login)),
+        LoginSource::PiCopilot => read_copilot_login()
+            .map_err(QuotaError::login)
+            .and_then(|login| fetch_copilot(account, &login)),
+        LoginSource::PiHyper => read_hyper_login()
+            .map_err(QuotaError::login)
+            .and_then(|login| fetch_hyper(account, &login, config.hyper)),
     };
-    result.unwrap_or_else(|why| AccountReport::unknown(account, why))
+    result.unwrap_or_else(|error| AccountReport::unknown(account, error))
 }
 
 // -------------------------------------------------------------------- logins
@@ -681,7 +701,38 @@ enum Login {
     },
 }
 
-type FetchResult = Result<AccountReport, String>;
+/// A failed quota read and whether the login itself is what failed. Only a login
+/// failure deserves the hint to log in again.
+struct QuotaError {
+    why: String,
+    login: bool,
+}
+
+impl QuotaError {
+    fn login(why: impl Into<String>) -> Self {
+        QuotaError {
+            why: why.into(),
+            login: true,
+        }
+    }
+}
+
+impl From<String> for QuotaError {
+    fn from(why: String) -> Self {
+        QuotaError { why, login: false }
+    }
+}
+
+impl From<&str> for QuotaError {
+    fn from(why: &str) -> Self {
+        QuotaError {
+            why: why.to_string(),
+            login: false,
+        }
+    }
+}
+
+type FetchResult = Result<AccountReport, QuotaError>;
 
 fn read_json(path: &Path) -> Result<Value, String> {
     let text = fs::read_to_string(path).map_err(|error| {
@@ -768,6 +819,7 @@ fn unreadable_window(name: impl Into<String>, resets_at: Option<i64>, seconds: i
         resets_at,
         seconds,
         scope: Vec::new(),
+        no_reset: false,
     }
 }
 
@@ -981,7 +1033,7 @@ pub fn base_for(account: AccountName) -> String {
 
 fn fetch_claude(account: Account, login: &Login) -> FetchResult {
     let Login::Claude { token } = login else {
-        return Err("quota reader mismatch".to_string());
+        return Err("quota reader mismatch".into());
     };
     let url = format!("{}/api/oauth/usage", base_for(AccountName::Claude));
     let (status, body) = http_get(
@@ -993,7 +1045,7 @@ fn fetch_claude(account: Account, login: &Login) -> FetchResult {
         ],
     )?;
     if status == 401 || status == 403 {
-        return Err("login expired".to_string());
+        return Err(QuotaError::login("login expired"));
     }
     let payload = json_body(status, &body)?;
     let windows = claude_windows(&payload)?;
@@ -1035,13 +1087,81 @@ fn claude_windows(payload: &Value) -> Result<Vec<Window>, String> {
             resets_at,
             seconds,
             scope: Vec::new(),
+            no_reset: false,
         });
     }
     windows.extend(claude_scoped_windows(payload, percent_scale));
+    if windows.is_empty()
+        && let Some(monthly) = claude_monthly_window(payload)
+    {
+        windows.push(monthly);
+    }
     if windows.is_empty() {
         return Err("vendor answer had no quota windows".to_string());
     }
     Ok(windows)
+}
+
+/// Enterprise seats have no plan windows, only an organisation-set monthly spend cap.
+/// It is read only when `extra_usage` is enabled; a plan window always wins over it.
+fn claude_monthly_window(payload: &Value) -> Option<Window> {
+    let Some(extra) = object_bucket(payload, "extra_usage") else {
+        return claude_spend_window(payload);
+    };
+    if extra.get("is_enabled").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let absent = |key: &str| extra.get(key).is_none_or(Value::is_null);
+    if absent("used_credits") || absent("monthly_limit") {
+        return claude_spend_window(payload);
+    }
+    let limit = match checked_number_field(extra, "monthly_limit") {
+        Ok(Some(limit)) if limit > 0.0 => limit,
+        Ok(_) => return None,
+        Err(()) => return Some(unreadable_window("monthly", None, THIRTY_DAYS)),
+    };
+    let used = match checked_number_field(extra, "used_credits") {
+        Ok(Some(used)) => used,
+        Ok(None) => return claude_spend_window(payload),
+        Err(()) => return Some(unreadable_window("monthly", None, THIRTY_DAYS)),
+    };
+    let reached = extra.get("spend_limit_reached").and_then(Value::as_bool) == Some(true);
+    let percent_left = if reached {
+        0.0
+    } else {
+        (100.0 - used / limit * 100.0).clamp(0.0, 100.0)
+    };
+    Some(monthly_window(percent_left))
+}
+
+/// The older `spend` figures, used only when `extra_usage` names no amounts.
+fn claude_spend_window(payload: &Value) -> Option<Window> {
+    let spend = object_bucket(payload, "spend")?;
+    let used = checked_number_field(object_bucket(spend, "used")?, "amount_minor");
+    let limit = checked_number_field(object_bucket(spend, "limit")?, "amount_minor");
+    if used.is_err() || limit.is_err() {
+        return Some(unreadable_window("monthly", None, THIRTY_DAYS));
+    }
+    let (Ok(Some(used)), Ok(Some(limit))) = (used, limit) else {
+        return None;
+    };
+    if limit <= 0.0 {
+        return None;
+    }
+    Some(monthly_window(
+        (100.0 - used / limit * 100.0).clamp(0.0, 100.0),
+    ))
+}
+
+fn monthly_window(percent_left: f64) -> Window {
+    Window {
+        name: "monthly".to_string(),
+        percent_left,
+        resets_at: None,
+        seconds: THIRTY_DAYS,
+        scope: Vec::new(),
+        no_reset: true,
+    }
 }
 
 /// The model-scoped entries in Claude's `limits` array that the flat buckets miss.
@@ -1127,6 +1247,7 @@ fn claude_scoped_windows(payload: &Value, percent_scale: bool) -> Vec<Window> {
             resets_at,
             seconds,
             scope,
+            no_reset: false,
         });
     }
     windows
@@ -1134,7 +1255,7 @@ fn claude_scoped_windows(payload: &Value, percent_scale: bool) -> Vec<Window> {
 
 fn fetch_codex(account: Account, login: &Login) -> FetchResult {
     let Login::Codex { token, account_id } = login else {
-        return Err("quota reader mismatch".to_string());
+        return Err("quota reader mismatch".into());
     };
     let url = format!("{}/backend-api/wham/usage", base_for(AccountName::Codex));
     let mut headers = vec![
@@ -1150,7 +1271,7 @@ fn fetch_codex(account: Account, login: &Login) -> FetchResult {
         .collect::<Vec<_>>();
     let (status, body) = http_get(&url, &borrowed)?;
     if status == 401 || status == 403 {
-        return Err("login expired".to_string());
+        return Err(QuotaError::login("login expired"));
     }
     let payload = json_body(status, &body)?;
     let windows = codex_windows(&payload)?;
@@ -1210,6 +1331,7 @@ fn codex_windows(payload: &Value) -> Result<Vec<Window>, String> {
             resets_at,
             seconds,
             scope: Vec::new(),
+            no_reset: false,
         });
     }
     if windows.is_empty() {
@@ -1220,7 +1342,7 @@ fn codex_windows(payload: &Value) -> Result<Vec<Window>, String> {
 
 fn fetch_copilot(account: Account, login: &Login) -> FetchResult {
     let Login::Copilot { token } = login else {
-        return Err("quota reader mismatch".to_string());
+        return Err("quota reader mismatch".into());
     };
     let url = format!("{}/copilot_internal/user", base_for(AccountName::Copilot));
     let (status, body) = http_get(
@@ -1232,7 +1354,7 @@ fn fetch_copilot(account: Account, login: &Login) -> FetchResult {
         ],
     )?;
     if status == 401 || status == 403 {
-        return Err("login expired".to_string());
+        return Err(QuotaError::login("login expired"));
     }
     let payload = json_body(status, &body)?;
     let windows = copilot_windows_from(&payload)?;
@@ -1277,6 +1399,7 @@ fn copilot_windows(
             resets_at,
             seconds,
             scope: Vec::new(),
+            no_reset: false,
         });
     }
     windows
@@ -1367,7 +1490,7 @@ fn fetch_hyper(account: Account, login: &Login, config: HyperConfig) -> FetchRes
         expires_ms,
     } = login
     else {
-        return Err("quota reader mismatch".to_string());
+        return Err("quota reader mismatch".into());
     };
     // The token exchange and the credits request share one five-second budget.
     let deadline = Instant::now() + REQUEST_TIMEOUT;
@@ -1376,7 +1499,7 @@ fn fetch_hyper(account: Account, login: &Login, config: HyperConfig) -> FetchRes
     } else if let Some(refresh) = refresh {
         exchange_hyper_token(refresh, deadline)?
     } else {
-        return Err("login expired".to_string());
+        return Err(QuotaError::login("login expired"));
     };
     let url = format!("{}/v1/credits", base_for(AccountName::Hyper));
     let (status, body) = http_get_with(
@@ -1388,13 +1511,13 @@ fn fetch_hyper(account: Account, login: &Login, config: HyperConfig) -> FetchRes
         budget_left(deadline)?,
     )?;
     if status == 401 || status == 403 {
-        return Err("login expired".to_string());
+        return Err(QuotaError::login("login expired"));
     }
     let payload = json_body(status, &body)?;
     let balance = match first_number_field(&payload, &["balance", "balance_usd"]) {
         Ok(Some(balance)) => balance,
-        Ok(None) => return Err("vendor answer had no credit balance".to_string()),
-        Err(()) => return Err("vendor credit balance was not a number".to_string()),
+        Ok(None) => return Err("vendor answer had no credit balance".into()),
+        Err(()) => return Err("vendor credit balance was not a number".into()),
     };
     let cap = f64::from(config.daily_cap);
     let percent_left = (balance / cap * 100.0).clamp(0.0, 100.0);
@@ -1406,6 +1529,7 @@ fn fetch_hyper(account: Account, login: &Login, config: HyperConfig) -> FetchRes
         resets_at,
         seconds: ONE_DAY,
         scope: Vec::new(),
+        no_reset: false,
     }];
     Ok(AccountReport::from_windows(
         account,
@@ -1415,7 +1539,7 @@ fn fetch_hyper(account: Account, login: &Login, config: HyperConfig) -> FetchRes
     ))
 }
 
-fn exchange_hyper_token(refresh: &str, deadline: Instant) -> Result<String, String> {
+fn exchange_hyper_token(refresh: &str, deadline: Instant) -> Result<String, QuotaError> {
     let url = format!("{}/token/exchange", base_for(AccountName::Hyper));
     let body = json!({ "refresh_token": refresh }).to_string();
     let (status, text) = http_post_with(
@@ -1425,11 +1549,12 @@ fn exchange_hyper_token(refresh: &str, deadline: Instant) -> Result<String, Stri
         budget_left(deadline)?,
     )?;
     if status == 401 || status == 403 {
-        return Err("login expired".to_string());
+        return Err(QuotaError::login("login expired"));
     }
     let payload = json_body(status, &text)?;
     string_field(&payload, "access_token")
         .ok_or_else(|| "vendor answer had no access token".to_string())
+        .map_err(QuotaError::from)
 }
 
 fn json_body(status: u16, text: &str) -> Result<Value, String> {
@@ -1440,6 +1565,21 @@ fn json_body(status: u16, text: &str) -> Result<Value, String> {
 }
 
 // ------------------------------------------------------------------- runway
+
+/// The report status for a runway. A window the vendor deliberately leaves without a
+/// reset still leaves the runway unknown, but the account is ok and not an error.
+fn status_for_runway(runway: Runway, windows: &[&Window]) -> ReportStatus {
+    match runway.status {
+        RunwayStatus::ExhaustedNow => ReportStatus::Exhausted,
+        RunwayStatus::Unknown
+            if !windows.is_empty() && windows.iter().all(|window| window.resetless()) =>
+        {
+            ReportStatus::Ok
+        }
+        RunwayStatus::Unknown => ReportStatus::Unknown,
+        RunwayStatus::ProjectedExhaustion | RunwayStatus::ThroughReset => ReportStatus::Ok,
+    }
+}
 
 /// The tightest runway across every window, not just the shortest-duration one.
 /// An unreadable reset makes the account unknown unless some window is exhausted.
@@ -1458,7 +1598,10 @@ fn runway_for_iter<'a>(windows: impl IntoIterator<Item = &'a Window>) -> Runway 
             return Runway::unknown();
         }
         let Some(runway) = window_runway(window, now) else {
-            unknown = true;
+            // A vendor-given absence of a reset is not an unreadable reset.
+            if !window.resetless() {
+                unknown = true;
+            }
             continue;
         };
         best = Some(best.map_or(runway, |current| tighter(current, runway)));
@@ -1759,11 +1902,7 @@ fn parse_rfc3339(text: &str) -> Option<i64> {
 // ---------------------------------------------------------------- rendering
 
 fn format_percent(value: f64) -> String {
-    if (value - value.round()).abs() < 0.05 {
-        format!("{value:.0}")
-    } else {
-        format!("{value:.1}")
-    }
+    format!("{value:.0}")
 }
 
 fn format_number(value: f64) -> String {
@@ -1797,6 +1936,7 @@ mod tests {
             resets_at: Some(now_seconds() + reset_in),
             seconds,
             scope: Vec::new(),
+            no_reset: false,
         }
     }
 
@@ -1936,6 +2076,7 @@ mod tests {
                 resets_at: Some(at),
                 seconds: ONE_DAY,
                 scope: Vec::new(),
+                no_reset: false,
             },
             window(50.0, 60, FIVE_HOURS),
         ];
@@ -2154,6 +2295,7 @@ mod tests {
             resets_at: day,
             seconds: THIRTY_DAYS,
             scope: Vec::new(),
+            no_reset: false,
         };
         assert_eq!(
             runway_for(std::slice::from_ref(&exhausted)).status,
@@ -2366,6 +2508,92 @@ mod tests {
     }
 
     #[test]
+    fn claude_enterprise_monthly_cap_is_a_monthly_window() {
+        let windows = claude_windows(&enterprise_payload(22_550.0, 50_000.0, false)).unwrap();
+        assert_eq!(windows.len(), 1);
+        let monthly = &windows[0];
+        assert_eq!(monthly.name, "monthly");
+        assert!((monthly.percent_left - 54.9).abs() < 1e-9);
+        assert!(monthly.resets_at.is_none());
+        assert_eq!(monthly.scope, Vec::<String>::new());
+        assert_eq!(monthly.seconds, THIRTY_DAYS);
+        let report = AccountReport::from_windows(
+            Account {
+                name: AccountName::Claude,
+                source: LoginSource::ClaudeCredentials,
+            },
+            windows,
+            None,
+            None,
+        );
+        assert_eq!(report.status, ReportStatus::Ok);
+        assert_eq!(report.runway.status, RunwayStatus::Unknown);
+        assert!(report.error.is_none());
+    }
+
+    #[test]
+    fn claude_enterprise_monthly_cap_used_up_is_zero_left() {
+        let windows = claude_windows(&enterprise_payload(50_000.0, 50_000.0, true)).unwrap();
+        assert_eq!(windows.len(), 1);
+        assert!(windows[0].percent_left.abs() < f64::EPSILON);
+        let report = AccountReport::from_windows(
+            Account {
+                name: AccountName::Claude,
+                source: LoginSource::ClaudeCredentials,
+            },
+            windows,
+            None,
+            None,
+        );
+        assert_eq!(report.status, ReportStatus::Exhausted);
+    }
+
+    #[test]
+    fn claude_plan_windows_hide_enabled_extra_usage() {
+        let now = now_seconds();
+        let payload = json!({
+            "five_hour": {"utilization": 30, "resets_at": now + FIVE_HOURS},
+            "seven_day": {"utilization": 20, "resets_at": now + SEVEN_DAYS},
+            "limits": [],
+            "extra_usage": {
+                "is_enabled": true,
+                "monthly_limit": 50_000.0,
+                "used_credits": 45_000.0,
+                "spend_limit_reached": false,
+            },
+            "spend": {
+                "used": {"amount_minor": 45_000},
+                "limit": {"amount_minor": 50_000},
+            },
+        });
+        let windows = claude_windows(&payload).unwrap();
+        assert_eq!(windows.len(), 2);
+        assert!(
+            windows.iter().all(|window| window.name != "monthly"),
+            "{windows:?}"
+        );
+    }
+
+    fn enterprise_payload(used: f64, limit: f64, reached: bool) -> Value {
+        json!({
+            "five_hour": null,
+            "seven_day": null,
+            "seven_day_oauth_apps": null,
+            "limits": [],
+            "extra_usage": {
+                "is_enabled": true,
+                "monthly_limit": limit,
+                "used_credits": used,
+                "spend_limit_reached": reached,
+            },
+            "spend": {
+                "used": {"amount_minor": used},
+                "limit": {"amount_minor": limit},
+            },
+        })
+    }
+
+    #[test]
     fn copilot_reads_classic_and_sdk_snapshot_shapes() {
         let payload = json!({
             "classic": {"entitlement": 100, "quota_remaining": 0},
@@ -2541,6 +2769,7 @@ mod tests {
             resets_at: Some(now + reset_in),
             seconds,
             scope: Vec::new(),
+            no_reset: false,
         };
         let exhausted = [
             window_at(50.0, 3_600, FIVE_HOURS),
