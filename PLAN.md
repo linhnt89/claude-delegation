@@ -59,6 +59,9 @@
 - Accepted at t044's merge (review, low): a check-error round keeps the tier even if the
   product-failure count already reached `step_up_after` (only after `--tier` or lowering it);
   and `pick_tier` takes the highest tier of all rounds, research rounds included.
+- A task that adds a crate fails `scripts/check` in the sandbox: `~/.cargo` is read-only there,
+  so cargo can't download it (t052). Workaround: the lead runs `cargo fetch` in the task's
+  worktree on the host, then `delegate check`. Fix idea: the runner fetches before checks.
 - `delegate list` says "vault: N commit(s) not pushed" when the vault has no remote at all.
 - A card beside the desktop app's Environment/Context cards isn't possible: the mod API
   (`claude-code.d.ts`, Claude Code 2.1.308) has no side-card component. Revisit when it does.
