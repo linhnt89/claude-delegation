@@ -52,6 +52,9 @@
   branch. t021 touches the home, so check whether it should claim ids there.
 - An older `delegate` on PATH after a newer one migrated the home finds no hidden scenarios and
   only says "no hidden scenarios found".
+- Accepted at t044's merge (review, low): a check-error round keeps the tier even if the
+  product-failure count already reached `step_up_after` (only after `--tier` or lowering it);
+  and `pick_tier` takes the highest tier of all rounds, research rounds included.
 - `delegate list` says "vault: N commit(s) not pushed" when the vault has no remote at all.
 - A card beside the desktop app's Environment/Context cards isn't possible: the mod API
   (`claude-code.d.ts`, Claude Code 2.1.308) has no side-card component. Revisit when it does.

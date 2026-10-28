@@ -14,7 +14,7 @@ The repo is the only memory they share.
                          delegate run <id> [--tier]
                            ├─ question phase: READY, or questions → answer in spec → run again
                            ├─ work phase (same session), runner commits
-                           └─ runner runs the spec's acceptance commands  ── fail → next run steps up a tier
+                           └─ runner runs the spec's acceptance commands  ── fail → steps up a tier (exit 3: same tier)
                                         │
                          delegate review <id>   (other family than the implementer; when risky)
                                         │
@@ -96,13 +96,15 @@ harness's own flag.
 GitHub Copilot is always the last candidate. The picks follow the Artificial Analysis
 intelligence-vs-cost Pareto line; recheck it monthly and edit the lines, nothing else changes.
 
-**Model families:** review skips the implementer's family, and plan review skips
-`planner_family` (Claude). Family is inferred from the model name (gpt, claude, deepseek,
+**Model families:** review skips the implementer's family, plan review skips
+`planner_family` (Claude), and implementation skips the family of any task named on the
+spec's `checks_by:` line (read from that task's `Worker:` merge trailer). Family is inferred from the model name (gpt, claude, deepseek,
 gemini, ...).
 
 **Tier choice:** the default comes from `[defaults]`. Claude picks `fast`/`deep` by the table
-in the delegate skill and tells you before running. After failed checks, the next run steps
-up one tier automatically. Project rules can raise it (below).
+in the delegate skill and tells you before running. After `step_up_after` failed rounds at a
+tier (default 1), the next run steps up one tier automatically; a check that exits 3 is a
+check error and doesn't count. A task never steps down. Project rules can raise it (below).
 
 ## Project rules: `.delegate.toml`
 Committed with the code, because they're about the code:
