@@ -47,7 +47,7 @@
 - t056 (2026-10-28): the lead guard (J9, decision 015): `delegate guard` hooks refuse the
   lead's product edits and hold its turn after a shell edit; workers are told apart by the
   runner's `DELEGATE_WORKER`; `init`/`upgrade` install it, `DELEGATE_GUARD=off` turns it off.
-  S050–S054, P017 pass. Checks by GPT (t026), fix by Claude Opus and Sol, review by DeepSeek.
+  S050–S054, P017 pass. Checks from t026, fix by Claude Opus (Copilot) and Sol, review by DeepSeek.
 
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
