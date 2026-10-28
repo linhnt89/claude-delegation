@@ -16,7 +16,7 @@
   007, 008, 010): task state by checkout id, one vault repo for hidden sets, `delegate setup`,
   automatic migration of old homes. This repo migrated on 2026-10-27; its vault's remote is on GitHub.
 - t026 (2026-10-27): checks for the lead guard (J9): S050–S054, P017 fail until the guard is
-  built. A pilot of delegating eval writing; the guard is decision 015 (t056), the `evaluate` role is not distilled yet.
+  built. A pilot of delegating eval writing; the `evaluate` role is not distilled yet.
 - t040–t041 (2026-10-27): tasks show once, in the row above the prompt, with other sessions
   dimmed; the pane opens only on request and reads one status at a time; `init` adds no status
   line and `upgrade` removes the kit's (J8, J1, decision 012). t042: in the desktop app the row
@@ -44,14 +44,20 @@
   runway unknown (S077). Plan windows always win over extra usage. "Log in again" is shown
   only when the login failed. An HTTPS vault URL without saved credentials says to use SSH or
   save credentials (S078). Checks by Claude, fixes by DeepSeek.
+- t056 (2026-10-28): the lead guard (J9, decision 015): `delegate guard` hooks refuse the
+  lead's product edits and hold its turn after a shell edit; workers are told apart by the
+  runner's `DELEGATE_WORKER`; `init`/`upgrade` install it, `DELEGATE_GUARD=off` turns it off.
+  S050–S054, P017 pass. Checks by GPT (t026), fix by Claude Opus and Sol, review by DeepSeek.
 
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t056 | Build the lead guard (decision 015): `delegate guard`, the runner's `DELEGATE_WORKER`, hooks via `init`/`upgrade` | todo | – | deep | S050, S051, S052, S054, P017 pass; S053 at review; `scripts/check` | also S063's check (user-approved) and this repo's `[guard] lead_files` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
+- Accepted at t056's merge (review, medium): a shell edit by the lead from the main checkout
+  into a task worktree isn't caught at `Stop` (it watches only the lead's own worktree, so a
+  running worker's edits are never blamed). Edit/Write there are still refused.
 - Accepted at t037's merge (review 6): a push address set by hand on the vault
   (`git remote set-url --push`) survives `setup --vault <new>`, so syncs keep pushing there
   and `list` reports nothing pending. delegate never sets one itself; fix: `setup --vault`
