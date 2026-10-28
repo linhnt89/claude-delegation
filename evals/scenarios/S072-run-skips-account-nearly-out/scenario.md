@@ -2,7 +2,7 @@
 - Job: J4
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude as lead starting a task. Decision 014.

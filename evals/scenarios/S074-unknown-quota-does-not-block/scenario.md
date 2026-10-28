@@ -2,7 +2,7 @@
 - Job: J4
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude as lead, on a machine where one login is expired or a vendor is down. Decision 014.

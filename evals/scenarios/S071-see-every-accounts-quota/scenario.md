@@ -2,7 +2,7 @@
 - Job: J4
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 A developer with several subscriptions behind their workers, before starting a batch. Decision 014.

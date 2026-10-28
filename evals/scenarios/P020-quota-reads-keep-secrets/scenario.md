@@ -2,7 +2,7 @@
 - Job: J3
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Anyone whose logins delegate reads. From: S071, S072. Decision 014.

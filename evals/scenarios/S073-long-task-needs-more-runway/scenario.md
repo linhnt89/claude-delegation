@@ -2,7 +2,7 @@
 - Job: J4
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude as lead, who marked a spec `size: long`. Decision 014.
