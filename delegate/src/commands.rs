@@ -502,6 +502,39 @@ fn implement_candidates(
     Ok(workers)
 }
 
+/// Best-effort advice only: another task's missing metadata must not block a run.
+fn scope_overlap_warnings(ctx: &Ctx, id: &str, spec_text: &str) -> Vec<String> {
+    let paths = spec::scope_paths(spec_text);
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let mut warnings = Vec::new();
+    for other_id in status::task_ids(ctx) {
+        if other_id == id {
+            continue;
+        }
+        let Ok(other) = Task::load(ctx, &other_id) else {
+            continue;
+        };
+        let live = status::read_live(&other).ok().flatten();
+        if !matches!(
+            status::phase(&other, live.as_ref()).as_str(),
+            "questions" | "implement" | "checks" | "review"
+        ) {
+            continue;
+        }
+        let other_spec = fs::read_to_string(&other.spec).unwrap_or_default();
+        let shared = spec::overlapping_paths(&paths, &spec::scope_paths(&other_spec));
+        if !shared.is_empty() {
+            warnings.push(format!(
+                "warning: {id} shares {} with running {other_id}; split the files, or run {id} after {other_id} merges",
+                shared.join(", ")
+            ));
+        }
+    }
+    warnings
+}
+
 pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     let mut t = Task::load(ctx, &a.id)?;
     status::ensure_idle(&t)?;
@@ -537,6 +570,9 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         );
     }
     let spec_text = t.spec_text()?;
+    for warning in scope_overlap_warnings(ctx, &t.id, &spec_text) {
+        eprintln!("{warning}");
+    }
     let size = spec::size(&spec_text)?;
     // State may have changed between the first snapshot and obtaining the lock.
     t = Task::load(ctx, &a.id)?;
@@ -2661,6 +2697,70 @@ deep = ["claude:sonnet@high"]
             );
             assert_eq!(fs::read(t.dir.join("STATE.json"))?, state);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn scope_warnings_only_name_other_live_tasks_of_this_checkout() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-overlap-{}", uuid::Uuid::new_v4()));
+        let ctx = Ctx {
+            root: root.clone(),
+            dhome: root.join("tasks"),
+            gitdir: root.join(".git"),
+        };
+        let text = "## Scope\n- In: `src/price.rs`, `src/tax.rs`\n";
+        let mut operations = Vec::new();
+        for (id, phase, scope) in [
+            ("t001", "questions", "`src/cart.rs`,\n  `src/price.rs`"),
+            ("t002", "implement", "`src/price.rs`"),
+            ("t003", "checks", "`src/price.rs`"),
+            ("t004", "review", "`src/price.rs`"),
+            ("t005", "done", "`src/price.rs`"),
+            ("t006", "merge", "`src/price.rs`"),
+            ("t007", "implement", "`docs/**`"),
+            ("t008", "implement", "no paths"),
+            ("t009", "implement", "`src/price.rs`"),
+        ] {
+            let task = Task::load(&ctx, id)?;
+            fs::create_dir_all(&task.dir)?;
+            fs::write(&task.spec, format!("## Scope\n- In: {scope}\n"))?;
+            let mut operation = Operation::acquire(&task, phase)?;
+            operation.start(phase, None, "standard", "1/1")?;
+            operations.push(operation);
+        }
+        // A stale running state must not warn, even when its phase is live.
+        let stale = Task::load(&ctx, "t010")?;
+        fs::create_dir_all(&stale.dir)?;
+        fs::write(&stale.spec, text)?;
+        let mut live = status::read_live(&Task::load(&ctx, "t001")?)?.unwrap();
+        live.pid_start = "0".into();
+        fs::write(stale.dir.join("status.json"), serde_json::to_vec(&live)?)?;
+        // A different checkout's tasks are outside this checkout's task home.
+        fs::create_dir_all(root.join("other-checkout/t011"))?;
+        fs::write(root.join("other-checkout/t011/SPEC.md"), text)?;
+        fs::write(
+            root.join("other-checkout/t011/status.json"),
+            fs::read(ctx.dhome.join("t001/status.json"))?,
+        )?;
+        let warnings = scope_overlap_warnings(&ctx, "t009", text);
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        for (warning, id) in warnings.iter().zip(["t001", "t002", "t003", "t004"]) {
+            assert_eq!(
+                warning,
+                &format!(
+                    "warning: t009 shares src/price.rs with running {id}; split the files, or run t009 after {id} merges"
+                )
+            );
+        }
+        assert_eq!(
+            scope_overlap_warnings(&ctx, "t009", "## Scope\n- Out: `src/**`\n"),
+            Vec::<String>::new()
+        );
+        // Finishing and discarding tasks remove them from subsequent warnings.
+        drop(operations);
+        fs::remove_dir_all(ctx.dhome.join("t001"))?;
+        assert_eq!(scope_overlap_warnings(&ctx, "t009", text), Vec::<String>::new());
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 

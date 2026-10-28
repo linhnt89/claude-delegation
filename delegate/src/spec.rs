@@ -1,6 +1,9 @@
 //! Reading the parts of a task spec the runner acts on.
 
+use std::collections::BTreeSet;
+
 use anyhow::{Result, bail};
+use globset::Glob;
 
 use crate::config::TaskSize;
 
@@ -46,13 +49,59 @@ pub fn acceptance_commands(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Paths listed in backticks on the Scope section's `- In:` line.
+/// Paths in the Scope section's `- In:` item, including wrapped lines.
 pub fn scope_paths(text: &str) -> Vec<String> {
-    section(text, "Scope")
-        .lines()
-        .find_map(|line| line.trim_start().strip_prefix("- In:"))
-        .map(backtick_spans)
-        .unwrap_or_default()
+    let mut in_scope = false;
+    let mut paths = Vec::new();
+    for line in section(text, "Scope").lines().map(str::trim_start) {
+        if in_scope {
+            if line.starts_with("- ") {
+                break;
+            }
+            paths.extend(backtick_spans(line));
+        } else if let Some(rest) = line.strip_prefix("- In:") {
+            in_scope = true;
+            paths.extend(backtick_spans(rest));
+        }
+    }
+    paths
+}
+
+/// Both sides' overlapping scope entries, sorted and deduplicated for warnings.
+pub fn overlapping_paths(left: &[String], right: &[String]) -> Vec<String> {
+    let mut shared = BTreeSet::new();
+    for a in left.iter().filter(|path| !path.is_empty()) {
+        for b in right.iter().filter(|path| !path.is_empty()) {
+            if paths_overlap(a, b) {
+                shared.insert(a.clone());
+                shared.insert(b.clone());
+            }
+        }
+    }
+    shared.into_iter().collect()
+}
+
+fn paths_overlap(a: &str, b: &str) -> bool {
+    let a = a.trim_end_matches('/');
+    let b = b.trim_end_matches('/');
+    if a == b
+        || a.strip_prefix(b).is_some_and(|rest| rest.starts_with('/'))
+        || b.strip_prefix(a).is_some_and(|rest| rest.starts_with('/'))
+    {
+        return true;
+    }
+    match (a.find('*'), b.find('*')) {
+        (Some(i), Some(j)) => a[..i].starts_with(&b[..j]) || b[..j].starts_with(&a[..i]),
+        (Some(_), None) => glob_matches(a, b),
+        (None, Some(_)) => glob_matches(b, a),
+        (None, None) => false,
+    }
+}
+
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    // Use the same matcher as .delegate.toml rules. A malformed scope glob
+    // should at worst warn, never suppress a warning or prevent a run.
+    Glob::new(pattern).map_or(true, |glob| glob.compile_matcher().is_match(path))
 }
 
 /// Tasks that wrote the checks, listed on `checks_by:` lines anywhere in the spec.
@@ -203,6 +252,77 @@ mod tests {
         assert_eq!(display_title("# Task t005: Foo: bar\n", "t005"), "Foo: bar");
         // The commit-subject helper deliberately retains the id and colon.
         assert_eq!(title(SPEC, "t005"), "t005: Add divide");
+    }
+
+    #[test]
+    fn scope_paths_reads_continuations_until_the_next_item_or_section() {
+        assert_eq!(
+            scope_paths(
+                "## Scope\n- In: `src/cart.rs`,\n  `src/price.rs` and\n  `src/tax.rs`\n- Out: `private/**`\n  `also-out`\n"
+            ),
+            ["src/cart.rs", "src/price.rs", "src/tax.rs"]
+        );
+        assert_eq!(
+            scope_paths("## Scope\n- In:\n  `only-on-continuation.rs`\n"),
+            ["only-on-continuation.rs"]
+        );
+        assert_eq!(
+            scope_paths("## Scope\n- In: `in.rs`\n- Other: `out.rs`\n"),
+            ["in.rs"]
+        );
+        assert_eq!(
+            scope_paths("## Scope\n- In:\n  `in.rs`\n## Acceptance\n`out.rs`\n"),
+            ["in.rs"]
+        );
+        assert_eq!(
+            scope_paths("## Scope\n- Out: `out.rs`\n"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn scope_overlap_is_symmetric_and_conservative() {
+        for (a, b, expected) in [
+            ("src/price.rs", "src/price.rs", true),
+            ("src/price.rs", "src/tax.rs", false),
+            ("src/*.rs", "src/price.rs", true),
+            ("src/**", "src/cart/price.rs", true),
+            ("src/*.rs", "src/readme.md", false),
+            ("src/**", "docs/readme.md", false),
+            ("src/*.rs", "src/cart.*", true),
+            ("src/**", "src/cart/*.rs", true),
+            ("src/a*.rs", "src/ab*.md", true),
+            ("src/a*.rs", "src/b*.rs", false),
+            ("src/**", "docs/**", false),
+            ("**/*.rs", "docs/**", true),
+            ("src", "src/cart/price.rs", true),
+            ("src/", "src/cart.rs", true),
+            ("src/", "src", true),
+            ("src/", "src/**", true),
+            ("src", "src-other/cart.rs", false),
+            ("src/cart", "src/cart.rs", false),
+            ("src/[*.rs", "src/price.rs", true),
+        ] {
+            assert_eq!(paths_overlap(a, b), expected, "{a} vs {b}");
+            assert_eq!(paths_overlap(b, a), expected, "{b} vs {a}");
+        }
+    }
+
+    #[test]
+    fn scope_overlap_lists_both_entries_once_and_ignores_empty_scopes() {
+        let left = ["src/**", "src/price.rs", "src/price.rs"].map(str::to_owned);
+        let right = ["src/price.rs", "src/cart.rs", "docs/readme.md"].map(str::to_owned);
+        assert_eq!(
+            overlapping_paths(&left, &right),
+            ["src/**", "src/cart.rs", "src/price.rs"]
+        );
+        assert_eq!(overlapping_paths(&left, &[]), Vec::<String>::new());
+        assert_eq!(overlapping_paths(&[], &right), Vec::<String>::new());
+        assert_eq!(overlapping_paths(&[], &[]), Vec::<String>::new());
+        assert_eq!(
+            overlapping_paths(&[String::new()], &right),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
