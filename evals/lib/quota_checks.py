@@ -274,7 +274,7 @@ def worker_calls() -> list[tuple[str, str]]:
     result = []
     if not calls_dir.is_dir():
         return result
-    for path in calls_dir.iterdir():
+    for path in sorted(calls_dir.iterdir(), key=lambda item: int(item.name.split("-", 1)[0])):
         if not path.is_dir():
             continue
         model_file = path / "model"
