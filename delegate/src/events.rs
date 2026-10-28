@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -74,6 +74,7 @@ pub(crate) struct Stream {
     raw: Output,
     events: Output,
     adapter: Adapter,
+    quota: bool,
 }
 
 impl Stream {
@@ -82,7 +83,22 @@ impl Stream {
             raw: Output::open(&dir.join("stream.jsonl"), "stream.jsonl", false),
             events: Output::open(&dir.join("events.jsonl"), "events.jsonl", false),
             adapter: Adapter::new(harness, cwd),
+            quota: false,
         }
+    }
+
+    /// Whether this attempt's output said the worker hit a usage limit.
+    pub(crate) fn saw_quota(&self) -> bool {
+        self.quota
+    }
+
+    /// Whether the stderr reader saw a quota error.
+    pub(crate) fn absorb_quota(&mut self, hit: bool) {
+        self.quota |= hit;
+    }
+
+    pub(crate) fn harness(&self) -> Harness {
+        self.adapter.harness
     }
 
     #[cfg(test)]
@@ -123,9 +139,13 @@ impl Stream {
                 }
             };
             if count == 0 {
-                // An unterminated record may be truncated: never interpret it.
+                // An unterminated record may be truncated: never feed it to the
+                // adapter, but its text still says whether the quota ran out.
                 if !oversized {
                     log.write(&line);
+                    if output_says_quota(self.adapter.harness, &String::from_utf8_lossy(&line)) {
+                        self.quota = true;
+                    }
                 }
                 return Ok(());
             }
@@ -146,6 +166,12 @@ impl Stream {
                 }
                 if part.last() == Some(&b'\n') {
                     if !oversized {
+                        if output_says_quota(
+                            self.adapter.harness,
+                            &String::from_utf8_lossy(&line),
+                        ) {
+                            self.quota = true;
+                        }
                         if let Ok(value) = serde_json::from_slice::<Value>(&line)
                             && value.is_object()
                         {
@@ -165,6 +191,187 @@ impl Stream {
             }
         }
     }
+}
+
+/// Scan stderr for quota errors while still appending every byte to `run.log`.
+///
+/// Once the worker has exited, keep reading through a short idle grace so data
+/// already in the pipe is not lost, then stop even if a descendant holds it open.
+pub(crate) fn scan_stderr(
+    mut pipe: impl Read,
+    harness: Harness,
+    log: &Path,
+    mut stopped: impl FnMut() -> Result<bool>,
+) -> Result<bool> {
+    let mut log = Output::open(log, "run.log", true);
+    let mut chunk = [0; 8192];
+    let mut line = Vec::new();
+    let mut quota = false;
+    let mut exited_at: Option<Instant> = None;
+    loop {
+        // Bound how long a descendant can keep the stderr pipe open: after the
+        // worker exits, read what is already there for a short grace, then stop.
+        if stopped()? {
+            let at = *exited_at.get_or_insert_with(Instant::now);
+            if at.elapsed() >= Duration::from_secs(1) {
+                if !line.is_empty()
+                    && output_says_quota(harness, &String::from_utf8_lossy(&line))
+                {
+                    quota = true;
+                }
+                return Ok(quota);
+            }
+        }
+        let count = match pipe.read(&mut chunk) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue;
+            }
+            other => other?,
+        };
+        if count == 0 {
+            if !line.is_empty()
+                && output_says_quota(harness, &String::from_utf8_lossy(&line))
+            {
+                quota = true;
+            }
+            return Ok(quota);
+        }
+        log.write(&chunk[..count]);
+        for part in chunk[..count].split_inclusive(|b| *b == b'\n') {
+            if line.len() + part.len() > MAX_LINE {
+                line.clear();
+            } else {
+                line.extend_from_slice(part);
+            }
+            if part.last() == Some(&b'\n') {
+                if output_says_quota(harness, &String::from_utf8_lossy(&line)) {
+                    quota = true;
+                }
+                line.clear();
+            }
+        }
+    }
+}
+
+/// Whether one output line reports that the account behind the worker is out of quota.
+pub(crate) fn output_says_quota(harness: Harness, text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) if value.is_object() => json_error_says_quota(harness, &value),
+        _ => plain_text_says_quota(trimmed),
+    }
+}
+
+/// Only error-bearing records count: never metadata such as Claude's
+/// `rate_limit_event` with `status: "allowed"`, ids or timings.
+fn json_error_says_quota(harness: Harness, value: &Value) -> bool {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mut texts = Vec::new();
+    let failed = if kind.contains("error") || kind.contains("failed") {
+        true
+    } else if kind == "result" {
+        value.get("is_error").and_then(Value::as_bool) == Some(true)
+            || value
+                .get("subtype")
+                .and_then(Value::as_str)
+                .is_some_and(|subtype| subtype.to_ascii_lowercase().contains("error"))
+    } else if harness == Harness::Pi
+        && kind == "message_end"
+        && value
+            .get("message")
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str)
+            == Some("assistant")
+    {
+        // Pi reports assistant failures as a normal message_end with stopReason.
+        value
+            .get("message")
+            .and_then(|message| message.get("stopReason"))
+            .and_then(Value::as_str)
+            .is_none_or(|reason| reason.eq_ignore_ascii_case("error"))
+    } else {
+        false
+    };
+    if failed {
+        if let Some(message) = value.get("message").filter(|_| kind == "message_end") {
+            // A Pi error turn: its errorMessage and any error text, never a
+            // successful assistant's ordinary content.
+            collect_error_text(message.get("errorMessage").unwrap_or(&Value::Null), &mut texts);
+            collect_error_text(message.get("content").unwrap_or(&Value::Null), &mut texts);
+        } else {
+            collect_error_text(value, &mut texts);
+        }
+    }
+    texts.iter().any(|text| text_says_quota(text))
+}
+
+/// Pull only message-like fields out of an error record, not arbitrary metadata.
+fn collect_error_text(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(text) => out.push(text.clone()),
+        Value::Array(items) => {
+            for item in items {
+                collect_error_text(item, out);
+            }
+        }
+        Value::Object(map) => {
+            for key in ["message", "result", "detail", "text", "error", "data"] {
+                if let Some(inner) = map.get(key) {
+                    collect_error_text(inner, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn plain_text_says_quota(text: &str) -> bool {
+    text_says_quota(text)
+}
+
+/// A bare `429` only counts as an HTTP status, never as an id or a timing.
+fn text_says_quota(text: &str) -> bool {
+    quota_message(text) || http_429(text)
+}
+
+fn http_429(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    lowered.contains("429")
+        && (lowered.contains("too many requests")
+            || lowered.contains("http 429")
+            || lowered.contains("status 429"))
+}
+
+fn quota_message(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "usage limit",
+        "usage_limit",
+        "rate limit",
+        "rate_limit",
+        "quota exceeded",
+        "quota_exceeded",
+        "insufficient credits",
+        "insufficient_credits",
+        "insufficient balance",
+        "insufficient_balance",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 #[derive(Debug)]
@@ -1001,6 +1208,124 @@ mod tests {
         let path = dir.join("events.jsonl");
         std::fs::write(&path, "{\"id\":1,\"at\":\"2026-10-25T00:00:00Z\",\"kind\":\"run\",\"target\":\"test\",\"result\":null}\n{\"id\":1,\"result\":\"ok\"}\n{\"id\":1,").unwrap();
         assert_eq!(collect(&path)[0]["result"], "ok");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A non-zero worker whose output names a usage limit is a quota hand-over,
+    /// whichever harness shaped the stream.
+    #[test]
+    fn quota_errors_are_recognised_in_each_harness_stream() {
+        for (harness, line) in [
+            (
+                Harness::Claude,
+                r#"{"type":"result","is_error":true,"result":"Error: 429 You have hit your usage limit"}"#,
+            ),
+            (
+                Harness::Codex,
+                r#"{"type":"error","message":"usage limit reached"}"#,
+            ),
+            (
+                Harness::Opencode,
+                r#"{"type":"error","error":{"data":{"message":"quota exceeded"}}}"#,
+            ),
+            (
+                Harness::Pi,
+                r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"insufficient credits"}]}}"#,
+            ),
+            (Harness::Gemini, "rate limit reached"),
+        ] {
+            let dir = temp();
+            let mut stream = Stream::new(&dir, harness, &dir);
+            let mut bytes = line.as_bytes().to_vec();
+            bytes.push(b'\n');
+            stream.drain(bytes.as_slice(), &dir.join("run.log")).unwrap();
+            assert!(stream.saw_quota(), "{harness:?}: {line}");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn ordinary_worker_output_is_not_a_quota_error() {
+        let dir = temp();
+        let mut stream = Stream::new(&dir, Harness::Claude, &dir);
+        stream
+            .drain(
+                &b"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n"[..],
+                &dir.join("run.log"),
+            )
+            .unwrap();
+        assert!(!stream.saw_quota());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn metadata_with_rate_limit_and_429_is_not_a_quota_error() {
+        for line in [
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792963200},"id":"429"}"#,
+            r#"{"type":"result","is_error":false,"duration_ms":429}"#,
+            "request id 429 finished in 12ms",
+        ] {
+            let dir = temp();
+            let mut stream = Stream::new(&dir, Harness::Claude, &dir);
+            let mut bytes = line.as_bytes().to_vec();
+            bytes.push(b'\n');
+            stream.drain(bytes.as_slice(), &dir.join("run.log")).unwrap();
+            assert!(!stream.saw_quota(), "{line}");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn review_pi_error_message_reports_quota() {
+        assert!(output_says_quota(
+            Harness::Pi,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"429 usage limit reached"}}"#,
+        ));
+    }
+
+    #[test]
+    fn review_codex_failed_turn_reports_quota() {
+        assert!(output_says_quota(
+            Harness::Codex,
+            r#"{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}"#,
+        ));
+    }
+
+    #[test]
+    fn review_structured_http_429_reports_quota() {
+        assert!(output_says_quota(
+            Harness::Codex,
+            r#"{"type":"error","message":"HTTP 429 Too Many Requests"}"#,
+        ));
+    }
+
+    #[test]
+    fn review_pi_ordinary_assistant_text_is_not_a_quota_error() {
+        assert!(!output_says_quota(
+            Harness::Pi,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Added a test for the usage limit error."}],"stopReason":"stop"}}"#,
+        ));
+    }
+
+    #[test]
+    fn review_plain_metrics_are_not_a_quota_error() {
+        assert!(!output_says_quota(
+            Harness::Claude,
+            "request id 429 completed; generation rate 10 tokens/s",
+        ));
+    }
+
+    #[test]
+    fn an_unterminated_last_line_is_still_examined() {
+        let dir = temp();
+        let mut stream = Stream::new(&dir, Harness::Claude, &dir);
+        stream
+            .drain(
+                &b"work done\nError: usage limit reached"[..],
+                &dir.join("run.log"),
+            )
+            .unwrap();
+        assert!(stream.saw_quota());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

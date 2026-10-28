@@ -167,6 +167,10 @@ pub struct Round {
     /// Exit code of the work phase, absent for rounds saved by older versions.
     #[serde(default)]
     pub exit: Option<i32>,
+    /// The worker hit its account's usage limit mid-round; its work was committed and
+    /// handed to the next candidate. Absent (false) on rounds saved by older versions.
+    #[serde(default)]
+    pub quota: bool,
     pub checks: Option<Checks>,
 }
 
@@ -186,6 +190,7 @@ impl Round {
             RoundStatus::Questions => "questions".into(),
             RoundStatus::Failed => "failed to start".into(),
             RoundStatus::Done if self.research => "research done".into(),
+            RoundStatus::Done if self.quota => "done, quota".into(),
             RoundStatus::Done if no_changes && self.checks.is_none() => "done, no changes".into(),
             RoundStatus::Done => format!(
                 "done, checks {}",
@@ -506,6 +511,7 @@ mod tests {
             status: RoundStatus::Done,
             research: false,
             exit: Some(0),
+            quota: false,
             checks: None,
         }
     }
@@ -599,6 +605,7 @@ mod tests {
         .unwrap();
         assert_eq!(r.exit, None);
         assert!(!r.research);
+        assert!(!r.quota);
         assert_eq!(r.status_label(false), "done, checks not run");
     }
 
@@ -620,6 +627,21 @@ mod tests {
             let restored: Round = serde_json::from_str(&saved).unwrap();
             assert_eq!(restored.checks.unwrap().outcome, outcome);
         }
+    }
+
+    #[test]
+    fn quota_round_is_visible_and_old_rounds_default_to_false() {
+        let r = Round {
+            quota: true,
+            ..round()
+        };
+        assert_eq!(r.status_label(false), "done, quota");
+        assert_eq!(r.status_label(true), "done, quota");
+        let old: Round = serde_json::from_str(
+            r#"{"number":1,"tier":"fast","worker":"pi:test","status":"done","checks":null}"#,
+        )
+        .unwrap();
+        assert!(!old.quota);
     }
 
     #[test]

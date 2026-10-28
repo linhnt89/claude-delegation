@@ -7,6 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -271,33 +273,41 @@ pub(crate) fn streaming_command(
     cmd
 }
 
-/// Read stdout incrementally while stderr continues directly to the ordinary log.
+/// Read stdout and stderr incrementally; both still go to the ordinary log.
 pub(crate) fn run_streamed(
     cmd: &[String],
     cwd: &Path,
     log: &Path,
     stream: &mut events::Stream,
 ) -> Result<i32> {
-    let stderr = match OpenOptions::new().create(true).append(true).open(log) {
-        Ok(mut lf) => {
-            if let Err(error) = writeln!(
-                lf,
-                "\n$ {} ...",
-                cmd.iter().take(12).cloned().collect::<Vec<_>>().join(" ")
-            ) {
-                let _ = writeln!(
-                    lf,
-                    "warning: writing run.log: {error}; check disk space and permissions"
-                );
-            }
-            Stdio::from(lf)
-        }
-        Err(_) => Stdio::null(),
-    };
+    if let Ok(mut lf) = OpenOptions::new().create(true).append(true).open(log)
+        && let Err(error) = writeln!(
+            lf,
+            "\n$ {} ...",
+            cmd.iter().take(12).cloned().collect::<Vec<_>>().join(" ")
+        )
+    {
+        let _ = writeln!(
+            lf,
+            "warning: writing run.log: {error}; check disk space and permissions"
+        );
+    }
     // A socket gives us safe, bounded reads without new dependencies or unsafe
     // fcntl calls. Descendants may inherit stdout long after the worker exits.
     let (pipe, output) = UnixStream::pair().context("opening worker stdout")?;
+    let (err_pipe, err_output) = UnixStream::pair().context("opening worker stderr")?;
     pipe.set_read_timeout(Some(Duration::from_millis(100)))?;
+    err_pipe.set_read_timeout(Some(Duration::from_millis(100)))?;
+    let harness = stream.harness();
+    let exited = Arc::new(AtomicBool::new(false));
+    let stderr_stopped = Arc::clone(&exited);
+    let drain_stopped = Arc::clone(&exited);
+    let stderr_log = log.to_path_buf();
+    let stderr = std::thread::spawn(move || {
+        events::scan_stderr(err_pipe, harness, &stderr_log, || {
+            Ok(stderr_stopped.load(Ordering::Relaxed))
+        })
+    });
     let (program, args) = cmd.split_first().context("empty command")?;
     let mut child = Command::new(program)
         .args(args)
@@ -305,18 +315,25 @@ pub(crate) fn run_streamed(
         .stdin(Stdio::null())
         .env("DELEGATE_SANDBOXED", "1")
         .stdout(Stdio::from(OwnedFd::from(output)))
-        .stderr(stderr)
+        .stderr(Stdio::from(OwnedFd::from(err_output)))
         .spawn()
         .with_context(|| format!("starting {program}"))?;
-    let mut exited = None;
+    let mut exited_at = None;
     let drained = stream.drain_until(pipe, log, || {
-        if exited.is_none() && child.try_wait().context("checking worker exit")?.is_some() {
-            exited = Some(Instant::now());
+        if exited_at.is_none() && child.try_wait().context("checking worker exit")?.is_some() {
+            exited_at = Some(Instant::now());
+            // Start stderr's bounded post-exit grace now, not after stdout drains.
+            drain_stopped.store(true, Ordering::Relaxed);
         }
-        Ok(exited.is_some_and(|at| at.elapsed() >= Duration::from_secs(1)))
+        Ok(exited_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(1)))
     });
     let status = child.wait().context("waiting for worker")?;
+    exited.store(true, Ordering::Relaxed);
     drained?;
+    let stderr_quota = stderr
+        .join()
+        .map_err(|_| anyhow::anyhow!("reading worker stderr failed"))??;
+    stream.absorb_quota(stderr_quota);
     Ok(status.code().unwrap_or(-1))
 }
 
@@ -705,6 +722,24 @@ mod tests {
             "done\nfinal\n"
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn review_streamed_returns_with_a_noisy_stderr_descendant() {
+        let dir = std::env::temp_dir().join(format!("delegate-stderr-review-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut stream = events::Stream::new(&dir, Harness::Pi, &dir);
+        let cmd = [
+            "sh",
+            "-c",
+            "(i=0; while [ $i -lt 50 ]; do echo background >&2; sleep 0.1; i=$((i+1)); done) >/dev/null & exit 7",
+        ].map(str::to_owned);
+        let started = Instant::now();
+        let rc = run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream).unwrap();
+        let elapsed = started.elapsed();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(rc, 7);
+        assert!(elapsed < Duration::from_secs(3), "waited for stderr descendant: {elapsed:?}");
     }
 
     /// A worker that leaves a background process holding stdout must not block the run

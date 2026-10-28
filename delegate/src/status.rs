@@ -462,6 +462,7 @@ fn collect_task(ctx: &Ctx, t: &Task, depth: Depth) -> Result<TaskView> {
             match r.status {
                 RoundStatus::Failed => "failed_to_start",
                 RoundStatus::Questions => "questions",
+                RoundStatus::Done if r.quota => "quota",
                 RoundStatus::Done if r.research => "research",
                 RoundStatus::Done => match r.checks.as_ref().map(|c| c.outcome) {
                     Some(CheckOutcome::Pass) => "pass",
@@ -501,6 +502,10 @@ fn collect_task(ctx: &Ctx, t: &Task, depth: Depth) -> Result<TaskView> {
             )),
             (_, Some("pass")) if ready_to_merge => Some(format!("delegate merge {}", t.id)),
             (_, Some("pass" | "check error")) => readiness.next,
+            (_, Some("quota")) => Some(format!(
+                "delegate run {} (retry after the quota resets)",
+                t.id
+            )),
             (_, Some("research" | "no_changes")) => Some(format!("delegate discard {}", t.id)),
             _ => Some(format!("delegate run {}", t.id)),
         }

@@ -105,7 +105,9 @@ gemini, ...).
 **Quota:** before a run, delegate reads each candidate's account itself (Claude Code,
 Pi's `openai-codex`/`github-copilot`/`hyper`, and native Codex), skips an account that is out
 or whose projected runway is shorter than the task's `size:`, and warns but runs when a login
-is expired or a vendor is unreachable. Logins are read only; nothing is refreshed on disk and
+is expired or a vendor is unreachable. A worker that hits its limit mid-round still has its
+work committed; the runner says so and the next candidate continues at the same tier, so a
+quota round never counts toward a step-up. Logins are read only; nothing is refreshed on disk and
 no token is printed. `[quota] check = false` turns run-time reads off; `delegate quota` still
 reads on request. `[quota.runway]` sets the runway `small`/`medium`/`long` tasks need (default
 30m/1h/3h) and `[quota.hyper]` sets the daily credit cap and local reset time. `[accounts]`

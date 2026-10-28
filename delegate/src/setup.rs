@@ -156,8 +156,8 @@ pub(crate) fn run(url: Option<&str>, with_vault: bool) -> Result<()> {
             Ok(()) => {
                 let workers = cfg.all_workers();
                 let accounts = quota::accounts_in_order(&workers, &cfg.accounts);
-                for report in quota::read_accounts(&accounts, &cfg.quota) {
-                    println!("{}", report.text_line());
+                for line in quota::text_lines(&quota::read_accounts(&accounts, &cfg.quota)) {
+                    println!("{line}");
                 }
             }
             Err(e) => println!(

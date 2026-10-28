@@ -118,8 +118,8 @@ pub fn quota(json: bool) -> Result<()> {
         );
         return Ok(());
     }
-    for report in &reports {
-        println!("{}", report.text_line());
+    for line in quota::text_lines(&reports) {
+        println!("{line}");
     }
     if !cfg.quota.check {
         println!(
@@ -203,6 +203,29 @@ fn quota_aware_workers(
     Ok(kept)
 }
 
+/// The stop message when every remaining candidate's account is out.
+fn no_quota_left(
+    role: Role,
+    tier_label: &str,
+    exhausted: &mut [(quota::AccountName, quota::LoginSource, Option<i64>)],
+) -> String {
+    exhausted.sort_by_key(|(_, _, reset)| reset.unwrap_or(i64::MAX));
+    let lines = exhausted
+        .iter()
+        .map(|(account, _, reset)| {
+            reset.map_or_else(
+                || format!("  {account}: exhausted (reset unknown)"),
+                |at| format!("  {account}: exhausted until {}", quota::format_clock(at)),
+            )
+        })
+        .collect::<Vec<_>>();
+    format!(
+        "no [{}].{tier_label} candidate has quota left:\n{}\nno candidate could start; rerun after the earliest reset.",
+        role.name(),
+        lines.join("\n")
+    )
+}
+
 // ---------------------------------------------------------------- run
 
 /// Whether the worker first answers READY or asks blocking questions.
@@ -251,8 +274,14 @@ fn pick_tier(
         .rounds
         .iter()
         .rev()
-        .filter(|r| r.tier == Some(tier) && r.status == RoundStatus::Done);
-    let last_checks = t.last_done().and_then(|r| r.checks.as_ref());
+        .filter(|r| r.tier == Some(tier) && r.status == RoundStatus::Done && !r.quota);
+    let last_checks = t
+        .state
+        .rounds
+        .iter()
+        .rev()
+        .find(|r| r.status == RoundStatus::Done && !r.quota)
+        .and_then(|r| r.checks.as_ref());
     let failures: u64 = finished
         .take_while(|r| {
             r.checks
@@ -297,7 +326,22 @@ fn pick_tier(
 enum Attempt {
     NotStarted,
     Questions,
-    Worked(i32),
+    Worked { rc: i32, quota: bool },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AttemptMode {
+    ask: bool,
+    research: bool,
+    handoff: bool,
+}
+
+/// Append the hand-over note to a prompt for the candidate after a quota round.
+fn with_handoff(prompt: String, handoff: bool) -> String {
+    if !handoff {
+        return prompt;
+    }
+    format!("{prompt}\n{}\n", prompts::HANDOFF)
 }
 
 fn ensure_task_excluded(ctx: &Ctx) -> Result<()> {
@@ -319,37 +363,51 @@ fn implement_attempt(
     ctx: &Ctx,
     t: &Task,
     w: &Worker,
-    ask: bool,
-    research: bool,
+    mode: AttemptMode,
     log: &Path,
     operation: &Operation,
 ) -> Result<Attempt> {
     let task_dir = t.wt.join(".task");
+    // A report or questions file from an earlier candidate would look like this
+    // attempt started, so clear them before every candidate tries.
+    for f in ["REPORT.md", "QUESTIONS.md", "REVIEW.md", "DIFF.patch"] {
+        let _ = fs::remove_file(task_dir.join(f));
+    }
     let mut stream = harness::events::Stream::new(&t.dir, w.harness, &t.wt);
     let sb = harness::sandbox(Some(w.harness), &task_bounds(ctx, t)?, &t.wt)?;
-    let mut run = |session: Option<&Session>, prompt: &str| -> Result<i32> {
+    let mut run = |session: Option<&Session>, prompt: &str| -> Result<(i32, bool)> {
         let cmd = [sb.clone(), harness::streaming_command(w, prompt, session)].concat();
-        harness::run_streamed(&cmd, &t.wt, log, &mut stream)
+        let rc = harness::run_streamed(&cmd, &t.wt, log, &mut stream)?;
+        Ok((rc, stream.saw_quota()))
     };
     let mut session = harness::new_session(w.harness);
 
-    if !ask {
-        let prompt = if research {
-            prompts::RESEARCH.replace("{id}", &t.id)
-        } else {
-            prompts::full(&t.id)
-        };
-        let rc = run(session.as_ref(), &prompt)?;
-        let started = rc == 0 || task_dir.join("REPORT.md").exists() || t.worktree_dirty()?;
+    if !mode.ask {
+        let prompt = with_handoff(
+            if mode.research {
+                prompts::RESEARCH.replace("{id}", &t.id)
+            } else {
+                prompts::full(&t.id)
+            },
+            mode.handoff,
+        );
+        let (rc, quota) = run(session.as_ref(), &prompt)?;
+        let started = rc == 0 || quota || task_dir.join("REPORT.md").exists() || t.worktree_dirty()?;
         return Ok(if started {
-            Attempt::Worked(rc)
+            Attempt::Worked { rc, quota }
         } else {
             Attempt::NotStarted
         });
     }
 
     let qfile = task_dir.join("QUESTIONS.md");
-    let rc = run(session.as_ref(), &prompts::ASK.replace("{id}", &t.id))?;
+    let (rc, quota) = run(session.as_ref(), &prompts::ASK.replace("{id}", &t.id))?;
+    if quota {
+        return Ok(Attempt::Worked {
+            rc,
+            quota: true,
+        });
+    }
     if rc != 0 && !qfile.exists() {
         return Ok(Attempt::NotStarted);
     }
@@ -367,11 +425,12 @@ fn implement_attempt(
         .filter(|_| harness::can_resume(w.harness))
         .map(|s| Session { resume: true, ..s });
     operation.phase("implement")?;
-    let rc = match &resumed {
-        Some(s) => run(Some(s), prompts::WORK)?,
-        None => run(None, &prompts::full(&t.id))?,
+    let work_prompt = with_handoff(prompts::WORK.to_string(), mode.handoff);
+    let (rc, quota) = match &resumed {
+        Some(s) => run(Some(s), &work_prompt)?,
+        None => run(None, &with_handoff(prompts::full(&t.id), mode.handoff))?,
     };
-    Ok(Attempt::Worked(rc))
+    Ok(Attempt::Worked { rc, quota })
 }
 
 /// Paths with uncommitted work in the worktree, tracked or untracked (ignored files excluded).
@@ -630,129 +689,197 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         let _ = fs::remove_file(task_dir.join(f));
     }
     let log = t.dir.join("run.log");
-    let number = u32::try_from(t.state.rounds.len())? + 1;
-    let round_index = t.state.rounds.len();
-    t.state.rounds.push(Round {
-        number,
-        tier,
-        worker: None,
-        status: RoundStatus::Running,
-        research: a.research,
-        exit: None,
-        checks: None,
-    });
+    let mut number = u32::try_from(t.state.rounds.len())? + 1;
+    let mut next_candidate = 0_usize;
+    let mut round_ask = ask;
+    let mut handoff = false;
+    let mut exhausted: Vec<(quota::AccountName, quota::LoginSource, Option<i64>)> = Vec::new();
 
-    let mut outcome = None;
-    for (index, w) in available.iter().enumerate() {
-        operation.update(
-            phase,
-            Some(&w.to_string()),
-            &tier_label,
-            &format!("{}/{}", index + 1, available.len()),
-        )?;
-        println!("round {number}: {w} ...");
-        let log_start = match fs::metadata(&log) {
-            Ok(metadata) => metadata.len(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-            Err(error) => return Err(error.into()),
-        };
-        t.state.rounds[round_index].worker = Some(w.to_string());
-        t.save()?;
-        match implement_attempt(ctx, &t, w, ask, a.research, &log, operation)? {
-            Attempt::NotStarted => {
-                println!("  {w} failed to start, trying next candidate");
-                writeln!(failures, "  {w}:")?;
-                for line in harness::log_tail(&log, log_start)? {
-                    println!("    {line}");
-                    writeln!(failures, "    {line}")?;
+    loop {
+        let round_index = t.state.rounds.len();
+        t.state.rounds.push(Round {
+            number,
+            tier,
+            worker: None,
+            status: RoundStatus::Running,
+            research: a.research,
+            exit: None,
+            quota: false,
+            checks: None,
+        });
+
+        let mut outcome = None;
+        while next_candidate < available.len() {
+            let w = available[next_candidate].clone();
+            next_candidate += 1;
+            let account = quota::account_for(&w, &cfg.accounts);
+            if let Some(account) = account
+                && let Some((_, _, reset)) = exhausted
+                    .iter()
+                    .find(|(name, login, _)| *name == account.name && *login == account.source)
+            {
+                let reason = reset.map_or_else(
+                    || "exhausted (reset unknown)".to_string(),
+                    |at| format!("exhausted until {}", quota::format_clock(at)),
+                );
+                println!("skipping {w}: {} account {reason}", account.name);
+                continue;
+            }
+            operation.update(
+                if round_ask { "questions" } else { "implement" },
+                Some(&w.to_string()),
+                &tier_label,
+                &format!("{}/{}", next_candidate, available.len()),
+            )?;
+            println!("round {number}: {w} ...");
+            let log_start = match fs::metadata(&log) {
+                Ok(metadata) => metadata.len(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(error) => return Err(error.into()),
+            };
+            t.state.rounds[round_index].worker = Some(w.to_string());
+            t.save()?;
+            match implement_attempt(
+                ctx,
+                &t,
+                &w,
+                AttemptMode {
+                    ask: round_ask,
+                    research: a.research,
+                    handoff,
+                },
+                &log,
+                operation,
+            )? {
+                Attempt::NotStarted => {
+                    println!("  {w} failed to start, trying next candidate");
+                    writeln!(failures, "  {w}:")?;
+                    for line in harness::log_tail(&log, log_start)? {
+                        println!("    {line}");
+                        writeln!(failures, "    {line}")?;
+                    }
+                }
+                other => {
+                    outcome = Some((w.clone(), other));
+                    break;
                 }
             }
-            other => {
-                outcome = Some((w.clone(), other));
-                break;
+        }
+        let Some((w, attempt)) = outcome else {
+            if !exhausted.is_empty() && failures.is_empty() {
+                t.state.rounds.pop();
+                t.save()?;
+                bail!("{}", no_quota_left(role, &tier_label, &mut exhausted));
             }
-        }
-    }
-    let Some((w, attempt)) = outcome else {
-        t.state.rounds[round_index].fail_to_start();
-        t.save()?;
-        bail!("no candidate could start:\n{failures}see {}", log.display());
-    };
+            t.state.rounds[round_index].fail_to_start();
+            t.save()?;
+            bail!("no candidate could start:\n{failures}see {}", log.display());
+        };
 
-    if let Attempt::Questions = attempt {
-        let questions = t.dir.join("QUESTIONS.md");
-        fs::copy(task_dir.join("QUESTIONS.md"), &questions)?;
-        t.state.rounds[round_index].status = RoundStatus::Questions;
-        t.save()?;
-        println!(
-            "\n{w} has questions before starting ({}):\n",
-            questions.display()
-        );
-        println!("{}", fs::read_to_string(&questions)?);
-        println!("Answer them in the spec (e.g. a '## Answers' section), then run again.");
-        return Ok(());
-    }
-    let rc = if let Attempt::Worked(rc) = attempt {
-        rc
-    } else {
-        -1
-    };
-
-    t.state.rounds[round_index].exit = Some(rc);
-    t.save()?;
-    if rc != 0 {
-        println!("warning: {w} exited with code {rc}; its work may be incomplete");
-    }
-
-    let report = t.dir.join("REPORT.md");
-    if task_dir.join("REPORT.md").exists() {
-        fs::copy(task_dir.join("REPORT.md"), &report)?;
-    } else {
-        fs::write(
-            &report,
-            format!(
-                "# Report {}\n\n## Status\nblocked\n\nNo REPORT.md was written. Exit code {rc}; see run.log.\n",
-                t.id
-            ),
-        )?;
-    }
-    if a.research {
-        let changed = worktree_changed_paths(&t)?;
-        if !changed.is_empty() {
-            git(&t.wt, &["reset", "-q", "--hard", "HEAD"])?;
-            git(&t.wt, &["clean", "-q", "-fd"])?;
-        }
-        t.state.rounds[round_index].status = RoundStatus::Done;
-        t.save()?;
-        println!("research report: {}", report.display());
-        if !changed.is_empty() {
+        if let Attempt::Questions = attempt {
+            let questions = t.dir.join("QUESTIONS.md");
+            fs::copy(task_dir.join("QUESTIONS.md"), &questions)?;
+            t.state.rounds[round_index].status = RoundStatus::Questions;
+            t.save()?;
             println!(
-                "warning: the researcher changed files; not committed, reverted: {}",
-                changed.join(", ")
+                "\n{w} has questions before starting ({}):\n",
+                questions.display()
             );
+            println!("{}", fs::read_to_string(&questions)?);
+            println!("Answer them in the spec (e.g. a '## Answers' section), then run again.");
+            return Ok(());
         }
-        return Ok(());
+        let (rc, quota_hit) = match attempt {
+            Attempt::Worked { rc, quota } => (rc, quota && rc != 0),
+            _ => (-1, false),
+        };
+        let account = quota::account_for(&w, &cfg.accounts);
+
+        t.state.rounds[round_index].exit = Some(rc);
+        t.save()?;
+        if rc != 0 && !quota_hit {
+            println!("warning: {w} exited with code {rc}; its work may be incomplete");
+        }
+
+        let report = t.dir.join("REPORT.md");
+        if task_dir.join("REPORT.md").exists() {
+            fs::copy(task_dir.join("REPORT.md"), &report)?;
+        } else {
+            fs::write(
+                &report,
+                format!(
+                    "# Report {}\n\n## Status\nblocked\n\nNo REPORT.md was written. Exit code {rc}; see run.log.\n",
+                    t.id
+                ),
+            )?;
+        }
+        if a.research {
+            let changed = worktree_changed_paths(&t)?;
+            if !changed.is_empty() {
+                git(&t.wt, &["reset", "-q", "--hard", "HEAD"])?;
+                git(&t.wt, &["clean", "-q", "-fd"])?;
+            }
+            println!("research report: {}", report.display());
+            if !changed.is_empty() {
+                println!(
+                    "warning: the researcher changed files; not committed, reverted: {}",
+                    changed.join(", ")
+                );
+            }
+            if !quota_hit {
+                t.state.rounds[round_index].status = RoundStatus::Done;
+                t.save()?;
+                return Ok(());
+            }
+            t.state.rounds[round_index].quota = true;
+            t.state.rounds[round_index].status = RoundStatus::Done;
+            t.save()?;
+        } else {
+            git(&t.wt, &["add", "-A"])?;
+            if !git(&t.wt, &["diff", "--cached", "--name-only"])?.is_empty() {
+                git(
+                    &t.wt,
+                    &[
+                        "commit",
+                        "-q",
+                        "-m",
+                        &format!("task {} round {number}", t.id),
+                    ],
+                )?;
+            }
+            if !quota_hit {
+                if t.changed_paths(ctx)?.is_empty() {
+                    println!("no changes: {w} changed nothing");
+                } else {
+                    t.state.rounds[round_index].checks = Some(run_checks(ctx, &t, operation)?);
+                }
+                t.state.rounds[round_index].status = RoundStatus::Done;
+                t.save()?;
+                return summary(ctx, &t);
+            }
+            t.state.rounds[round_index].quota = true;
+            t.state.rounds[round_index].status = RoundStatus::Done;
+            t.save()?;
+        }
+        println!("{w} hit its quota; continuing on the next candidate");
+        if let Some(account) = account {
+            let reset = if cfg.quota.check {
+                quota::read_accounts(&[account], &cfg.quota)
+                    .first()
+                    .and_then(quota::AccountReport::reset_at)
+            } else {
+                None
+            };
+            exhausted.push((account.name, account.source, reset));
+        }
+        handoff = true;
+        round_ask = false;
+        number += 1;
+        if next_candidate >= available.len() {
+            let diagnostic = no_quota_left(role, &tier_label, &mut exhausted);
+            bail!("{diagnostic}");
+        }
     }
-    git(&t.wt, &["add", "-A"])?;
-    if !git(&t.wt, &["diff", "--cached", "--name-only"])?.is_empty() {
-        git(
-            &t.wt,
-            &[
-                "commit",
-                "-q",
-                "-m",
-                &format!("task {} round {number}", t.id),
-            ],
-        )?;
-    }
-    if t.changed_paths(ctx)?.is_empty() {
-        println!("no changes: {w} changed nothing");
-    } else {
-        t.state.rounds[round_index].checks = Some(run_checks(ctx, &t, operation)?);
-    }
-    t.state.rounds[round_index].status = RoundStatus::Done;
-    t.save()?;
-    summary(ctx, &t)
 }
 
 /// Re-exec a preflighted run through the setsid program, with no terminal descriptors.
@@ -1282,7 +1409,7 @@ pub fn list(ctx: &Ctx, vault_notes: bool) -> Result<()> {
             write!(status, ", reviewed by {} ({high} high)", rv.worker)?;
         }
         println!(
-            "{id:<10} round {}  {:<8} {status}  [{}]",
+            "{id:<10} round {} {:<8} {status}  [{}]",
             r.number,
             r.tier_label(),
             r.worker.as_deref().unwrap_or("-")
@@ -1625,6 +1752,7 @@ mod tests {
             status,
             research: false,
             exit: None,
+            quota: false,
             checks: outcome.map(|outcome| Checks {
                 outcome,
                 commit: "abc".into(),
@@ -1726,6 +1854,66 @@ mod tests {
             tier_round(&mut t, Some(Tier::Standard), RoundStatus::Failed, None);
             assert_eq!(automatic_tier(&t, n).0, Tier::Deep);
         }
+    }
+
+    #[test]
+    fn pick_tier_ignores_quota_rounds() {
+        let mut t = tier_task();
+        tier_round(
+            &mut t,
+            Some(Tier::Standard),
+            RoundStatus::Done,
+            Some(CheckOutcome::Fail),
+        );
+        for checks in [Some(CheckOutcome::Fail), Some(CheckOutcome::Pass), None] {
+            t.state.rounds.push(Round {
+                number: u32::try_from(t.state.rounds.len()).unwrap() + 1,
+                tier: Some(Tier::Standard),
+                worker: Some("pi:test".into()),
+                status: RoundStatus::Done,
+                research: false,
+                exit: Some(1),
+                quota: true,
+                checks: checks.map(|outcome| Checks {
+                    outcome,
+                    commit: "abc".into(),
+                }),
+            });
+            assert_eq!(
+                automatic_tier(&t, 2),
+                (
+                    Tier::Standard,
+                    "try 2 at standard (1 of 2 failed rounds)".into()
+                ),
+                "a quota round must not count as a pass or a failure"
+            );
+        }
+    }
+
+    #[test]
+    fn pick_tier_quota_preserves_check_error_hold() {
+        let mut t = tier_task();
+        tier_round(
+            &mut t,
+            Some(Tier::Standard),
+            RoundStatus::Done,
+            Some(CheckOutcome::Fail),
+        );
+        tier_round(
+            &mut t,
+            Some(Tier::Standard),
+            RoundStatus::Done,
+            Some(CheckOutcome::CheckError),
+        );
+        let before_quota = automatic_tier(&t, 1);
+        assert_eq!(before_quota.0, Tier::Standard);
+        tier_round(&mut t, Some(Tier::Standard), RoundStatus::Done, None);
+        t.state.rounds.last_mut().unwrap().quota = true;
+        assert_eq!(
+            automatic_tier(&t, 1),
+            before_quota,
+            "a quota round must not remove the preceding check-error hold"
+        );
     }
 
     #[test]
@@ -1853,6 +2041,7 @@ mod tests {
             status: RoundStatus::Done,
             research: false,
             exit: Some(0),
+            quota: false,
             checks: Some(Checks {
                 outcome: CheckOutcome::Pass,
                 commit: t.head(&ctx)?,
@@ -2392,6 +2581,7 @@ deep = ["claude:sonnet@high"]
                 status: RoundStatus::Done,
                 research: false,
                 exit: Some(0),
+                quota: false,
                 checks: Some(Checks {
                     outcome: CheckOutcome::Pass,
                     commit: checked_commit.clone(),
@@ -2404,6 +2594,7 @@ deep = ["claude:sonnet@high"]
                 status: RoundStatus::Running,
                 research: false,
                 exit: None,
+                quota: false,
                 checks: None,
             },
         ];

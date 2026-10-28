@@ -72,7 +72,7 @@ impl AccountName {
 
 impl fmt::Display for AccountName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.pad(self.as_str())
     }
 }
 
@@ -498,41 +498,30 @@ impl AccountReport {
         }
     }
 
-    pub fn text_line(&self) -> String {
-        if self.status == ReportStatus::Unknown {
-            let why = self.error.as_deref().unwrap_or("quota unreadable");
-            let hint = self.login.hint();
-            return format!("{}  unknown: {why} ({}); {hint}", self.account, self.source);
-        }
-        let reset = self
-            .reset_at()
-            .map_or_else(|| "unknown".to_string(), format_clock);
-        let runway = self.runway_text();
-        let windows = self
-            .windows
-            .iter()
-            .map(|window| {
-                format!(
-                    "{}% left ({})",
-                    format_percent(window.percent_left),
-                    window.name
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        if let (Some(balance), Some(cap)) = (self.balance, self.daily_cap) {
-            return format!(
-                "{}   {}/{} credits   resets {reset}   runway: {runway}   [{}]",
-                self.account,
-                format_number(balance),
-                format_number(cap),
-                self.source
-            );
-        }
-        format!(
-            "{}   {windows}   resets {reset}   runway: {runway}   [{}]",
-            self.account, self.source
-        )
+    /// Windows, reset and runway columns for a known report.
+    fn text_columns(&self) -> (String, String, String) {
+        let reset = format!(
+            "resets {}",
+            self.reset_at()
+                .map_or_else(|| "unknown".to_string(), format_clock)
+        );
+        let runway = format!("runway: {}", self.runway_text());
+        let windows = if let (Some(balance), Some(cap)) = (self.balance, self.daily_cap) {
+            format!("{}/{} credits", format_number(balance), format_number(cap))
+        } else {
+            self.windows
+                .iter()
+                .map(|window| {
+                    format!(
+                        "{}% left ({})",
+                        format_percent(window.percent_left),
+                        window.name
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        (windows, reset, runway)
     }
 
     fn runway_text(&self) -> String {
@@ -586,6 +575,54 @@ impl AccountReport {
         }
         Value::Object(object)
     }
+}
+
+/// `delegate quota` lines with account, windows, reset and runway columns aligned.
+///
+/// A reset or projection more than a day out carries its date (see [`format_clock`]),
+/// so the variable-width columns are padded to keep the later ones readable.
+pub fn text_lines(reports: &[AccountReport]) -> Vec<String> {
+    let account_width = reports
+        .iter()
+        .map(|report| report.account.as_str().len())
+        .max()
+        .unwrap_or(0)
+        .max(8);
+    let columns = reports
+        .iter()
+        .map(|report| {
+            (report.status != ReportStatus::Unknown).then(|| report.text_columns())
+        })
+        .collect::<Vec<_>>();
+    let width = |select: fn(&(String, String, String)) -> &String| {
+        columns
+            .iter()
+            .flatten()
+            .map(|columns| select(columns).len())
+            .max()
+            .unwrap_or(0)
+    };
+    let windows_width = width(|(windows, _, _)| windows);
+    let reset_width = width(|(_, reset, _)| reset);
+    let runway_width = width(|(_, _, runway)| runway);
+    reports
+        .iter()
+        .zip(columns)
+        .map(|(report, columns)| match columns {
+            None => {
+                let why = report.error.as_deref().unwrap_or("quota unreadable");
+                let hint = report.login.hint();
+                format!(
+                    "{:<account_width$} unknown: {why} ({}); {hint}",
+                    report.account, report.source
+                )
+            }
+            Some((windows, reset, runway)) => format!(
+                "{:<account_width$} {windows:<windows_width$}   {reset:<reset_width$}   {runway:<runway_width$}   [{}]",
+                report.account, report.source
+            ),
+        })
+        .collect()
 }
 
 /// Read every account in parallel; each request has a five-second budget.
@@ -704,9 +741,18 @@ fn first_number_field(value: &Value, keys: &[&str]) -> Result<Option<f64>, ()> {
 }
 
 /// The first readable time among alternative keys, skipping null and empty ones.
+///
+/// A reset or window time at or before now (epoch 0, negative values, a stale
+/// date) says nothing about the next reset, so it is unreadable too: fall back to
+/// the next key and leave the window without a reset if none is usable.
 fn first_time(value: &Value, keys: &[&str]) -> Option<i64> {
-    keys.iter()
-        .find_map(|key| value.get(*key).and_then(parse_time))
+    let now = now_seconds();
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(parse_time)
+            .filter(|at| *at > now)
+    })
 }
 
 fn object_bucket<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
@@ -749,9 +795,19 @@ fn read_codex_login(source: LoginSource) -> Result<Login, String> {
         ),
         _ => (data.get("tokens").unwrap_or(&data), "access_token"),
     };
+    codex_login_from(entry, token_key)
+}
+
+fn codex_login_from(entry: &Value, token_key: &str) -> Result<Login, String> {
+    let account_id = string_field(entry, "accountId").or_else(|| string_field(entry, "account_id"));
+    if let Some(key) = pi_api_key(entry) {
+        return Ok(Login::Codex {
+            token: key,
+            account_id,
+        });
+    }
     let token =
         string_field(entry, token_key).ok_or_else(|| "login has no access token".to_string())?;
-    let account_id = string_field(entry, "accountId").or_else(|| string_field(entry, "account_id"));
     Ok(Login::Codex { token, account_id })
 }
 
@@ -760,6 +816,13 @@ fn read_copilot_login() -> Result<Login, String> {
     let entry = data
         .get("github-copilot")
         .ok_or_else(|| "no github-copilot login".to_string())?;
+    copilot_login_from(entry)
+}
+
+fn copilot_login_from(entry: &Value) -> Result<Login, String> {
+    if let Some(key) = pi_api_key(entry) {
+        return Ok(Login::Copilot { token: key });
+    }
     let token = string_field(entry, "refresh")
         .or_else(|| string_field(entry, "access"))
         .ok_or_else(|| "login has no GitHub token".to_string())?;
@@ -771,14 +834,33 @@ fn read_hyper_login() -> Result<Login, String> {
     let entry = data
         .get("hyper")
         .ok_or_else(|| "no hyper login".to_string())?;
+    Ok(hyper_login_from(entry))
+}
+
+/// Pi also stores plain API keys, not only OAuth logins. Such a key is used
+/// directly as the bearer; there is nothing to refresh or exchange.
+fn pi_api_key(entry: &Value) -> Option<String> {
+    (string_field(entry, "type").as_deref() == Some("api_key"))
+        .then(|| string_field(entry, "key"))
+        .flatten()
+}
+
+fn hyper_login_from(entry: &Value) -> Login {
+    if let Some(key) = pi_api_key(entry) {
+        return Login::Hyper {
+            access: key,
+            refresh: None,
+            expires_ms: i64::MAX,
+        };
+    }
     let access = string_field(entry, "access").unwrap_or_default();
     let refresh = string_field(entry, "refresh");
     let expires_ms = number_field(entry, "expires").unwrap_or(0.0) as i64;
-    Ok(Login::Hyper {
+    Login::Hyper {
         access,
         refresh,
         expires_ms,
-    })
+    }
 }
 
 // ------------------------------------------------------------------ requests
@@ -1108,8 +1190,12 @@ fn codex_windows(payload: &Value) -> Result<Vec<Window>, String> {
             _ => "window",
         };
         let resets_at = first_time(entry, &["reset_at", "resetsAt"]).or_else(|| {
+            // A relative delay has the same rule as an absolute reset: one at or
+            // before now is unreadable, not the next window.
+            let now = now_seconds();
             number_field(entry, "reset_after_seconds")
-                .map(|seconds| now_seconds() + seconds as i64)
+                .map(|seconds| now + seconds as i64)
+                .filter(|at| *at > now)
         });
         if unreadable {
             windows.push(unreadable_window(name, resets_at, seconds));
@@ -1508,13 +1594,26 @@ fn parse_offset(text: &str) -> Option<i32> {
     Some(sign * (hours * 3_600 + minutes * 60))
 }
 
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Local clock time; when it is more than a day away, its date comes too.
 pub fn format_clock(epoch: i64) -> String {
-    let (offset, known) = offset_seconds();
-    let (_, _, _, hour, minute, _) = civil_parts(epoch + i64::from(offset));
-    if known {
-        format!("{hour:02}:{minute:02}")
+    format_clock_at(epoch, now_seconds(), offset_seconds())
+}
+
+fn format_clock_at(epoch: i64, now: i64, offset: (i32, bool)) -> String {
+    let (_, month, day, hour, minute, _) = civil_parts(epoch + i64::from(offset.0));
+    let suffix = if offset.1 { "" } else { " UTC" };
+    if epoch.saturating_sub(now) > ONE_DAY {
+        let month = MONTHS
+            .get((month as usize).saturating_sub(1))
+            .copied()
+            .unwrap_or("???");
+        format!("{month} {day} {hour:02}:{minute:02}{suffix}")
     } else {
-        format!("{hour:02}:{minute:02} UTC")
+        format!("{hour:02}:{minute:02}{suffix}")
     }
 }
 
@@ -1702,6 +1801,42 @@ mod tests {
     }
 
     #[test]
+    fn pi_api_key_entries_use_the_key_without_exchange() {
+        let key = json!({ "type": "api_key", "key": "never-print-this" });
+        match hyper_login_from(&key) {
+            Login::Hyper {
+                access,
+                refresh,
+                expires_ms,
+            } => {
+                assert_eq!(access, "never-print-this");
+                assert!(refresh.is_none());
+                assert!(expires_ms > now_millis());
+            }
+            _ => panic!("expected a Hyper login"),
+        }
+        match codex_login_from(&key, "access").unwrap() {
+            Login::Codex { token, .. } => assert_eq!(token, "never-print-this"),
+            _ => panic!("expected a Codex login"),
+        }
+        match copilot_login_from(&key).unwrap() {
+            Login::Copilot { token } => assert_eq!(token, "never-print-this"),
+            _ => panic!("expected a Copilot login"),
+        }
+        // The OAuth shape still works.
+        let oauth = json!({ "access": "access", "refresh": "refresh", "expires": now_millis() + 60_000 });
+        match hyper_login_from(&oauth) {
+            Login::Hyper {
+                access, refresh, ..
+            } => {
+                assert_eq!(access, "access");
+                assert_eq!(refresh.as_deref(), Some("refresh"));
+            }
+            _ => panic!("expected a Hyper login"),
+        }
+    }
+
+    #[test]
     fn account_mapping_follows_the_table_and_overrides() {
         let none = BTreeMap::new();
         assert_eq!(
@@ -1869,6 +2004,63 @@ mod tests {
     }
 
     #[test]
+    fn quota_lines_align_columns_and_date_far_times() {
+        let now = now_seconds();
+        let claude = AccountReport::from_windows(
+            Account {
+                name: AccountName::Claude,
+                source: LoginSource::ClaudeCredentials,
+            },
+            vec![window(13.0, 2 * 3_600, FIVE_HOURS)],
+            None,
+            None,
+        );
+        let copilot = AccountReport::from_windows(
+            Account {
+                name: AccountName::Copilot,
+                source: LoginSource::PiCopilot,
+            },
+            vec![window(10.0, 40 * ONE_DAY, THIRTY_DAYS)],
+            None,
+            None,
+        );
+        let hyper = AccountReport::from_windows(
+            Account {
+                name: AccountName::Hyper,
+                source: LoginSource::PiHyper,
+            },
+            vec![window(91.2, 3_600, ONE_DAY)],
+            Some(228.0),
+            Some(250.0),
+        );
+        let lines = text_lines(&[claude, copilot, hyper]);
+        assert_eq!(lines[0].find("resets"), lines[1].find("resets"), "{lines:?}");
+        assert_eq!(lines[0].find("runway:"), lines[1].find("runway:"), "{lines:?}");
+        assert_eq!(lines[1].find("runway:"), lines[2].find("runway:"), "{lines:?}");
+        assert_eq!(lines[0].find("13% left"), lines[1].find("10% left"));
+        assert!(lines[2].contains("228/250 credits"));
+        assert!(
+            lines[1].contains(&format!("resets {}", format_clock(now + 40 * ONE_DAY))),
+            "{}",
+            lines[1]
+        );
+        let expected = format_clock_at(now + 40 * ONE_DAY, now, (0, true));
+        assert!(expected.contains(' '), "a far reset carries its date: {expected}");
+        assert_eq!(
+            format_clock_at(1_793_491_200 + 7 * 3_600, 1_767_225_600, (0, true)),
+            "Nov 1 07:00"
+        );
+        assert_eq!(
+            format_clock_at(1_767_229_200, 1_767_225_600, (0, true)),
+            "01:00"
+        );
+        assert_eq!(
+            format_clock_at(1_793_491_200, 1_767_225_600, (0, false)),
+            "Nov 1 00:00 UTC"
+        );
+    }
+
+    #[test]
     fn rfc3339_round_trips() {
         let epoch = 1_767_225_600;
         assert_eq!(format_rfc3339(epoch), "2026-01-01T00:00:00Z");
@@ -1976,6 +2168,68 @@ mod tests {
             RunwayStatus::ExhaustedNow,
             "exhaustion is known even without a reset"
         );
+    }
+
+    #[test]
+    fn review_codex_nonfuture_relative_resets_are_unreadable() {
+        for delay in [0, -3_600] {
+            let payload = json!({
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 10,
+                        "limit_window_seconds": FIVE_HOURS,
+                        "reset_at": 0,
+                        "reset_after_seconds": delay,
+                    },
+                },
+            });
+            let windows = codex_windows(&payload).unwrap();
+            assert_eq!(
+                runway_for(&windows).status,
+                RunwayStatus::Unknown,
+                "nonfuture reset_after_seconds={delay} must not report healthy quota: {windows:?}"
+            );
+            assert_eq!(windows[0].resets_at, None);
+        }
+    }
+
+    #[test]
+    fn copilot_unusable_category_resets_fall_back_to_the_account_date() {
+        let day = parse_time(&json!("2026-11-01"));
+        for bad in [json!(0), json!(""), json!(null), json!(-1)] {
+            let payload = json!({
+                "quota_snapshots": {
+                    "premium_interactions": {
+                        "entitlement": 300,
+                        "percent_remaining": 90,
+                        "quota_reset_at": bad,
+                    },
+                },
+                "quota_reset_date_utc": "2026-11-01T00:00:00Z",
+            });
+            let windows = copilot_windows_from(&payload).unwrap();
+            assert_eq!(windows.len(), 1);
+            assert_eq!(windows[0].resets_at, day, "category reset {bad}");
+        }
+    }
+
+    #[test]
+    fn copilot_all_unusable_resets_leave_the_window_unknown() {
+        let payload = json!({
+            "quota_snapshots": {
+                "premium_interactions": {
+                    "entitlement": 300,
+                    "percent_remaining": 90,
+                    "quota_reset_at": 0,
+                },
+            },
+            "quota_reset_date_utc": "1970-01-01T00:00:00Z",
+            "quota_reset_date": "",
+        });
+        let windows = copilot_windows_from(&payload).unwrap();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].resets_at, None);
+        assert_eq!(runway_for(&windows).status, RunwayStatus::Unknown);
     }
 
     #[test]

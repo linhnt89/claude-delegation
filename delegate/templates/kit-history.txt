@@ -623,14 +623,14 @@
     }
   },
   {
-    "id": "8e99124236a8",
+    "id": "7003004d26cc",
     "files": {
       ".claude/skills/delegate-pane/.claude-plugin/plugin.json": "981ce75132e378dc30af604ea75d29399490487120066b21132a6069658b98d5",
       ".claude/skills/delegate-pane/hooks/hooks.json": "d842d789476d67282d0f04b7e5fdc68a3d981ccec65dd79cfa2d11eed13fb828",
       ".claude/skills/delegate-pane/hooks/register.test.tsx": "a8b451cbcf4c4bf87e55926610a53cdebedee87cbdc5032e31c98a6b3c1a94d1",
       ".claude/skills/delegate-pane/hooks/register.tsx": "5a6c858cfd834d641bcdf71573c6d78fd93a9ce7f9592de7620a06379ac02fe2",
       ".claude/skills/delegate-pane/types/index.d.ts": "cac61f458b58a476ba8c361c76329861a740690ce5b5ac663cc9dbb9195c035e",
-      ".claude/skills/delegate/SKILL.md": "70bd247161b10c99f2965b8603e2fddb92280cbff5b2a53299ae53c0a22bae84",
+      ".claude/skills/delegate/SKILL.md": "7f7547e48d409ec18adea94321677bb207a30bdf514a5627f2231c86a5122f3f",
       ".claude/skills/distill/SKILL.md": "bc2e6187774a8c845198968d615d270726d16d00480b1e7f736023175b4d2b2d",
       ".claude/skills/evaluate/SKILL.md": "f72a732c723c2d63001a34cb8096d9a23a7ec030bf496080427ee8c466d29683",
       ".delegate.toml": "3df5a624ea7bd5560f3b029be5ab257ea251880b422acd7bfe4bd93664d1e1d3",
@@ -652,14 +652,14 @@
     }
   },
   {
-    "id": "7003004d26cc",
+    "id": "70ac0f34c96d",
     "files": {
       ".claude/skills/delegate-pane/.claude-plugin/plugin.json": "981ce75132e378dc30af604ea75d29399490487120066b21132a6069658b98d5",
       ".claude/skills/delegate-pane/hooks/hooks.json": "d842d789476d67282d0f04b7e5fdc68a3d981ccec65dd79cfa2d11eed13fb828",
       ".claude/skills/delegate-pane/hooks/register.test.tsx": "a8b451cbcf4c4bf87e55926610a53cdebedee87cbdc5032e31c98a6b3c1a94d1",
       ".claude/skills/delegate-pane/hooks/register.tsx": "5a6c858cfd834d641bcdf71573c6d78fd93a9ce7f9592de7620a06379ac02fe2",
       ".claude/skills/delegate-pane/types/index.d.ts": "cac61f458b58a476ba8c361c76329861a740690ce5b5ac663cc9dbb9195c035e",
-      ".claude/skills/delegate/SKILL.md": "7f7547e48d409ec18adea94321677bb207a30bdf514a5627f2231c86a5122f3f",
+      ".claude/skills/delegate/SKILL.md": "94ba7c6ffcb3f103be877b76f719a30bf5366bffde87a2acd6eb3b9dc0f5b744",
       ".claude/skills/distill/SKILL.md": "bc2e6187774a8c845198968d615d270726d16d00480b1e7f736023175b4d2b2d",
       ".claude/skills/evaluate/SKILL.md": "f72a732c723c2d63001a34cb8096d9a23a7ec030bf496080427ee8c466d29683",
       ".delegate.toml": "3df5a624ea7bd5560f3b029be5ab257ea251880b422acd7bfe4bd93664d1e1d3",

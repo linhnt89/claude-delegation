@@ -79,6 +79,8 @@ What happens:
 - **Fallbacks:** if a candidate can't start (quota, auth), the next one in the tier is used.
   Before each run the runner reads each candidate account's quota itself and skips one that is
   out or would run out before the spec's `size:`; an unreadable login warns and is used anyway.
+  A worker that hits its quota mid-round has its committed work kept, and the next candidate
+  continues at the same tier; that quota round never counts toward a step-up.
   An explicit `--worker` is still checked, but only warns and then runs.
   `delegate quota` shows every account, and `workers.toml` `[quota]` sets the runway thresholds.
 - **Step-up:** after `[defaults] step_up_after` product-failing rounds at the current tier

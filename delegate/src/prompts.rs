@@ -14,6 +14,9 @@ If something turns out to be ambiguous, stop and write the question in the repor
 Do not commit, push, or change git branches.
 When finished, write .task/REPORT.md following .task/REPORT.template.md (40 lines max).";
 
+/// Extra line for the candidate that takes over after a quota-limited worker.
+pub const HANDOFF: &str = "The previous worker on this task ran out of quota; its work is committed. Continue from that committed work.";
+
 pub const FULL_INTRO: &str = "You are a delegated worker on task {id}.
 Read AGENTS.md, then .task/SPEC.md, and do exactly what the spec asks.
 ";
