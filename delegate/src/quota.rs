@@ -293,6 +293,30 @@ pub struct Runway {
 }
 
 impl Runway {
+    /// Human-readable runway for one task sharing an account.
+    pub fn per_task_text(self) -> String {
+        match self.status {
+            RunwayStatus::ThroughReset => "through reset".into(),
+            RunwayStatus::Unknown => "unknown".into(),
+            RunwayStatus::ExhaustedNow | RunwayStatus::ProjectedExhaustion => {
+                let seconds = self.seconds_left.max(0);
+                if seconds >= 3_600 {
+                    let hours = seconds / 3_600;
+                    let minutes = seconds % 3_600 / 60;
+                    if minutes == 0 {
+                        format!("{hours}h")
+                    } else {
+                        format!("{hours}h{minutes}m")
+                    }
+                } else if seconds >= 60 {
+                    format!("{}m", seconds / 60)
+                } else {
+                    format!("{seconds}s")
+                }
+            }
+        }
+    }
+
     fn unknown() -> Self {
         Runway {
             status: RunwayStatus::Unknown,
@@ -356,7 +380,7 @@ impl AccountReport {
         }
     }
 
-    fn from_windows(
+    pub(crate) fn from_windows(
         account: Account,
         windows: Vec<Window>,
         balance: Option<f64>,
@@ -407,8 +431,13 @@ impl AccountReport {
             .filter(|window| window.applies_to(&worker.model))
     }
 
-    fn runway_for(&self, worker: &Worker) -> Runway {
-        runway_for_iter(self.windows_for(worker))
+    /// Reproject each applicable window with the additional tasks' burn, before
+    /// comparing with its reset. Dividing a reset-capped runway loses headroom.
+    pub fn shared_runway_for(&self, worker: &Worker, running: usize) -> Runway {
+        if self.login_unknown() {
+            return Runway::unknown();
+        }
+        runway_for_shared(self.windows_for(worker), running)
     }
 
     /// A failed login leaves no windows; an unreadable reset still has them.
@@ -426,23 +455,36 @@ impl AccountReport {
         status_for_runway(runway_for_iter(windows.iter().copied()), &windows)
     }
 
-    /// Why this candidate cannot take a task of `size`, after model scoping.
+    /// Why this candidate cannot take a task after model scoping and sharing.
     pub fn skip_reason_for(
         &self,
         worker: &Worker,
         size: TaskSize,
         required: Duration,
+        running: &[&str],
     ) -> Option<SkipReason> {
-        if self.login_unknown() {
-            return None;
+        let runway = self.shared_runway_for(worker, running.len());
+        let mut reason = Self::reason_for_runway(self.account, self.login, runway, size, required)?;
+        if !running.is_empty() {
+            let sharing = format!(
+                "runway shared with {}: {} per task, {size} needs {}",
+                running.join(", "),
+                runway.per_task_text(),
+                duration_label(required)
+            );
+            reason.reason = if runway.status == RunwayStatus::ExhaustedNow {
+                format!("{}; {sharing}", reason.reason)
+            } else {
+                sharing
+            };
+            reason.summary = format!(
+                "{}; shared with {}: {} per task",
+                reason.summary,
+                running.join(", "),
+                runway.per_task_text()
+            );
         }
-        Self::reason_for_runway(
-            self.account,
-            self.login,
-            self.runway_for(worker),
-            size,
-            required,
-        )
+        Some(reason)
     }
 
     /// The warning to print when the quota behind this candidate could not be read.
@@ -1588,6 +1630,10 @@ fn runway_for(windows: &[Window]) -> Runway {
 }
 
 fn runway_for_iter<'a>(windows: impl IntoIterator<Item = &'a Window>) -> Runway {
+    runway_for_shared(windows, 0)
+}
+
+fn runway_for_shared<'a>(windows: impl IntoIterator<Item = &'a Window>, running: usize) -> Runway {
     let now = now_seconds();
     let mut best: Option<Runway> = None;
     let mut unknown = false;
@@ -1597,7 +1643,7 @@ fn runway_for_iter<'a>(windows: impl IntoIterator<Item = &'a Window>) -> Runway 
         if !window.percent_left.is_finite() {
             return Runway::unknown();
         }
-        let Some(runway) = window_runway(window, now) else {
+        let Some(runway) = window_runway(window, now, running) else {
             // A vendor-given absence of a reset is not an unreadable reset.
             if !window.resetless() {
                 unknown = true;
@@ -1632,7 +1678,7 @@ fn tighter(current: Runway, other: Runway) -> Runway {
     }
 }
 
-fn window_runway(window: &Window, now: i64) -> Option<Runway> {
+fn window_runway(window: &Window, now: i64, running: usize) -> Option<Runway> {
     let window_seconds = window.seconds;
     if window_seconds <= 0 || !window.percent_left.is_finite() {
         return None;
@@ -1658,9 +1704,11 @@ fn window_runway(window: &Window, now: i64) -> Option<Runway> {
     }
     let elapsed = (window_seconds - (reset - now)) as f64;
     let elapsed_fraction = (elapsed / window_seconds as f64).clamp(0.0, 1.0);
-    let to_exhaustion = (1.0 - used) * window_seconds as f64 * elapsed_fraction / used;
-    let projected = now + to_exhaustion as i64;
-    if projected > reset {
+    let to_exhaustion = (1.0 - used) * window_seconds as f64 * elapsed_fraction
+        / used
+        / (running.saturating_add(1) as f64);
+    let projected = now.saturating_add(to_exhaustion as i64);
+    if projected > reset || (running > 0 && projected == reset) {
         Some(Runway {
             status: RunwayStatus::ThroughReset,
             at: Some(reset),
@@ -2049,6 +2097,97 @@ mod tests {
         let through = runway_for(&[window(10.0, 60, FIVE_HOURS)]);
         assert_eq!(through.status, RunwayStatus::ThroughReset);
         assert_eq!(runway_for(&[]).status, RunwayStatus::Unknown);
+    }
+
+    #[test]
+    fn shared_runway_divides_uncapped_projection_for_zero_one_and_three_tasks() {
+        let now = 1_000_000;
+        // One hour elapsed, 50% used: one hour of uncapped runway.
+        let mut w = window(50.0, 4 * 3_600, FIVE_HOURS);
+        w.resets_at = Some(now + 4 * 3_600);
+        for (running, expected) in [(0, 3_600), (1, 1_800), (3, 900)] {
+            let runway = window_runway(&w, now, running).unwrap();
+            assert_eq!(runway.status, RunwayStatus::ProjectedExhaustion);
+            assert_eq!(runway.seconds_left, expected);
+            assert_eq!(runway.at, Some(now + expected));
+        }
+        // 20% used after one hour: uncapped runway is four hours, while
+        // the reset is three hours away. Sharing converts through-reset to 2h.
+        w.percent_left = 80.0;
+        w.seconds = 4 * 3_600;
+        w.resets_at = Some(now + 3 * 3_600);
+        assert_eq!(
+            window_runway(&w, now, 0).unwrap().status,
+            RunwayStatus::ThroughReset
+        );
+        let shared = window_runway(&w, now, 1).unwrap();
+        assert_eq!(shared.status, RunwayStatus::ProjectedExhaustion);
+        assert!((7_199..=7_200).contains(&shared.seconds_left));
+        assert_ne!(shared.seconds_left, 3 * 3_600 / 2);
+    }
+
+    #[test]
+    fn sharing_preserves_reset_headroom_zero_usage_exhaustion_and_unknown() {
+        let now = 1_000_000;
+        let mut w = window(90.0, 0, FIVE_HOURS);
+        w.resets_at = Some(now + 3 * 3_600);
+        assert_eq!(
+            window_runway(&w, now, 3).unwrap().status,
+            RunwayStatus::ThroughReset
+        );
+        w.percent_left = 100.0;
+        assert_eq!(
+            window_runway(&w, now, 100).unwrap().status,
+            RunwayStatus::ThroughReset
+        );
+        w.percent_left = 0.0;
+        assert_eq!(
+            window_runway(&w, now, 3).unwrap().status,
+            RunwayStatus::ExhaustedNow
+        );
+        w.resets_at = None;
+        assert_eq!(
+            window_runway(&w, now, 3).unwrap().status,
+            RunwayStatus::ExhaustedNow
+        );
+        w.percent_left = 50.0;
+        assert!(window_runway(&w, now, 3).is_none());
+        w.percent_left = f64::NAN;
+        assert_eq!(runway_for_shared([&w], 3).status, RunwayStatus::Unknown);
+    }
+
+    #[test]
+    fn shared_skip_reason_names_tasks_runway_size_and_reset() {
+        let report = AccountReport::from_windows(
+            Account {
+                name: AccountName::Codex,
+                source: LoginSource::CodexAuth,
+            },
+            vec![window(50.0, 3 * 3_600, FIVE_HOURS)],
+            None,
+            None,
+        );
+        let reason = report
+            .skip_reason_for(
+                &worker("codex:gpt-5"),
+                TaskSize::Long,
+                Duration::from_hours(3),
+                &["t001"],
+            )
+            .unwrap();
+        for text in ["shared with t001", "per task", "long needs 3h"] {
+            assert!(reason.reason.contains(text), "{reason:?}");
+        }
+        assert!(reason.summary.contains("resets"));
+        assert!(reason.summary.contains("t001"));
+        assert!(reason.reset.is_some());
+        let runway = Runway {
+            status: RunwayStatus::ProjectedExhaustion,
+            at: None,
+            reset: None,
+            seconds_left: 8_100,
+        };
+        assert_eq!(runway.per_task_text(), "2h15m");
     }
 
     #[test]
@@ -2493,6 +2632,7 @@ mod tests {
                     &worker("claude:sonnet@high"),
                     TaskSize::Long,
                     RunwayConfig::default().long,
+                    &[],
                 )
                 .is_some()
         );
@@ -2502,6 +2642,7 @@ mod tests {
                     &worker("claude:opus@high"),
                     TaskSize::Long,
                     RunwayConfig::default().long,
+                    &[],
                 )
                 .is_none()
         );

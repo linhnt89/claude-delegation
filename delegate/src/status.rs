@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::config::Worker;
 use crate::task::{CheckOutcome, Ctx, RoundStatus, Task, git};
 use crate::{commands, spec};
 
@@ -368,6 +369,34 @@ pub fn task_ids(ctx: &Ctx) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+/// Workers on this checkout's live tasks, excluding the task being started.
+/// Best-effort metadata only: stale or unreadable tasks never reserve quota.
+pub fn running_workers(ctx: &Ctx, exclude: &str) -> Vec<(String, Worker)> {
+    task_ids(ctx)
+        .into_iter()
+        .filter(|id| id != exclude)
+        .filter_map(|id| {
+            let task = Task::load(ctx, &id).ok()?;
+            let live = read_live(&task).ok()??;
+            if !live.alive()
+                || !matches!(
+                    live.phase.as_str(),
+                    "questions" | "implement" | "checks" | "review"
+                )
+            {
+                return None;
+            }
+            let worker = live
+                .worker
+                .as_deref()
+                .or_else(|| task.last_round()?.worker.as_deref())?
+                .parse()
+                .ok()?;
+            Some((id, worker))
+        })
+        .collect()
 }
 
 /// Collect task snapshots without modifying the task, repository, index or worktree.
@@ -1030,6 +1059,67 @@ mod tests {
             elapsed_secs: 65,
             activity_age_secs: 425,
         }
+    }
+
+    #[test]
+    fn running_workers_counts_live_phases_and_uses_the_current_worker() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-running-{}", uuid::Uuid::new_v4()));
+        let ctx = Ctx {
+            root: root.clone(),
+            dhome: root.join("tasks"),
+            gitdir: root.join(".git"),
+        };
+        for (id, phase, worker, stale) in [
+            ("t001", "questions", Some("codex:gpt-5"), false),
+            ("t002", "implement", Some("pi:hyper/sonnet"), false),
+            ("t003", "checks", None, false),
+            ("t004", "review", Some("claude:opus"), false),
+            ("t005", "implement", Some("codex:gpt-5"), false),
+            ("t006", "implement", Some("codex:gpt-5"), true),
+            ("t007", "done", Some("codex:gpt-5"), false),
+            ("t008", "merge", Some("codex:gpt-5"), false),
+            ("t009", "implement", Some("invalid-worker"), false),
+            ("t010", "implement", None, false),
+        ] {
+            let mut task = Task::load(&ctx, id)?;
+            fs::create_dir_all(&task.dir)?;
+            fs::write(&task.spec, "# Task")?;
+            if matches!(id, "t003" | "t004") {
+                task.state.rounds.push(crate::task::Round {
+                    number: 1,
+                    tier: None,
+                    worker: Some("codex:gpt-5".into()),
+                    status: RoundStatus::Running,
+                    research: false,
+                    exit: None,
+                    quota: false,
+                    checks: None,
+                });
+                task.save()?;
+            }
+            let mut live = LiveState::current(phase)?;
+            live.worker = worker.map(str::to_owned);
+            if stale {
+                live.boot_id = "other-boot".into();
+            }
+            atomic_live(&task.dir.join("status.json"), &live)?;
+        }
+        let running = running_workers(&ctx, "t005");
+        let observed: Vec<_> = running
+            .iter()
+            .map(|(id, w)| (id.as_str(), w.to_string()))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                ("t001", "codex:gpt-5".into()),
+                ("t002", "pi:hyper/sonnet".into()),
+                ("t003", "codex:gpt-5".into()),
+                ("t004", "claude:opus".into()),
+            ]
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]

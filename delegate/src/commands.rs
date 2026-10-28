@@ -130,51 +130,75 @@ pub fn quota(json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Drop candidates whose account is out or would run out before the task can finish.
-fn quota_aware_workers(
-    cfg: &WorkersConfig,
-    workers: Vec<Worker>,
+struct QuotaRequest<'a> {
     role: Role,
     tier: Tier,
     size: TaskSize,
     explicit: bool,
-) -> Result<Vec<Worker>> {
-    let accounts = quota::accounts_in_order(&workers, &cfg.accounts);
-    if accounts.is_empty() {
-        return Ok(workers);
-    }
-    let reports = quota::read_accounts(&accounts, &cfg.quota);
+    running: &'a [(String, Worker)],
+}
+
+/// Drop candidates whose shared runway is short, preserving tier order.
+/// Each kept worker carries an optional dry-run sharing annotation.
+fn quota_aware_workers(
+    cfg: &WorkersConfig,
+    workers: Vec<Worker>,
+    reports: &[quota::AccountReport],
+    request: &QuotaRequest<'_>,
+) -> Result<Vec<(Worker, Option<String>)>> {
+    let QuotaRequest {
+        role,
+        tier,
+        size,
+        explicit,
+        running,
+    } = *request;
     let required = cfg.quota.runway.for_size(size);
     let mut kept = Vec::new();
     let mut skipped: Vec<(quota::SkipReason, String)> = Vec::new();
     for worker in workers {
         let Some(account) = quota::account_for(&worker, &cfg.accounts) else {
-            kept.push(worker);
+            kept.push((worker, None));
             continue;
         };
         let Some(report) = reports
             .iter()
             .find(|report| report.account == account.name && report.login == account.source)
         else {
-            kept.push(worker);
+            kept.push((worker, None));
             continue;
         };
+        let running_ids: Vec<_> = running
+            .iter()
+            .filter(|(_, worker)| quota::account_for(worker, &cfg.accounts) == Some(account))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        let sharing = (!running_ids.is_empty()).then(|| {
+            format!(
+                "{}: shared by {}; {} per task",
+                account.name,
+                running_ids.join(", "),
+                report
+                    .shared_runway_for(&worker, running_ids.len())
+                    .per_task_text()
+            )
+        });
         if report.status_for(&worker) == quota::ReportStatus::Unknown {
             println!(
                 "quota for {} unknown ({}); using {worker} anyway",
                 account.name,
                 report.unknown_reason()
             );
-            kept.push(worker);
-        } else if let Some(reason) = report.skip_reason_for(&worker, size, required) {
+            kept.push((worker, sharing));
+        } else if let Some(reason) = report.skip_reason_for(&worker, size, required, &running_ids) {
             if explicit {
                 println!("{}", reason.explicit_warning(&worker));
-                kept.push(worker);
+                kept.push((worker, sharing));
             } else {
                 skipped.push((reason, worker.to_string()));
             }
         } else {
-            kept.push(worker);
+            kept.push((worker, sharing));
         }
     }
     if kept.is_empty() && !skipped.is_empty() {
@@ -607,29 +631,40 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         role.name(),
         if ask { "yes" } else { "no" }
     );
-    let workers = if cfg.quota.check {
+    let candidates = if cfg.quota.check {
+        let accounts = quota::accounts_in_order(&workers, &cfg.accounts);
+        let reports = quota::read_accounts(&accounts, &cfg.quota);
+        let running = status::running_workers(ctx, &t.id);
         quota_aware_workers(
             &cfg,
             workers,
-            role,
-            tier.unwrap_or(Tier::Fast),
-            size,
-            a.worker.is_some(),
+            &reports,
+            &QuotaRequest {
+                role,
+                tier: tier.unwrap_or(Tier::Fast),
+                size,
+                explicit: a.worker.is_some(),
+                running: &running,
+            },
         )?
     } else {
-        workers
+        workers.into_iter().map(|worker| (worker, None)).collect()
     };
     if a.dry_run {
-        for w in &workers {
+        for (w, sharing) in &candidates {
             let iso = if w.harness == Harness::Codex {
                 "own sandbox"
             } else {
                 "bwrap"
             };
-            println!("  candidate: {w}  [{iso}]");
+            let sharing = sharing
+                .as_ref()
+                .map_or_else(String::new, |text| format!(" ({text})"));
+            println!("  candidate: {w}{sharing}  [{iso}]");
         }
         return Ok(());
     }
+    let workers: Vec<_> = candidates.into_iter().map(|(worker, _)| worker).collect();
 
     if harness::needs_bwrap(
         workers.iter().map(|w| w.harness),
@@ -1782,6 +1817,127 @@ pub fn discard(ctx: &Ctx, id: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn quota_sharing_keeps_tier_order_and_only_skips_short_accounts() -> Result<()> {
+        let cfg: WorkersConfig = toml::from_str(crate::config::WORKERS_EXAMPLE)?;
+        let workers: Vec<Worker> = ["codex:gpt-5", "pi:hyper/sonnet"]
+            .into_iter()
+            .map(str::parse)
+            .collect::<Result<_, _>>()?;
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs(),
+        )?;
+        let report = |worker: &Worker, left: f64| {
+            quota::AccountReport::from_windows(
+                quota::account_for(worker, &cfg.accounts).unwrap(),
+                vec![quota::Window {
+                    name: "test".into(),
+                    percent_left: left,
+                    resets_at: Some(now + 3 * 3_600),
+                    seconds: 5 * 3_600,
+                    scope: Vec::new(),
+                    no_reset: false,
+                }],
+                None,
+                None,
+            )
+        };
+        let mut reports = vec![report(&workers[0], 90.0), report(&workers[1], 90.0)];
+        let running = vec![("t001".into(), workers[0].clone())];
+        let mut request = QuotaRequest {
+            role: Role::Implement,
+            tier: Tier::Standard,
+            size: TaskSize::Long,
+            explicit: false,
+            running: &running,
+        };
+        let kept = quota_aware_workers(&cfg, workers.clone(), &reports, &request)?;
+        assert_eq!(
+            kept.iter().map(|(w, _)| w).collect::<Vec<_>>(),
+            workers.iter().collect::<Vec<_>>()
+        );
+        assert!(kept[0].1.as_ref().unwrap().contains("shared by t001"));
+        assert!(kept[0].1.as_ref().unwrap().contains("through reset"));
+        assert!(kept[1].1.is_none());
+        reports[0] = report(&workers[0], 50.0);
+        let kept = quota_aware_workers(&cfg, workers.clone(), &reports, &request)?;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, workers[1]);
+        request.explicit = true;
+        let kept = quota_aware_workers(&cfg, vec![workers[0].clone()], &reports, &request)?;
+        assert_eq!(kept[0].0, workers[0], "explicit workers warn and run");
+        request.explicit = false;
+        reports[0].status = quota::ReportStatus::Unknown;
+        reports[0].windows.clear();
+        let kept = quota_aware_workers(&cfg, workers.clone(), &reports, &request)?;
+        assert_eq!(kept[0].0, workers[0], "unknown quota remains eligible");
+        Ok(())
+    }
+
+    #[test]
+    fn all_shared_accounts_short_stop_with_task_ids_and_resets() -> Result<()> {
+        let cfg: WorkersConfig = toml::from_str(crate::config::WORKERS_EXAMPLE)?;
+        let workers: Vec<Worker> = ["codex:gpt-5", "pi:hyper/sonnet"]
+            .into_iter()
+            .map(str::parse)
+            .collect::<Result<_, _>>()?;
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs(),
+        )?;
+        let reports: Vec<_> = workers
+            .iter()
+            .map(|worker| {
+                quota::AccountReport::from_windows(
+                    quota::account_for(worker, &cfg.accounts).unwrap(),
+                    vec![quota::Window {
+                        name: "test".into(),
+                        percent_left: 50.0,
+                        resets_at: Some(now + 3 * 3_600),
+                        seconds: 5 * 3_600,
+                        scope: Vec::new(),
+                        no_reset: false,
+                    }],
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        let running = vec![
+            ("t001".into(), workers[0].clone()),
+            ("t002".into(), workers[1].clone()),
+        ];
+        let error = quota_aware_workers(
+            &cfg,
+            workers,
+            &reports,
+            &QuotaRequest {
+                role: Role::Implement,
+                tier: Tier::Standard,
+                size: TaskSize::Long,
+                explicit: false,
+                running: &running,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        for text in [
+            "no [implement].standard candidate has quota left",
+            "codex:",
+            "hyper:",
+            "t001",
+            "t002",
+            "resets",
+            "per task",
+        ] {
+            assert!(error.contains(text), "{error}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn acceptance_checks_are_marked_sandboxed_without_bwrap() {
