@@ -20,6 +20,10 @@ implement   = "standard"
 research    = "fast"
 review      = "standard"
 plan_review = "standard"
+# Product-failing rounds at the current tier before stepping up (whole number >= 1).
+# Optional; defaults to 1. Pass resets the count; check errors (exit 3) and unfinished
+# rounds neither count nor reset it. Automatic selection never steps down.
+step_up_after = 1
 
 [implement]
 fast = [

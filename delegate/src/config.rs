@@ -205,6 +205,26 @@ pub struct Defaults {
     pub research: Tier,
     pub review: Tier,
     pub plan_review: Tier,
+    #[serde(
+        default = "default_step_up_after",
+        deserialize_with = "deserialize_step_up_after"
+    )]
+    pub step_up_after: u64,
+}
+
+fn default_step_up_after() -> u64 {
+    1
+}
+
+fn deserialize_step_up_after<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u64, D::Error> {
+    let invalid = || serde::de::Error::custom("step_up_after must be a whole number, 1 or more");
+    let value = u64::deserialize(deserializer).map_err(|_| invalid())?;
+    if value == 0 {
+        return Err(invalid());
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Deserialize)]
@@ -427,6 +447,26 @@ mod tests {
             .unwrap();
         assert!(review.iter().all(|w| w.family() != "gpt"));
         assert!(cfg.candidates(Role::Review, Tier::Fast, None).is_err());
+    }
+
+    #[test]
+    fn step_up_after_defaults_and_validates() {
+        let without = WORKERS_EXAMPLE.replace("step_up_after = 1", "");
+        let cfg: WorkersConfig = toml::from_str(&without).unwrap();
+        assert_eq!(cfg.defaults.step_up_after, 1);
+        for n in [1, 2, 3] {
+            let text = without.replace("[defaults]", &format!("[defaults]\nstep_up_after = {n}"));
+            let cfg: WorkersConfig = toml::from_str(&text).unwrap();
+            assert_eq!(cfg.defaults.step_up_after, n);
+        }
+        for bad in ["0", "-1", "1.5", "\"two\"", "true", "[]", "{}"] {
+            let text = without.replace("[defaults]", &format!("[defaults]\nstep_up_after = {bad}"));
+            let error = toml::from_str::<WorkersConfig>(&text)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("step_up_after"), "{error}");
+            assert!(error.contains("a whole number, 1 or more"), "{error}");
+        }
     }
 
     #[test]

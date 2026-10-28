@@ -60,6 +60,10 @@ Write `check` for each agreed scenario and make it executable:
 - Workflows with state over time (carts, editors, sessions) get an action-sequence check:
   random sequences of user actions, compared after each step with a simple model of what
   should be true.
+- Exit 3 for bugs in the check itself (bad setup, invalid generated input, flakiness), not for
+  product failures. `evals/run` reports a `check error`, exits 3 when no product check failed,
+  and exits 1 if anything failed. Check errors block merge but do not count toward a worker
+  tier step-up; fix the check rather than sending the product to a stronger model.
 - `rubric` checks ask a judge model with the criteria from `scenario.md`; `human` checks print
   what to look at and exit 2.
 Set `Status: automated` once `evals/run <id>` gives a real verdict. Pick the tier by cost:

@@ -12,7 +12,7 @@ evals/
   lib/                        helpers shared by checks (setup, fixtures, judge prompts)
   scenarios/<ID>-<slug>/
     scenario.md               what is checked: the part people read and approve
-    check                     executable: exit 0 pass, 1 fail, 2 needs a human, 77 skip
+    check                     executable: exit 0 pass, 1 fail, 2 needs a human, 3 check error, 77 skip
 ```
 IDs: `S001`... for user scenarios, `P001`... for properties (rules that hold for any input).
 Numbers are never reused; a dropped scenario stays with `Status: retired`.
@@ -36,7 +36,8 @@ prints it under every failed result, so results read without looking anything up
 Any language, executable, run in a fresh empty directory (`$EVALS_WORK`) with `$EVALS_ROOT`,
 `$EVALS_LIB`, `$EVALS_SCENARIO` and `$EVALS_HIDDEN` set. It drives the product through its
 real interface (CLI, HTTP, browser), never by importing internals. The last line it prints is
-the reason shown in results.
+the reason shown in results. Exit 3 for bugs in the check itself (bad setup, invalid generated
+input, or other check errors), not for product failures. Fix the check before trusting its verdict.
 - `auto`: decides by itself.
 - `rubric`: asks a judge model to score against the criteria in `scenario.md`; prints the
   verdict and exits 0 or 1, or 2 if the judge is unsure.
@@ -67,4 +68,6 @@ folder, so they cannot tailor work to these checks.
 ## Results
 `evals/run` prints a table and writes it, with one log per check, to
 the checkout's task-state folder (`delegate where` prints it), under `_evals/results/`. Only the latest run per selection is kept; results are
-review-time state and never committed.
+review-time state and never committed. Check errors are reported separately with the check's
+last output line and counted as `N check error`. The runner exits 1 if any check failed,
+otherwise 3 if any check errored, otherwise 0.

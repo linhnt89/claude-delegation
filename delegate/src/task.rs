@@ -132,6 +132,7 @@ pub enum RoundStatus {
 pub enum CheckOutcome {
     Pass,
     Fail,
+    CheckError,
     NoCommands,
 }
 
@@ -140,6 +141,7 @@ impl CheckOutcome {
         match self {
             CheckOutcome::Pass => "pass",
             CheckOutcome::Fail => "FAIL",
+            CheckOutcome::CheckError => "CHECK ERROR",
             CheckOutcome::NoCommands => "none in spec",
         }
     }
@@ -187,9 +189,10 @@ impl Round {
             RoundStatus::Done if no_changes && self.checks.is_none() => "done, no changes".into(),
             RoundStatus::Done => format!(
                 "done, checks {}",
-                self.checks
-                    .as_ref()
-                    .map_or("not run", |c| c.outcome.label())
+                self.checks.as_ref().map_or("not run", |c| match c.outcome {
+                    CheckOutcome::CheckError => "check error",
+                    outcome => outcome.label(),
+                })
             ),
         };
         match self.exit.filter(|&exit| exit != 0) {
@@ -498,6 +501,7 @@ mod tests {
         for (outcome, expected) in [
             (CheckOutcome::Pass, "pass"),
             (CheckOutcome::Fail, "FAIL"),
+            (CheckOutcome::CheckError, "check error"),
             (CheckOutcome::NoCommands, "none in spec"),
         ] {
             let mut r = Round {
@@ -540,6 +544,26 @@ mod tests {
         assert_eq!(r.exit, None);
         assert!(!r.research);
         assert_eq!(r.status_label(false), "done, checks not run");
+    }
+
+    #[test]
+    fn check_outcomes_round_trip_and_old_rounds_still_load() {
+        for (stored, outcome) in [
+            ("pass", CheckOutcome::Pass),
+            ("fail", CheckOutcome::Fail),
+            ("check_error", CheckOutcome::CheckError),
+            ("no_commands", CheckOutcome::NoCommands),
+        ] {
+            let json = format!(
+                r#"{{"number":1,"tier":"standard","worker":"pi:test","status":"done","checks":{{"outcome":"{stored}","commit":"abc"}}}}"#
+            );
+            let r: Round = serde_json::from_str(&json).unwrap();
+            assert_eq!(r.checks.as_ref().unwrap().outcome, outcome);
+            assert_eq!(r.exit, None);
+            let saved = serde_json::to_string(&r).unwrap();
+            let restored: Round = serde_json::from_str(&saved).unwrap();
+            assert_eq!(restored.checks.unwrap().outcome, outcome);
+        }
     }
 
     #[test]

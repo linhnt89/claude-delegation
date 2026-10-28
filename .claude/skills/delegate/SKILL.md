@@ -71,7 +71,11 @@ What happens:
 - **Work phase** continues in the same session, then the runner commits and runs the
   acceptance commands itself (`CHECKS.txt`).
 - **Fallbacks:** if a candidate can't start (quota, auth), the next one in the tier is used.
-- **Step-up:** after failed checks, the next run goes one tier higher automatically.
+- **Step-up:** after `[defaults] step_up_after` product-failing rounds at the current tier
+  (default 1), the next run goes one tier higher, up to deep. A passing round resets the count;
+  check errors (exit 3) and unfinished rounds neither count nor reset it. After a check error,
+  fix the broken check or the spec's Acceptance; the next run stays at the same tier. Automatic
+  selection never steps down, even after a pass.
 - `--no-ask` skips the question phase; `--worker harness:model@effort` overrides the config
   for a one-off; `--dry-run` shows the tier and candidates.
 - `--research` runs a read-only research task (research tiers, no question phase, no checks):

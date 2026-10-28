@@ -8,7 +8,8 @@
 #
 # A scenario is a folder evals/scenarios/<ID>-<slug>/ with scenario.md (what it checks, the
 # part people approve) and an executable `check`. Exit codes of `check`:
-#   0 pass   1 fail   2 needs a human (prints what to look at)   77 skipped
+#   0 pass   1 fail   2 needs a human (prints what to look at)   3 check error   77 skipped
+# Runner exit: 1 if anything failed; otherwise 3 if any check errored; otherwise 0.
 # Its last output line is shown as the reason. Each check runs in a fresh, empty directory
 # with these variables set:
 #   EVALS_ROOT      project root            EVALS_DIR    this evals/ folder
@@ -74,7 +75,7 @@ ids=()
 for a in "$@"; do
   case "$a" in
     fast|full|benchmark|all) selection="$a" ;;
-    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) ids+=("$a") ;;
   esac
 done
@@ -112,12 +113,16 @@ done
 mkdir -p "$results/logs" "$results/work"
 out="$results/$selection.txt"
 : >"$out"
-pass=0 fail=0 human=0 skip=0 nocheck=0
+pass=0 fail=0 checkerror=0 human=0 skip=0 nocheck=0
 # report <id> <verdict> <scenario dir> <detail>: one line; failures add what happened and
 # what it means for the user, so nobody needs to remember what an id stands for.
 report() {
   local t; t="$(title "$3")"
-  printf '%-8s %s  (%s)\n' "$2" "${t:-$(basename "$3")}" "$1" | tee -a "$out"
+  if [ "$2" = "check error" ]; then
+    printf '%s %s  (%s): %s\n' "$2" "${t:-$(basename "$3")}" "$1" "$4" | tee -a "$out"
+  else
+    printf '%-8s %s  (%s)\n' "$2" "${t:-$(basename "$3")}" "$1" | tee -a "$out"
+  fi
   case "$2" in
     FAIL|HUMAN)
       [ -n "$4" ] && printf '         what happened: %s\n' "$4" | tee -a "$out"
@@ -160,13 +165,16 @@ for entry in "${sorted[@]}"; do
   case "$rc" in
     0) pass=$((pass + 1)); report "$label" "pass" "$d" "${secs}s" ;;
     2) human=$((human + 1)); report "$label" "HUMAN" "$d" "$reason" ;;
+    3) checkerror=$((checkerror + 1)); report "$label" "check error" "$d" "$reason" ;;
     77) skip=$((skip + 1)); report "$label" "skip" "$d" "$reason" ;;
     124) fail=$((fail + 1)); report "$label" "FAIL" "$d" "timed out after ${limit}s" ;;
     *) fail=$((fail + 1)); report "$label" "FAIL" "$d" "$reason" ;;
   esac
 done
 
-echo "-- $pass passed, $fail failed, $human need a human, $skip skipped, $nocheck not automated yet" | tee -a "$out"
+echo "-- $pass passed, $fail failed, $checkerror check error, $human need a human, $skip skipped, $nocheck not automated yet" | tee -a "$out"
 echo "   results: $out   logs: $results/logs/" | tee -a "$out"
 [ -z "$hidden" ] && echo "   (no hidden scenarios found)"
-[ "$fail" -eq 0 ]
+[ "$fail" -gt 0 ] && exit 1
+[ "$checkerror" -gt 0 ] && exit 3
+exit 0

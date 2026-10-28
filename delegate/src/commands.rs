@@ -126,22 +126,51 @@ fn pick_tier(
     if let Some(tier) = given {
         return Ok((tier, "given".into()));
     }
-    let last_tier = t.last_round().and_then(|r| r.tier);
-    let (mut tier, mut why) = match (t.last_round(), last_tier) {
-        (Some(r), Some(prev))
-            if r.status == RoundStatus::Done
-                && r.checks
-                    .as_ref()
-                    .is_some_and(|c| c.outcome == CheckOutcome::Fail) =>
-        {
-            (
-                prev.next(),
-                format!("stepped up after failed checks at {prev}"),
-            )
-        }
-        (Some(_), Some(prev)) => (prev, "same as previous round".into()),
-        _ => (cfg.default_tier(role), "default".into()),
-    };
+    // Even a custom or explicitly lowered round must not lower later automatic runs.
+    let previous = t.state.rounds.iter().filter_map(|r| r.tier).max();
+    let mut tier = previous.unwrap_or_else(|| cfg.default_tier(role));
+    let mut why = if previous.is_some() {
+        "same as previous round"
+    } else {
+        "default"
+    }
+    .to_string();
+    let finished = t
+        .state
+        .rounds
+        .iter()
+        .rev()
+        .filter(|r| r.tier == Some(tier) && r.status == RoundStatus::Done);
+    let last_checks = t.last_done().and_then(|r| r.checks.as_ref());
+    let failures: u64 = finished
+        .take_while(|r| {
+            r.checks
+                .as_ref()
+                .is_none_or(|c| c.outcome != CheckOutcome::Pass)
+        })
+        .filter(|r| {
+            r.checks
+                .as_ref()
+                .is_some_and(|c| c.outcome == CheckOutcome::Fail)
+        })
+        .map(|_| 1_u64)
+        .sum();
+    let threshold = cfg.defaults.step_up_after;
+    if last_checks.is_some_and(|c| c.outcome == CheckOutcome::CheckError) {
+        why = "same tier (check error, not a product failure)".into();
+    } else if failures >= threshold {
+        why = if threshold == 1 {
+            format!("stepped up after failed checks at {tier}")
+        } else {
+            format!("stepped up after {threshold} failed rounds at {tier}")
+        };
+        tier = tier.next();
+    } else if failures > 0 && threshold > 1 {
+        why = format!(
+            "try {} at {tier} ({failures} of {threshold} failed rounds)",
+            failures + 1
+        );
+    }
     if role == Role::Research {
         return Ok((tier, why));
     }
@@ -412,7 +441,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     if t.last_done().is_some_and(|r| {
         r.checks
             .as_ref()
-            .is_some_and(|c| c.outcome == CheckOutcome::Fail)
+            .is_some_and(|c| matches!(c.outcome, CheckOutcome::Fail | CheckOutcome::CheckError))
     }) {
         fs::copy(t.dir.join("CHECKS.txt"), &checks_path).context(
             "copying failed checks into .task/CHECKS.txt; restore the task's CHECKS.txt and retry",
@@ -674,7 +703,11 @@ fn run_checks(ctx: &Ctx, t: &Task, operation: &Operation) -> Result<Checks> {
     operation.phase("checks")?;
     let cmds = spec::acceptance_commands(&t.spec_text()?);
     let mut lines = Vec::new();
-    let mut all_ok = true;
+    let mut outcome = if cmds.is_empty() {
+        CheckOutcome::NoCommands
+    } else {
+        CheckOutcome::Pass
+    };
     if cmds.is_empty() {
         lines.push(
             "no runnable acceptance commands in the spec (lines like: - [ ] `command`)".to_string(),
@@ -684,8 +717,20 @@ fn run_checks(ctx: &Ctx, t: &Task, operation: &Operation) -> Result<Checks> {
     for c in &cmds {
         let full = [sb.clone(), vec!["bash".into(), "-c".into(), c.clone()]].concat();
         let (rc, out) = run_with_timeout(&full, &t.wt)?;
-        all_ok &= rc == 0;
-        lines.push(format!("{}  {c}", if rc == 0 { "PASS" } else { "FAIL" }));
+        let label = match rc {
+            0 => "PASS",
+            3 => {
+                if outcome != CheckOutcome::Fail {
+                    outcome = CheckOutcome::CheckError;
+                }
+                "CHECK ERROR"
+            }
+            _ => {
+                outcome = CheckOutcome::Fail;
+                "FAIL"
+            }
+        };
+        lines.push(format!("{label}  {c}"));
         if rc != 0 {
             let tail: Vec<&str> = out.trim().lines().collect();
             lines.extend(
@@ -698,11 +743,6 @@ fn run_checks(ctx: &Ctx, t: &Task, operation: &Operation) -> Result<Checks> {
     // Leave the worktree exactly at the committed branch.
     git(&t.wt, &["reset", "-q", "--hard", "HEAD"])?;
     git(&t.wt, &["clean", "-q", "-fd"])?;
-    let outcome = match (cmds.is_empty(), all_ok) {
-        (true, _) => CheckOutcome::NoCommands,
-        (false, true) => CheckOutcome::Pass,
-        (false, false) => CheckOutcome::Fail,
-    };
     fs::write(t.dir.join("CHECKS.txt"), lines.join("\n") + "\n")?;
     let commit = t.head(ctx)?;
     println!("{}", lines.join("\n"));
@@ -731,6 +771,17 @@ fn summary(ctx: &Ctx, t: &Task) -> Result<()> {
         "checks:   {checks} ({})",
         t.dir.join("CHECKS.txt").display()
     )?;
+    if r.checks
+        .as_ref()
+        .is_some_and(|c| c.outcome == CheckOutcome::CheckError)
+    {
+        for line in fs::read_to_string(t.dir.join("CHECKS.txt"))?
+            .lines()
+            .filter(|line| line.starts_with("CHECK ERROR  "))
+        {
+            writeln!(text, "          {line}")?;
+        }
+    }
     writeln!(text, "branch:   {} (base {base})", t.branch)?;
     writeln!(text, "worktree: {}", t.wt.display())?;
     writeln!(text, "report:   {}", t.dir.join("REPORT.md").display())?;
@@ -1153,6 +1204,10 @@ pub(crate) fn merge_readiness(
                     ),
                 ),
                 CheckOutcome::Fail => block(failed_checks_problem(t), format!("delegate run {id}")),
+                CheckOutcome::CheckError => block(
+                    "an acceptance check is broken; fix the check (or correct the spec's Acceptance) before merging".into(),
+                    format!("fix the check or correct {}, then delegate check {id}", t.spec.display()),
+                ),
             },
         }
         let review = t.state.review.as_ref().filter(|r| r.commit == head);
@@ -1369,6 +1424,207 @@ mod tests {
         assert_eq!(output, "1");
     }
 
+    fn tier_task() -> Task {
+        Task {
+            id: "t001".into(),
+            dir: PathBuf::new(),
+            wt: PathBuf::new(),
+            branch: "task/t001".into(),
+            spec: PathBuf::new(),
+            state: crate::task::State::default(),
+        }
+    }
+
+    fn tier_round(
+        t: &mut Task,
+        tier: Option<Tier>,
+        status: RoundStatus,
+        outcome: Option<CheckOutcome>,
+    ) {
+        t.state.rounds.push(Round {
+            number: u32::try_from(t.state.rounds.len()).unwrap() + 1,
+            tier,
+            worker: None,
+            status,
+            research: false,
+            exit: None,
+            checks: outcome.map(|outcome| Checks {
+                outcome,
+                commit: "abc".into(),
+            }),
+        });
+    }
+
+    fn automatic_tier(t: &Task, n: u64) -> (Tier, String) {
+        let mut cfg: WorkersConfig = toml::from_str(crate::config::WORKERS_EXAMPLE).unwrap();
+        cfg.defaults.step_up_after = n;
+        pick_tier(t, Role::Implement, None, &cfg, &ProjectRules::default(), "").unwrap()
+    }
+
+    #[test]
+    fn pick_tier_counts_product_failures_for_one_two_and_three() {
+        for n in 1..=3 {
+            let mut t = tier_task();
+            assert_eq!(automatic_tier(&t, n), (Tier::Standard, "default".into()));
+            for tier in [Tier::Fast, Tier::Standard, Tier::Deep] {
+                for m in 1..=n {
+                    tier_round(
+                        &mut t,
+                        Some(tier),
+                        RoundStatus::Done,
+                        Some(CheckOutcome::Fail),
+                    );
+                    let expected = if m == n {
+                        (
+                            tier.next(),
+                            if n == 1 {
+                                format!("stepped up after failed checks at {tier}")
+                            } else {
+                                format!("stepped up after {n} failed rounds at {tier}")
+                            },
+                        )
+                    } else {
+                        (
+                            tier,
+                            format!("try {} at {tier} ({m} of {n} failed rounds)", m + 1),
+                        )
+                    };
+                    assert_eq!(automatic_tier(&t, n), expected);
+                }
+            }
+            // A passing deep round never returns to the configured standard default.
+            tier_round(
+                &mut t,
+                Some(Tier::Deep),
+                RoundStatus::Done,
+                Some(CheckOutcome::Pass),
+            );
+            assert_eq!(
+                automatic_tier(&t, n),
+                (Tier::Deep, "same as previous round".into())
+            );
+        }
+    }
+
+    #[test]
+    fn pick_tier_check_errors_and_unfinished_rounds_neither_count_nor_reset() {
+        for n in 1..=3 {
+            let mut t = tier_task();
+            for m in 0..n {
+                if m > 0 {
+                    tier_round(
+                        &mut t,
+                        Some(Tier::Standard),
+                        RoundStatus::Done,
+                        Some(CheckOutcome::Fail),
+                    );
+                }
+                tier_round(
+                    &mut t,
+                    Some(Tier::Standard),
+                    RoundStatus::Done,
+                    Some(CheckOutcome::CheckError),
+                );
+                for status in [
+                    RoundStatus::Failed,
+                    RoundStatus::Running,
+                    RoundStatus::Questions,
+                ] {
+                    tier_round(&mut t, Some(Tier::Standard), status, None);
+                    assert_eq!(
+                        automatic_tier(&t, n),
+                        (
+                            Tier::Standard,
+                            "same tier (check error, not a product failure)".into()
+                        )
+                    );
+                }
+            }
+            tier_round(
+                &mut t,
+                Some(Tier::Standard),
+                RoundStatus::Done,
+                Some(CheckOutcome::Fail),
+            );
+            tier_round(&mut t, Some(Tier::Standard), RoundStatus::Failed, None);
+            assert_eq!(automatic_tier(&t, n).0, Tier::Deep);
+        }
+    }
+
+    #[test]
+    fn pick_tier_pass_resets_failures_and_no_checks_dont() {
+        let mut t = tier_task();
+        for outcome in [
+            CheckOutcome::Fail,
+            CheckOutcome::Pass,
+            CheckOutcome::Fail,
+            CheckOutcome::NoCommands,
+        ] {
+            tier_round(
+                &mut t,
+                Some(Tier::Standard),
+                RoundStatus::Done,
+                Some(outcome),
+            );
+        }
+        tier_round(&mut t, Some(Tier::Standard), RoundStatus::Done, None);
+        assert_eq!(
+            automatic_tier(&t, 2),
+            (
+                Tier::Standard,
+                "try 2 at standard (1 of 2 failed rounds)".into()
+            )
+        );
+        tier_round(
+            &mut t,
+            Some(Tier::Standard),
+            RoundStatus::Done,
+            Some(CheckOutcome::Fail),
+        );
+        assert_eq!(automatic_tier(&t, 2).0, Tier::Deep);
+    }
+
+    #[test]
+    fn pick_tier_never_steps_down_after_custom_or_lowered_rounds() {
+        let mut t = tier_task();
+        tier_round(
+            &mut t,
+            Some(Tier::Deep),
+            RoundStatus::Done,
+            Some(CheckOutcome::Pass),
+        );
+        tier_round(
+            &mut t,
+            Some(Tier::Fast),
+            RoundStatus::Done,
+            Some(CheckOutcome::Pass),
+        );
+        tier_round(&mut t, None, RoundStatus::Done, Some(CheckOutcome::Pass));
+        assert_eq!(automatic_tier(&t, 1).0, Tier::Deep);
+    }
+
+    #[test]
+    fn pick_tier_explicit_override_and_project_minimum_still_apply() {
+        let mut t = tier_task();
+        tier_round(
+            &mut t,
+            Some(Tier::Standard),
+            RoundStatus::Done,
+            Some(CheckOutcome::CheckError),
+        );
+        let cfg: WorkersConfig = toml::from_str(crate::config::WORKERS_EXAMPLE).unwrap();
+        let rules: ProjectRules =
+            toml::from_str("[[rules]]\npaths = [\"src/**\"]\nmin_tier = \"deep\"").unwrap();
+        let spec = "## Scope\n- In: `src/code.rs`\n";
+        let (tier, why) = pick_tier(&t, Role::Implement, None, &cfg, &rules, spec).unwrap();
+        assert_eq!(tier, Tier::Deep);
+        assert!(why.starts_with("raised by .delegate.toml rule"));
+        assert_eq!(
+            pick_tier(&t, Role::Implement, Some(Tier::Fast), &cfg, &rules, spec).unwrap(),
+            (Tier::Fast, "given".into())
+        );
+    }
+
     struct TestRepo(PathBuf);
 
     impl Drop for TestRepo {
@@ -1427,6 +1683,30 @@ mod tests {
         }];
         t.save()?;
         Ok((repo, ctx, t))
+    }
+
+    #[test]
+    fn check_error_blocks_merge_with_repair_instructions() -> Result<()> {
+        let (_repo, ctx, mut t) = merge_fixture()?;
+        t.state.rounds[0].checks.as_mut().unwrap().outcome = CheckOutcome::CheckError;
+        t.save()?;
+        let before = git(&ctx.root, &["rev-parse", "HEAD"])?;
+        let readiness = merge_readiness(&ctx, &t, false, None);
+        assert!(
+            readiness
+                .blockers
+                .iter()
+                .any(|s| s.contains("check is broken"))
+        );
+        let next = readiness.next.unwrap();
+        assert!(next.contains("fix the check"));
+        assert!(next.contains("delegate check t001"));
+        let error = merge(&ctx, "t001", false).unwrap_err().to_string();
+        assert!(error.contains("spec's Acceptance"), "{error}");
+        assert!(error.contains("before merging"), "{error}");
+        assert_eq!(git(&ctx.root, &["rev-parse", "HEAD"])?, before);
+        assert!(t.dir.is_dir());
+        Ok(())
     }
 
     fn owner_command(ctx: &Ctx, id: &str, action: &str, session: Option<&str>) -> Result<()> {
