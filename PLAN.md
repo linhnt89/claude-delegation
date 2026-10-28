@@ -30,11 +30,14 @@
   `evals/run` (via `where --pull`), `hidden add` and `setup --vault` sync, with hard network
   limits and one sync at a time. t035 (sync on every command, within a budget) was discarded.
   Checks by GPT, fix by Claude Sonnet, eight rounds and six cross-family reviews.
+- t044–t048 (2026-10-28): decision 013. Checks that exit 3 are check errors and don't step a
+  task up; `step_up_after` sets how many product failures come first; tasks never step down;
+  implementers skip the family named by `checks_by:` (from `Worker:` merge trailers).
+  Checks by DeepSeek (t047, t048), fixes by Sol; installed in `~/.local/bin` on 2026-10-28.
 
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t044 | Check errors (exit 3) don't step up a tier; `step_up_after` in `[defaults]`; never step down (decision 013) | ready | t045 | Implementers skip the family that wrote the task's checks: `checks_by` in specs, `Worker:` merge trailer (decision 013) | running | – | standard | S069, S070 + `scripts/check` | `merge`, `run` candidates, spec template, skill + kit mirror |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
