@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# S081: a long task skips an account whose runway is already shared with running tasks.
+. "$EVALS_LIB/common.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+standard = ["codex:codex-worker@high", "pi:github-copilot/copilot-worker@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+[quota]
+check = true
+[quota.runway]
+small = "30m"
+medium = "1h"
+long = "3h"
+T
+install_stub codex
+stub_worker codex-worker <<'B'
+work() { wait_flag hold-s081 300 || true; }
+B
+stub_worker copilot-worker <<'B'
+work() { wait_flag hold-s081 300 || true; }
+B
+trap kill_runs EXIT
+python3 "$EVALS_LIB/wave_checks.py" S081
+rc=$?
+exit "$rc"

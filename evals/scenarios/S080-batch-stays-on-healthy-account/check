@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# S080: tasks started together stay on the tier's first account while its shared runway covers them.
+. "$EVALS_LIB/common.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+standard = ["codex:codex-worker@high", "pi:github-copilot/copilot-worker@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+[quota]
+check = true
+[quota.runway]
+small = "30m"
+medium = "1h"
+long = "3h"
+T
+install_stub codex
+stub_worker codex-worker <<'B'
+work() { wait_flag hold-s080 300 || true; }
+B
+stub_worker copilot-worker <<'B'
+work() { wait_flag hold-s080 300 || true; }
+B
+trap kill_runs EXIT
+python3 "$EVALS_LIB/wave_checks.py" S080
+rc=$?
+exit "$rc"

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# S079: a new task whose Scope In overlaps a running task's warns and starts anyway.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers
+stub_worker gpt-good <<'B'
+work() { wait_flag hold-s079 300 || true; }
+B
+trap kill_runs EXIT
+
+cerr() { echo "CHECK ERROR: $*"; exit 3; }
+low() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+has() { low "$1" | grep -Eqi -- "$2"; }
+warning() { # <output>: names the running task and the shared path, and how to avoid it
+  has "$1" 't001' &&
+    has "$1" 'src/price\.rs' &&
+    has "$1" 'overlap|share|both (edit|touch)|also (edit|touch)|same file|conflict|clash' &&
+    has "$1" 'split|apart|(after|once|until)[^\n]*merg|merg[^\n]*(then|before|first)|run .* after'
+}
+no_warning() { ! has "$1" 't001' && ! has "$1" 'overlap'; }
+running() { wait_field "${2:-20}" "$1" phase implement || cerr "$1 never reached its work phase"; }
+
+mk() { SCOPE="$2" write_spec "$1" "$3" "Do it." "true"; }
+
+mk t001 '`src/cart.rs`, `src/price.rs`' "cart and price"
+mk t002 '`src/price.rs`, `src/tax.rs`' "price and tax"
+mk t003 '`docs/**`' "docs only"
+
+bg_run t001; [ "$RC" -eq 0 ] || cerr "could not start t001: $OUT"
+running t001
+
+# A task sharing src/price.rs with the running t001 warns and still starts.
+bg_run t002; out2="$OUT"; [ "$RC" -eq 0 ] || cerr "could not start t002: $OUT"
+running t002
+warning "$out2" || fail "starting t002 did not print a warning naming t001 and src/price.rs and how to avoid it: $(printf '%s' "$out2" | tr '\n' ' ')"
+
+# A task touching only docs/** does not warn.
+bg_run t003; out3="$OUT"; [ "$RC" -eq 0 ] || cerr "could not start t003: $OUT"
+running t003
+no_warning "$out3" || fail "starting t003, which lists only docs/**, printed an overlap warning: $(printf '%s' "$out3" | tr '\n' ' ')"
+
+# Once t001 is gone, a path only it listed no longer warns.
+pid="$(sj 's["tasks"][0]["pid"]' t001)"
+[ -n "$pid" ] || cerr "could not read t001's runner pid"
+kill -KILL -- "-$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null
+sleep 0.3
+d discard t001; [ "$RC" -eq 0 ] || cerr "could not discard t001: $OUT"
+mk t005 '`src/cart.rs`' "cart only"
+bg_run t005; out5="$OUT"; [ "$RC" -eq 0 ] || cerr "could not start t005: $OUT"
+running t005
+no_warning "$out5" || fail "after t001 was discarded, starting t005 (src/cart.rs) still warned about it: $(printf '%s' "$out5" | tr '\n' ' ')"
+
+# A glob in one spec matching a path in the other counts as overlap.
+mk t006 '`src/**`' "glob overlap"
+bg_run t006; out6="$OUT"; [ "$RC" -eq 0 ] || cerr "could not start t006: $OUT"
+running t006
+has "$out6" 't005' && has "$out6" 'src/cart\.rs|src/\*\*' \
+  || fail "a glob (src/**) matching running t005's src/cart.rs did not warn: $(printf '%s' "$out6" | tr '\n' ' ')"
+
+# A spec with no Scope In paths neither warns nor errors.
+mk t007 '`src/cart.rs`' "no scope"
+sed -i '/^- In:/d' "$DHOME/t007/SPEC.md"
+bg_run t007; out7="$OUT"; [ "$RC" -eq 0 ] || fail "an empty Scope In made the run fail: $OUT"
+running t007
+no_warning "$out7" || fail "a spec with no Scope In paths warned about an overlap: $(printf '%s' "$out7" | tr '\n' ' ')"
+
+pass "t002 warned about t001 and src/price.rs and still started, t003 (docs/** only) did not warn, a discarded task's files no longer warned, a glob counted as overlap, and a path-less scope was silent"
