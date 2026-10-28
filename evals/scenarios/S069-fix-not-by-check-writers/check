@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# t001 wrote the checks as a GPT worker; t002's checks_by skips that family.
+. "$EVALS_LIB/common.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "fast"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-good@high", "pi:deepseek-fixer@high"]
+standard = ["pi:gpt-typer@high", "pi:deepseek-fixer@high"]
+deep = ["pi:gpt-typer@high", "pi:deepseek-fixer@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+stub_worker gpt-good <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; }
+B
+stub_worker gpt-typer <<'B'
+work() { printf '\n\ndef split_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; }
+B
+stub_worker deepseek-fixer <<'B'
+work() { printf '\n\ndef split_bill(amount, people):\n    return amount // people\n' >>shop/pricing.py; }
+B
+
+# t001 exists but has not been merged yet: a checks_by task with no merge commit.
+write_spec t001 "Add divide_bill" "Add divide_bill." "python3 -m unittest -q"
+write_spec t002 "Add split_bill" "Add split_bill." "python3 -c 'from shop.pricing import split_bill as s; assert s(10, 3) == 3.33'"
+spec="${OUT##*$'\n'}"
+sed -i '1a checks_by: t001' "$spec"
+
+d run t002 --dry-run
+echo "$OUT" | grep -qF "can't tell who wrote t001's checks" \
+  || fail "checks_by t001 with no merge commit didn't say it can't tell: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -q "candidate: pi:gpt-good@high" \
+  || fail "the run didn't go on without the family rule: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qF "skipping the gpt family" \
+  && fail "it applied a family rule although it couldn't tell who wrote t001's checks: $(echo "$OUT" | tr '\n' ' ')"
+
+# t001 runs on a GPT worker and merges.
+d run t001
+[ "$RC" -eq 0 ] || fail "setup: t001 run failed: $(echo "$OUT" | tail -3)"
+d merge t001
+[ "$RC" -eq 0 ] || fail "setup: t001 merge failed: $(echo "$OUT" | tail -3)"
+
+subject="$(git -C "$PROJ" log -1 --format=%s)"
+[ "$subject" = "t001: Add divide_bill" ] || fail "setup: t001's merge commit is '$subject'"
+trailer="$(git -C "$PROJ" log -1 --format='%(trailers:key=Worker,valueonly)')"
+[ "$trailer" = "pi:gpt-good@high" ] \
+  || fail "t001's merge commit has no Worker: pi:gpt-good@high trailer (got '$(echo "$trailer" | tr '\n' ' ')')"
+
+# Family rule: skip GPT, so t002 runs on DeepSeek.
+gpt_before="$(calls_where work gpt-good | wc -l)"
+d run t002 --dry-run
+echo "$OUT" | grep -qF "skipping the gpt family: t001 wrote its checks" \
+  || fail "the dry run didn't skip the gpt family: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -q "candidate: pi:deepseek-fixer@high" \
+  || fail "the dry run didn't offer the DeepSeek candidate: $(echo "$OUT" | grep candidate | tr '\n' ' ')"
+echo "$OUT" | grep -q "candidate: pi:gpt-good@high" \
+  && fail "the dry run still offered a GPT candidate: $(echo "$OUT" | grep candidate | tr '\n' ' ')"
+
+d run t002
+[ "$RC" -eq 0 ] || fail "t002 run failed: $(echo "$OUT" | tail -3)"
+echo "$OUT" | grep -qF "skipping the gpt family: t001 wrote its checks" \
+  || fail "the run didn't skip the gpt family: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(calls_where work gpt-good | wc -l)" = "$gpt_before" ] || fail "t002 was run by a GPT worker"
+[ -z "$(calls_where work gpt-typer)" ] || fail "t002 was run by a GPT worker"
+echo "$OUT" | grep -q "checks:   FAIL" \
+  || fail "setup: t002's first round didn't fail its checks: $(echo "$OUT" | grep checks | tr '\n' ' ')"
+
+# After failed checks it steps up; the GPT family must still be skipped.
+d run t002 --dry-run
+echo "$OUT" | grep -q "@ standard (stepped up after failed checks at fast)" \
+  || fail "t002 didn't step up to standard: $(echo "$OUT" | head -1)"
+echo "$OUT" | grep -qF "skipping the gpt family: t001 wrote its checks" \
+  || fail "the step-up dry run stopped skipping the gpt family: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -q "candidate: pi:gpt-typer@high" \
+  && fail "after the step-up the dry run offered a GPT candidate"
+
+d run t002
+[ "$RC" -eq 0 ] || fail "the step-up run failed: $(echo "$OUT" | tail -3)"
+echo "$OUT" | grep -qF "skipping the gpt family: t001 wrote its checks" \
+  || fail "the step-up run didn't skip the gpt family: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(calls_where work gpt-good | wc -l)" = "$gpt_before" ] || fail "the step-up run used a GPT worker"
+[ -z "$(calls_where work gpt-typer)" ] || fail "the step-up run used a GPT worker"
+
+# A spec without checks_by is unaffected.
+write_spec t003 "No check writers" "Add a helper." "python3 -m unittest -q"
+d run t003 --dry-run
+echo "$OUT" | grep -qF "skipping the" \
+  && fail "a spec without checks_by skipped a family: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -q "candidate: pi:gpt-good@high" \
+  || fail "a spec without checks_by didn't offer the first candidate: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -q "candidate: pi:deepseek-fixer@high" \
+  || fail "a spec without checks_by didn't offer the second candidate: $(echo "$OUT" | tr '\n' ' ')"
+
+pass "t001's merge carries its worker; t002 skipped the gpt family before and after the step-up, and a spec without checks_by ran as before"

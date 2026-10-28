@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Every candidate in t002's tier is GPT-family; the run must stop and say how to fix it.
+. "$EVALS_LIB/common.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-good@high"]
+standard = ["pi:gpt-good@high"]
+deep = ["pi:deepseek-fixer@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+stub_worker gpt-good <<'B'
+work() { printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n' >>shop/pricing.py; }
+B
+stub_worker deepseek-fixer <<'B'
+work() { printf '\n\ndef split_bill(amount, people):\n    return amount // people\n' >>shop/pricing.py; }
+B
+
+# t001 wrote the checks as a GPT worker and merged.
+write_spec t001 "Add divide_bill" "Add divide_bill." "python3 -m unittest -q"
+d run t001
+[ "$RC" -eq 0 ] || fail "setup: t001 run failed: $(echo "$OUT" | tail -3)"
+d merge t001
+[ "$RC" -eq 0 ] || fail "setup: t001 merge failed: $(echo "$OUT" | tail -3)"
+
+# t002's checks were written by t001; every candidate in its tier is GPT-family.
+write_spec t002 "Add split_bill" "Add split_bill." "python3 -m unittest -q"
+spec="${OUT##*$'\n'}"
+sed -i '1a checks_by: t001' "$spec"
+
+before="$(calls | wc -l)"
+d run t002
+[ "$RC" -ne 0 ] || fail "the run succeeded although no candidate outside the gpt family was left (exit $RC): $(echo "$OUT" | tr '\n' ' ')"
+for want in gpt t001 standard workers.toml; do
+  echo "$OUT" | grep -qi -- "$want" || fail "the message doesn't name '$want': $(echo "$OUT" | tr '\n' ' ')"
+done
+[ "$(calls | wc -l)" = "$before" ] || fail "a worker was started although no candidate was left: $(calls_where work | tr '\n' ' ')"
+d list
+echo "$OUT" | grep -Eq '^t002[[:space:]]+not run' || fail "a round was recorded although no candidate was left: $(echo "$OUT" | grep '^t002' | tr '\n' ' ')"
+pass "the run stopped before starting a worker and named gpt, t001, standard and workers.toml"
