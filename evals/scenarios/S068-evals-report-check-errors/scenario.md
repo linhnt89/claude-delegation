@@ -2,7 +2,7 @@
 - Job: J3
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Anyone running the evaluation set, and the runner gating a task on `evals/run <ids>`.

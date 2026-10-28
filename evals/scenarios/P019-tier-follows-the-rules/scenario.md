@@ -2,7 +2,7 @@
 - Job: J4
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Anyone running tasks without `--tier`. From: S013, S066, S067. Decision 013.
