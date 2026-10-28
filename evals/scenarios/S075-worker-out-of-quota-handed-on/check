@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# A worker that hits its usage limit must commit its work and hand off at the same tier.
+. "$EVALS_LIB/common.sh"
+setup_project
+
+workers_toml <<'T'
+planner_family = "claude"
+step_up_after = 1
+[defaults]
+implement = "fast"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["claude:claude-first", "codex:codex-second"]
+standard = ["codex:codex-standard"]
+deep = ["codex:codex-deep"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+[quota]
+check = false
+T
+
+install_stub claude
+install_stub codex
+stub_worker claude-first <<'B'
+work() {
+  cat >>shop/pricing.py <<'PY'
+
+
+def cart_total(items):
+    return sum(items)
+
+# S075 first worker's committed change
+PY
+  echo "Error: 429 You have hit your usage limit"
+  return 1
+}
+B
+stub_worker codex-second <<'B'
+work() {
+  cat >>shop/pricing.py <<'PY'
+
+
+def discounted_total(items, percent):
+    return round(cart_total(items) * (1 - percent / 100), 2)
+PY
+}
+B
+stub_worker codex-standard <<'B'
+work() { echo 'wrong-tier worker started'; return 1; }
+B
+stub_worker codex-deep <<'B'
+work() { echo 'wrong-tier worker started'; return 1; }
+B
+
+write_spec t001 "Continue after a quota limit" "Add cart_total and discounted_total." \
+  "python3 -c 'from shop.pricing import cart_total, discounted_total; assert cart_total([1.25, 2.75]) == 4.0; assert discounted_total([1.25, 2.75], 25) == 3.0'"
+
+d run t001
+run_output="$OUT"
+run_rc="$RC"
+first_call="$(calls_where work claude-first | head -1)"
+[ -n "$first_call" ] || fail "setup: the first stand-in worker did not run"
+second_call="$(calls_where work codex-second | head -1)"
+[ -n "$second_call" ] \
+  || fail "the worker that hit its quota was not handed off to the next candidate"
+echo "$run_output" | grep -qF 'hit its quota; continuing on the next candidate' \
+  || fail "the runner did not announce quota hand-over to the next candidate"
+[ -z "$(calls_where work codex-standard)" ] && [ -z "$(calls_where work codex-deep)" ] \
+  || fail "the quota round counted as a failed round and stepped up instead of staying at fast"
+
+# The next candidate must be told, in its prompt, that the prior worker's work was committed.
+python3 - "$HOME/.cache/stub/calls/$second_call/prompt" <<'PY' || fail "the next candidate was not told the quota worker's work was committed"
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+if not any(re.search(r"quota", line, re.I) and re.search(r"committed", line, re.I)
+           for line in text.splitlines()):
+    raise SystemExit(1)
+PY
+
+# A distinct intermediate tree proves the first worker's changes were committed before
+# the second worker added its work, rather than merely surviving as uncommitted files.
+branch=refs/heads/task/t001
+git -C "$PROJ" show-ref --verify --quiet "$branch" \
+  || fail "the run did not retain a task branch with committed worker changes"
+first_commit=""
+second_commit=""
+for commit in $(git -C "$PROJ" rev-list --reverse "$branch"); do
+  tree="$(git -C "$PROJ" show "$commit:shop/pricing.py" 2>/dev/null || true)"
+  if echo "$tree" | grep -qF "S075 first worker's committed change" \
+    && ! echo "$tree" | grep -qF 'def discounted_total'; then
+    first_commit="$commit"
+  fi
+  if echo "$tree" | grep -qF "S075 first worker's committed change" \
+    && echo "$tree" | grep -qF 'def discounted_total'; then
+    second_commit="$commit"
+  fi
+done
+[ -n "$first_commit" ] && [ -n "$second_commit" ] && [ "$first_commit" != "$second_commit" ] \
+  || fail "the first worker's work was not committed before the next worker's changes"
+git -C "$PROJ" merge-base --is-ancestor "$first_commit" "$second_commit" \
+  || fail "the second worker's commit did not continue from the first worker's commit"
+
+echo "$run_output" | grep -q 'checks:   pass' \
+  || fail "the second candidate did not finish the task with passing checks: $(echo "$run_output" | grep checks | tr '\n' ' ')"
+[ "$run_rc" -eq 0 ] || fail "delegate run did not finish successfully after quota hand-over"
+[ "$(calls_where work claude-first | wc -l | tr -d ' ')" = 1 ] \
+  || fail "the first candidate was run more than once"
+[ "$(calls_where work codex-second | wc -l | tr -d ' ')" = 1 ] \
+  || fail "the next candidate was run more than once"
+
+d list
+[ "$RC" -eq 0 ] || fail "delegate list failed after the successful hand-over: $OUT"
+echo "$OUT" | grep -Eq '^t001[[:space:]]+round [0-9]+ fast ' \
+  || fail "the hand-over did not stay at the fast tier: $(echo "$OUT" | tr '\n' ' ')"
+
+d merge t001
+[ "$RC" -eq 0 ] || fail "the hand-over task could not be merged: $OUT"
+trailers="$(git -C "$PROJ" log -1 --format='%(trailers:key=Worker,valueonly)')"
+echo "$trailers" | grep -Fxq 'claude:claude-first' \
+  || fail "the merge commit has no Worker: claude:claude-first trailer"
+echo "$trailers" | grep -Fxq 'codex:codex-second' \
+  || fail "the merge commit has no Worker: codex:codex-second trailer"
+
+pass "the quota-limited worker's work was committed and handed to the next candidate at fast; both workers appear on the merge"
