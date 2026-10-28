@@ -287,6 +287,62 @@ impl Task {
         }
     }
 
+    /// Workers on the newest matching commit with trailers on this task's base branch.
+    /// Task state is deleted after merge, so attribution must come from git history.
+    /// Ignore unattributed follow-ups; unreadable attribution imposes no family rule.
+    pub fn check_writers(&self, ctx: &Ctx, id: &str) -> Result<Vec<crate::config::Worker>> {
+        let base = self.base(ctx)?;
+        let history = git(
+            &ctx.root,
+            &["log", "--first-parent", "--format=%H%x00%s", &base, "--"],
+        )?;
+        let prefix = format!("{id}: ");
+        for commit in history.lines().filter_map(|line| {
+            let (commit, subject) = line.split_once('\0')?;
+            subject.starts_with(&prefix).then_some(commit)
+        }) {
+            let trailers = git(
+                &ctx.root,
+                &[
+                    "show",
+                    "-s",
+                    "--format=%(trailers:key=Worker,valueonly)",
+                    commit,
+                    "--",
+                ],
+            )?;
+            if trailers.is_empty() {
+                continue;
+            }
+            return Ok(trailers
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::parse)
+                .collect::<Result<Vec<_>>>()
+                .unwrap_or_default());
+        }
+        Ok(Vec::new())
+    }
+
+    /// Distinct workers whose rounds actually made commits, in round order.
+    pub fn committed_workers(&self, ctx: &Ctx) -> Result<Vec<String>> {
+        let range = format!("{}..{}", self.base(ctx)?, self.branch);
+        let subjects = git(&ctx.root, &["log", "--format=%s", &range, "--"])?;
+        let mut workers = Vec::new();
+        for round in &self.state.rounds {
+            let subject = format!("task {} round {}", self.id, round.number);
+            if !round.research
+                && subjects.lines().any(|line| line == subject)
+                && let Some(worker) = &round.worker
+                && !workers.contains(worker)
+            {
+                workers.push(worker.clone());
+            }
+        }
+        Ok(workers)
+    }
+
     pub fn head(&self, ctx: &Ctx) -> Result<String> {
         git(&ctx.root, &["rev-parse", &self.branch])
     }

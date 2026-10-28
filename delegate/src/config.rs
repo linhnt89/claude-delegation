@@ -134,7 +134,7 @@ const FAMILIES: &[(&str, &str)] = &[
 ];
 
 impl Worker {
-    /// Model family, inferred from the model name; used to keep reviewers independent.
+    /// Model family, inferred from the model name; keeps reviewers and check writers independent.
     pub fn family(&self) -> String {
         let name = self.model.to_lowercase();
         if let Some((_, fam)) = FAMILIES.iter().find(|(key, _)| name.contains(key)) {
@@ -243,16 +243,10 @@ pub struct WorkersConfig {
 
 impl WorkersConfig {
     pub fn load() -> Result<Self> {
-        let candidates = [
-            std::env::var_os("DELEGATE_WORKERS").map(PathBuf::from),
-            Some(user_config_path()),
-        ];
-        for path in candidates.into_iter().flatten() {
-            if path.is_file() {
-                let text = std::fs::read_to_string(&path)?;
-                return toml::from_str(&text)
-                    .with_context(|| format!("parsing {}", path.display()));
-            }
+        let path = workers_config_path();
+        if path.is_file() {
+            let text = std::fs::read_to_string(&path)?;
+            return toml::from_str(&text).with_context(|| format!("parsing {}", path.display()));
         }
         eprintln!(
             "note: no {}, using the built-in defaults (run: delegate setup)",
@@ -314,6 +308,14 @@ impl WorkersConfig {
         }
         Ok(kept)
     }
+}
+
+/// Configuration being read, or the path to create when using built-in defaults.
+pub fn workers_config_path() -> PathBuf {
+    std::env::var_os("DELEGATE_WORKERS")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .unwrap_or_else(user_config_path)
 }
 
 pub fn user_config_path() -> PathBuf {

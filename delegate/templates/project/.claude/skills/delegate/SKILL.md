@@ -31,6 +31,9 @@ If it is too big for one reviewable diff, split it first and add the pieces to `
   No agreed scenario for the feature yet → `/evaluate feature` first.
 - Scope In: list paths in backticks; project rules use them to raise the tier up front.
 - Scope Out: name files parallel tasks are touching.
+- When another task wrote the checks, set `checks_by: t001` (comma-separated ids allowed).
+  The runner skips those tasks' worker families on every implement round, including step-ups.
+  If none remain at that tier, add a candidate of another family to that tier in `workers.toml`.
 
 ## 3. Plan review (before a batch)
 For a multi-task plan, or any task you'd put at `deep`, run `delegate plan-review [ids...]`.
@@ -77,7 +80,8 @@ What happens:
   fix the broken check or the spec's Acceptance; the next run stays at the same tier. Automatic
   selection never steps down, even after a pass.
 - `--no-ask` skips the question phase; `--worker harness:model@effort` overrides the config
-  for a one-off; `--dry-run` shows the tier and candidates.
+  for debugging or demos, bypassing family rules; `--dry-run` shows the tier and candidates.
+  Do not pin `--worker` for family independence; use `checks_by` instead.
 - `--research` runs a read-only research task (research tiers, no question phase, no checks):
   the worker's `REPORT.md` is the result. Read it, keep what matters, then `delegate discard`.
 - `delegate new <id> --prune` starts from the stale-doc pruning spec.

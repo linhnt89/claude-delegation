@@ -1,5 +1,8 @@
 # Task <id>: <name>
 
+<!-- Optional: task ids that wrote these checks; implementers skip their model families. -->
+checks_by:
+
 ## Goal
 <1–2 lines, including why: the why lets you make good judgment calls.>
 

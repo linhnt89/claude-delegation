@@ -51,6 +51,21 @@ pub fn scope_paths(text: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Tasks that wrote the checks, listed on `checks_by:` lines anywhere in the spec.
+pub fn checks_by(text: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for line in text.lines() {
+        if let Some(value) = line.trim().strip_prefix("checks_by:") {
+            for id in value.split(',').map(str::trim).filter(|id| !id.is_empty()) {
+                if !ids.iter().any(|seen| seen == id) {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
 /// Spec title without the leading `# Task `: `t005: Add divide`.
 pub fn title(text: &str, id: &str) -> String {
     let first = text.lines().next().unwrap_or_default();
@@ -95,6 +110,22 @@ mod tests {
         ## Scope\n- In: `calc.py`, `tests/**`\n- Out: everything else\n\n\
         ## Acceptance\n- [ ] `python3 -m unittest -q`\n- [x] `cargo test` passes\n\
         - [ ] observable behavior\n  - [ ] `nested ok`\n\n## When done\n- `not a check`\n";
+
+    #[test]
+    fn reads_check_writers_anywhere_and_deduplicates() {
+        assert_eq!(checks_by(SPEC), Vec::<String>::new());
+        assert_eq!(checks_by("checks_by: \n"), Vec::<String>::new());
+        assert_eq!(
+            checks_by(
+                "# Task t005\nchecks_by: t001, t002\n## Goal\nGoal\n  checks_by: t002, t003, \n"
+            ),
+            ["t001", "t002", "t003"]
+        );
+        assert_eq!(
+            checks_by("<!-- checks_by: t001 -->\nprose checks_by: t002"),
+            Vec::<String>::new()
+        );
+    }
 
     #[test]
     fn reads_sections() {

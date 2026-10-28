@@ -288,6 +288,50 @@ fn asks_questions(t: &Task, a: &RunArgs) -> bool {
         }
 }
 
+/// Apply check-writer independence only to configured implement candidates.
+fn implement_candidates(
+    ctx: &Ctx,
+    t: &Task,
+    cfg: &WorkersConfig,
+    tier: Tier,
+    spec_text: &str,
+) -> Result<Vec<Worker>> {
+    let mut workers = cfg.candidates(Role::Implement, tier, None)?;
+    let mut excluded = Vec::new();
+    for id in spec::checks_by(spec_text) {
+        let authors = t.check_writers(ctx, &id)?;
+        if authors.is_empty() {
+            println!(
+                "can't tell who wrote {id}'s checks (no Worker trailer on its merge); running without that rule"
+            );
+        }
+        for author in authors {
+            let family = author.family();
+            if !excluded.iter().any(|(seen, _)| seen == &family) {
+                println!("skipping the {family} family: {id} wrote its checks");
+                excluded.push((family, id.clone()));
+            }
+        }
+    }
+    workers.retain(|worker| {
+        !excluded
+            .iter()
+            .any(|(family, _)| *family == worker.family())
+    });
+    if workers.is_empty() {
+        let reasons = excluded
+            .iter()
+            .map(|(family, id)| format!("{family} family ({id} wrote its checks)"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "no [implement].{tier} candidate remains after excluding {reasons}; add a candidate of another family to [implement].{tier} in {}",
+            crate::config::workers_config_path().display()
+        );
+    }
+    Ok(workers)
+}
+
 pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     let mut t = Task::load(ctx, &a.id)?;
     status::ensure_idle(&t)?;
@@ -342,7 +386,12 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         )
     } else {
         let (tier, why) = pick_tier(&t, role, a.tier, &cfg, &rules, &spec_text)?;
-        (Some(tier), why, cfg.candidates(role, tier, None)?)
+        let workers = if role == Role::Implement {
+            implement_candidates(ctx, &t, &cfg, tier, &spec_text)?
+        } else {
+            cfg.candidates(role, tier, None)?
+        };
+        (Some(tier), why, workers)
     };
     let tier_label = tier.map_or_else(|| "custom".into(), |x| x.to_string());
     println!(
@@ -384,10 +433,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         }
     }
     if available.is_empty() {
-        let config_path = std::env::var_os("DELEGATE_WORKERS")
-            .map(std::path::PathBuf::from)
-            .filter(|path| path.is_file())
-            .unwrap_or_else(crate::config::user_config_path);
+        let config_path = crate::config::workers_config_path();
         let fix = if a.worker.is_some() {
             "install it or pick another --worker".to_string()
         } else {
@@ -1326,11 +1372,18 @@ pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
     let text = t.spec_text()?;
     let title = spec::title(&text, id);
     let goal = spec::goal(&text);
-    let msg = if goal.is_empty() {
+    let mut msg = if goal.is_empty() {
         title.clone()
     } else {
         format!("{title}\n\n{goal}")
     };
+    let workers = t.committed_workers(ctx)?;
+    if !workers.is_empty() {
+        msg.push('\n');
+        for worker in workers {
+            write!(msg, "\nWorker: {worker}")?;
+        }
+    }
     let saved_head = git(&ctx.root, &["rev-parse", "HEAD"])?;
     let merged = git(&ctx.root, &["merge", "-q", "--squash", &t.branch])
         .and_then(|_| git(&ctx.root, &["commit", "-q", "-m", &msg]));
@@ -1683,6 +1736,233 @@ mod tests {
         }];
         t.save()?;
         Ok((repo, ctx, t))
+    }
+
+    #[test]
+    fn merge_trailers_include_only_committing_workers_in_round_order() -> Result<()> {
+        let (_repo, ctx, mut t) = merge_fixture()?;
+        git(&t.wt, &["commit", "--amend", "-qm", "task t001 round 1"])?;
+        t.state.rounds[0].worker = Some("pi:gpt-test@high".into());
+        for (number, worker) in [(2, "pi:deepseek-test@high"), (3, "pi:gpt-test@high")] {
+            fs::write(t.wt.join("code"), format!("round {number}\n"))?;
+            git(
+                &t.wt,
+                &["commit", "-qam", &format!("task t001 round {number}")],
+            )?;
+            t.state.rounds.push(Round {
+                number,
+                worker: Some(worker.into()),
+                ..t.state.rounds[0].clone()
+            });
+        }
+        // A done round that changed nothing must not acquire attribution.
+        t.state.rounds.push(Round {
+            number: 4,
+            worker: Some("claude:sonnet@high".into()),
+            checks: Some(Checks {
+                outcome: CheckOutcome::Pass,
+                commit: t.head(&ctx)?,
+            }),
+            ..t.state.rounds[0].clone()
+        });
+        t.save()?;
+        merge(&ctx, &t.id, false)?;
+        assert_eq!(
+            git(
+                &ctx.root,
+                &["log", "-1", "--format=%(trailers:key=Worker,valueonly)"]
+            )?,
+            "pi:gpt-test@high\npi:deepseek-test@high"
+        );
+        assert!(!t.dir.exists());
+        let implementer = Task::load(&ctx, "t002")?;
+        let authors = implementer.check_writers(&ctx, "t001")?;
+        assert_eq!(
+            authors.iter().map(Worker::family).collect::<Vec<_>>(),
+            ["gpt", "deepseek"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn check_writer_lookup_uses_latest_attributed_subject_on_base() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        assert_eq!(t.check_writers(&ctx, "t001")?, Vec::<Worker>::new());
+        // An unmerged task branch must not supply the trailers.
+        git(
+            &t.wt,
+            &[
+                "commit",
+                "--amend",
+                "-qm",
+                "t001: Unmerged\n\nWorker: claude:sonnet@high",
+            ],
+        )?;
+        git(
+            &ctx.root,
+            &[
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "t0010: Other task\n\nMentions t001: in the body\n\nWorker: claude:sonnet@high",
+            ],
+        )?;
+        assert_eq!(t.check_writers(&ctx, "t001")?, Vec::<Worker>::new());
+        git(
+            &ctx.root,
+            &["commit", "--allow-empty", "-qm", "t001: Legacy merge"],
+        )?;
+        assert_eq!(t.check_writers(&ctx, "t001")?, Vec::<Worker>::new());
+        git(
+            &ctx.root,
+            &[
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "t001: Checks\n\nWorker: pi:gpt-test@high\nWorker: pi:deepseek-test@high",
+            ],
+        )?;
+        assert_eq!(
+            t.check_writers(&ctx, "t001")?
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["pi:gpt-test@high", "pi:deepseek-test@high"]
+        );
+        git(
+            &ctx.root,
+            &[
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "t001: New checks\n\nWorker: claude:sonnet@high",
+            ],
+        )?;
+        assert_eq!(
+            t.check_writers(&ctx, "t001")?,
+            vec!["claude:sonnet@high".parse::<Worker>()?]
+        );
+        assert_eq!(t.check_writers(&ctx, "t099")?, Vec::<Worker>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn check_writer_lookup_ignores_unattributed_follow_up_commits() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        git(
+            &ctx.root,
+            &[
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "t001: Checks\n\nWorker: pi:gpt-test@high",
+            ],
+        )?;
+        for subject in [
+            "t001: fix the doc the merge made false",
+            "t001: Another follow-up without trailers",
+        ] {
+            git(&ctx.root, &["commit", "--allow-empty", "-qm", subject])?;
+        }
+        assert_eq!(
+            t.check_writers(&ctx, "t001")?,
+            vec!["pi:gpt-test@high".parse::<Worker>()?]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unreadable_check_writer_trailers_impose_no_family_rule() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        let cfg: WorkersConfig = toml::from_str(crate::config::WORKERS_EXAMPLE)?;
+        let expected = cfg.candidates(Role::Implement, Tier::Standard, None)?;
+        for trailers in [
+            "Worker: not-a-worker",
+            "Worker: pi:gpt-test@invalid-effort",
+            "Worker: unknown:gpt-test@high",
+            "Worker: pi:gpt-test@high\nWorker: not-a-worker",
+        ] {
+            git(
+                &ctx.root,
+                &[
+                    "commit",
+                    "--allow-empty",
+                    "-qm",
+                    &format!("t001: Checks\n\n{trailers}"),
+                ],
+            )?;
+            assert_eq!(t.check_writers(&ctx, "t001")?, Vec::<Worker>::new());
+            assert_eq!(
+                implement_candidates(&ctx, &t, &cfg, Tier::Standard, "checks_by: t001")?,
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn implement_candidates_exclude_all_check_families_without_changing_tiers() -> Result<()> {
+        let (_repo, ctx, t) = merge_fixture()?;
+        git(
+            &ctx.root,
+            &[
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "t010: Checks\n\nWorker: pi:gpt-test@high",
+            ],
+        )?;
+        git(
+            &ctx.root,
+            &[
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "t011: More checks\n\nWorker: pi:deepseek-test@high",
+            ],
+        )?;
+        let cfg: WorkersConfig = toml::from_str(
+            r#"
+[defaults]
+implement = "fast"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-test@high", "pi:deepseek-test@high", "pi:qwen-test@high"]
+standard = ["pi:gpt-test@high", "pi:deepseek-test@high"]
+deep = ["claude:sonnet@high"]
+"#,
+        )?;
+        let spec = "checks_by: t010, t011";
+        let workers = implement_candidates(&ctx, &t, &cfg, Tier::Fast, spec)?;
+        assert_eq!(
+            workers.iter().map(Worker::family).collect::<Vec<_>>(),
+            ["qwen"]
+        );
+        let error = implement_candidates(&ctx, &t, &cfg, Tier::Standard, spec)
+            .unwrap_err()
+            .to_string();
+        for want in [
+            "gpt",
+            "deepseek",
+            "t010",
+            "t011",
+            "[implement].standard",
+            "add a candidate of another family",
+        ] {
+            assert!(error.contains(want), "{error}");
+        }
+        assert!(error.contains(&crate::config::workers_config_path().display().to_string()));
+        assert_eq!(
+            implement_candidates(&ctx, &t, &cfg, Tier::Fast, "")?.len(),
+            3
+        );
+        assert_eq!(
+            implement_candidates(&ctx, &t, &cfg, Tier::Fast, "checks_by: t099")?.len(),
+            3
+        );
+        Ok(())
     }
 
     #[test]
