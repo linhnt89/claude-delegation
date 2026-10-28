@@ -34,6 +34,11 @@
   task up; `step_up_after` sets how many product failures come first; tasks never step down;
   implementers skip the family named by `checks_by:` (from `Worker:` merge trailers).
   Checks by DeepSeek (t047, t048), fixes by Sol; installed in `~/.local/bin` on 2026-10-28.
+- t050–t055 (2026-10-28): decision 014. delegate reads Claude, ChatGPT (Pi/Codex), Copilot
+  (Pi's login) and Hyper (Pi's API key) quota itself; `delegate quota`; runs skip accounts that
+  are out or won't last the spec's `size:`; a worker out of quota mid-round hands over to the
+  next candidate; all out → stop with resets. Checks by GPT (t050, t051, t054), fixes by
+  DeepSeek, eleven cross-family reviews by Sol. Installed on 2026-10-28.
 
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
@@ -61,6 +66,10 @@
 - A task that adds a crate fails `scripts/check` in the sandbox: `~/.cargo` is read-only there,
   so cargo can't download it (t052). Workaround: the lead runs `cargo fetch` in the task's
   worktree on the host, then `delegate check`. Fix idea: the runner fetches before checks.
+- P018 (hidden) failed once in a full `evals/run fast` with "delegate new t100: No such file or
+  directory" (seed 577651) and passes on replay with that seed: setup flakiness under load.
+- `delegate/tests/quota_review_check.sh` and `quota_review_round3_check.sh` (review evidence from
+  t053) aren't run by `scripts/check`; turn them into scenarios or Rust tests, or drop them.
 - `delegate list` says "vault: N commit(s) not pushed" when the vault has no remote at all.
 - A card beside the desktop app's Environment/Context cards isn't possible: the mod API
   (`claude-code.d.ts`, Claude Code 2.1.308) has no side-card component. Revisit when it does.
