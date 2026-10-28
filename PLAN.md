@@ -39,6 +39,11 @@
   are out or won't last the spec's `size:`; a worker out of quota mid-round hands over to the
   next candidate; all out → stop with resets. Checks by GPT (t050, t051, t054), fixes by
   DeepSeek, eleven cross-family reviews by Sol. Installed on 2026-10-28.
+- t057, t058 (2026-10-28): bugs from a second machine. A Claude Enterprise seat (no plan
+  windows) shows its monthly spend cap as a `monthly` window with no reset given: account ok,
+  runway unknown (S077). Plan windows always win over extra usage. "Log in again" is shown
+  only when the login failed. An HTTPS vault URL without saved credentials says to use SSH or
+  save credentials (S078). Checks by Claude, fixes by DeepSeek.
 
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
