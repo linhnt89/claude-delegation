@@ -184,12 +184,14 @@ impl Round {
         self.tier.map_or_else(|| "custom".into(), |t| t.to_string())
     }
 
-    pub fn status_label(&self, no_changes: bool) -> String {
+    pub fn status_label(&self, no_changes: bool, committed: bool) -> String {
+        let failed_quota = self.status == RoundStatus::Done && self.quota && !committed;
         let label = match self.status {
             RoundStatus::Running => "unfinished (interrupted, or still running)".into(),
             RoundStatus::Questions => "questions".into(),
             RoundStatus::Failed => "failed to start".into(),
             RoundStatus::Done if self.research => "research done".into(),
+            RoundStatus::Done if failed_quota => "failed to start (quota)".into(),
             RoundStatus::Done if self.quota => "done, quota".into(),
             RoundStatus::Done if no_changes && self.checks.is_none() => "done, no changes".into(),
             RoundStatus::Done => format!(
@@ -200,6 +202,9 @@ impl Round {
                 })
             ),
         };
+        if failed_quota {
+            return label;
+        }
         match self.exit.filter(|&exit| exit != 0) {
             Some(exit) => format!("{label}, worker exited {exit}"),
             None => label,
@@ -332,13 +337,12 @@ impl Task {
 
     /// Distinct workers whose rounds actually made commits, in round order.
     pub fn committed_workers(&self, ctx: &Ctx) -> Result<Vec<String>> {
-        let range = format!("{}..{}", self.base(ctx)?, self.branch);
-        let subjects = git(&ctx.root, &["log", "--format=%s", &range, "--"])?;
+        let subjects = self.round_subjects(ctx)?;
         let mut workers = Vec::new();
         for round in &self.state.rounds {
             let subject = format!("task {} round {}", self.id, round.number);
             if !round.research
-                && subjects.lines().any(|line| line == subject)
+                && subjects.iter().any(|line| line == &subject)
                 && let Some(worker) = &round.worker
                 && !workers.contains(worker)
             {
@@ -346,6 +350,21 @@ impl Task {
             }
         }
         Ok(workers)
+    }
+
+    /// Whether this round recorded a commit of its own on the task branch.
+    pub fn round_committed(&self, ctx: &Ctx, round: &Round) -> Result<bool> {
+        let subject = format!("task {} round {}", self.id, round.number);
+        Ok(self.round_subjects(ctx)?.iter().any(|line| line == &subject))
+    }
+
+    /// Commit subjects on the task branch since its base.
+    fn round_subjects(&self, ctx: &Ctx) -> Result<Vec<String>> {
+        let range = format!("{}..{}", self.base(ctx)?, self.branch);
+        Ok(git(&ctx.root, &["log", "--format=%s", &range, "--"])?
+            .lines()
+            .map(str::to_string)
+            .collect())
     }
 
     pub fn head(&self, ctx: &Ctx) -> Result<String> {
@@ -532,7 +551,7 @@ mod tests {
         assert_eq!(
             format!(
                 "{}  [{}]",
-                r.status_label(false),
+                r.status_label(false, true),
                 r.worker.as_deref().unwrap_or("-")
             ),
             "failed to start  [-]"
@@ -551,9 +570,9 @@ mod tests {
             (RoundStatus::Done, "done, checks not run"),
         ] {
             let r = Round { status, ..round() };
-            assert_eq!(r.status_label(false), expected);
+            assert_eq!(r.status_label(false, true), expected);
             if status != RoundStatus::Done {
-                assert_eq!(r.status_label(true), expected);
+                assert_eq!(r.status_label(true, true), expected);
             }
         }
     }
@@ -575,13 +594,13 @@ mod tests {
             };
             for no_changes in [false, true] {
                 assert_eq!(
-                    r.status_label(no_changes),
+                    r.status_label(no_changes, true),
                     format!("done, checks {expected}")
                 );
             }
             r.exit = Some(3);
             assert_eq!(
-                r.status_label(false),
+                r.status_label(false, true),
                 format!("done, checks {expected}, worker exited 3")
             );
         }
@@ -590,11 +609,11 @@ mod tests {
     #[test]
     fn no_changes_label_and_exit_warning() {
         let mut r = round();
-        assert_eq!(r.status_label(true), "done, no changes");
+        assert_eq!(r.status_label(true, true), "done, no changes");
         r.exit = Some(3);
-        assert_eq!(r.status_label(true), "done, no changes, worker exited 3");
+        assert_eq!(r.status_label(true, true), "done, no changes, worker exited 3");
         r.exit = Some(-1);
-        assert_eq!(r.status_label(true), "done, no changes, worker exited -1");
+        assert_eq!(r.status_label(true, true), "done, no changes, worker exited -1");
     }
 
     #[test]
@@ -606,7 +625,7 @@ mod tests {
         assert_eq!(r.exit, None);
         assert!(!r.research);
         assert!(!r.quota);
-        assert_eq!(r.status_label(false), "done, checks not run");
+        assert_eq!(r.status_label(false, true), "done, checks not run");
     }
 
     #[test]
@@ -635,13 +654,28 @@ mod tests {
             quota: true,
             ..round()
         };
-        assert_eq!(r.status_label(false), "done, quota");
-        assert_eq!(r.status_label(true), "done, quota");
+        assert_eq!(r.status_label(false, true), "done, quota");
+        assert_eq!(r.status_label(true, true), "done, quota");
+        assert_eq!(r.status_label(false, false), "failed to start (quota)");
+        assert_eq!(r.status_label(true, false), "failed to start (quota)");
         let old: Round = serde_json::from_str(
             r#"{"number":1,"tier":"fast","worker":"pi:test","status":"done","checks":null}"#,
         )
         .unwrap();
         assert!(!old.quota);
+    }
+
+    #[test]
+    fn quota_round_with_exit_hides_the_exit_when_no_commit() {
+        let mut r = Round {
+            quota: true,
+            exit: Some(1),
+            ..round()
+        };
+        assert_eq!(r.status_label(false, false), "failed to start (quota)");
+        assert_eq!(r.status_label(false, true), "done, quota, worker exited 1");
+        r.exit = None;
+        assert_eq!(r.status_label(false, true), "done, quota");
     }
 
     #[test]
@@ -651,10 +685,10 @@ mod tests {
             research: true,
             ..round()
         };
-        assert_eq!(r.status_label(true), "research done");
-        assert_eq!(r.status_label(false), "research done");
+        assert_eq!(r.status_label(true, true), "research done");
+        assert_eq!(r.status_label(false, true), "research done");
         r.exit = Some(3);
-        assert_eq!(r.status_label(true), "research done, worker exited 3");
+        assert_eq!(r.status_label(true, true), "research done, worker exited 3");
     }
 
     #[test]
@@ -671,7 +705,7 @@ mod tests {
         assert_eq!(restored.status, RoundStatus::Running);
         assert_eq!(restored.exit, Some(3));
         assert_eq!(
-            restored.status_label(false),
+            restored.status_label(false, true),
             "unfinished (interrupted, or still running), worker exited 3"
         );
     }

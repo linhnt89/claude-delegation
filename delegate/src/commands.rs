@@ -709,6 +709,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         });
 
         let mut outcome = None;
+        let mut log_start = 0;
         while next_candidate < available.len() {
             let w = available[next_candidate].clone();
             next_candidate += 1;
@@ -732,7 +733,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
                 &format!("{}/{}", next_candidate, available.len()),
             )?;
             println!("round {number}: {w} ...");
-            let log_start = match fs::metadata(&log) {
+            log_start = match fs::metadata(&log) {
                 Ok(metadata) => metadata.len(),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
                 Err(error) => return Err(error.into()),
@@ -794,6 +795,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
             _ => (-1, false),
         };
         let account = quota::account_for(&w, &cfg.accounts);
+        let mut committed_now = false;
 
         t.state.rounds[round_index].exit = Some(rc);
         t.save()?;
@@ -846,6 +848,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
                         &format!("task {} round {number}", t.id),
                     ],
                 )?;
+                committed_now = true;
             }
             if !quota_hit {
                 if t.changed_paths(ctx)?.is_empty() {
@@ -860,6 +863,14 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
             t.state.rounds[round_index].quota = true;
             t.state.rounds[round_index].status = RoundStatus::Done;
             t.save()?;
+            if !committed_now {
+                println!("  {w} hit its quota before making any commit");
+                writeln!(failures, "  {w}:\n    quota")?;
+                for line in harness::log_tail(&log, log_start)? {
+                    println!("    {line}");
+                    writeln!(failures, "    {line}")?;
+                }
+            }
         }
         println!("{w} hit its quota; continuing on the next candidate");
         if let Some(account) = account {
@@ -872,12 +883,18 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
             };
             exhausted.push((account.name, account.source, reset));
         }
-        handoff = true;
+        handoff = handoff || committed_now;
         round_ask = false;
         number += 1;
         if next_candidate >= available.len() {
             let diagnostic = no_quota_left(role, &tier_label, &mut exhausted);
-            bail!("{diagnostic}");
+            if failures.is_empty() {
+                bail!("{diagnostic}");
+            }
+            bail!(
+                "{diagnostic}\nno candidate could start:\n{failures}see {}",
+                log.display()
+            );
         }
     }
 }
@@ -1400,7 +1417,10 @@ pub fn list(ctx: &Ctx, vault_notes: bool) -> Result<()> {
         let no_changes = r.status == RoundStatus::Done
             && r.checks.is_none()
             && t.changed_paths(ctx).is_ok_and(|p| p.is_empty());
-        let mut status = live_label.unwrap_or_else(|| r.status_label(no_changes));
+        // Only a quota round needs to know whether it made a commit of its own; keep the
+        // quota label when git can't tell us.
+        let committed = !r.quota || t.round_committed(ctx, r).unwrap_or(true);
+        let mut status = live_label.unwrap_or_else(|| r.status_label(no_changes, committed));
         if let Some(rv) = &t.state.review
             && t.wt.is_dir()
             && t.head(ctx).is_ok_and(|h| h == rv.commit)
