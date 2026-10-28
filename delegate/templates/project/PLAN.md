@@ -7,10 +7,10 @@
 <What the current milestone delivers, in one or two lines.>
 
 ## Tasks
-| id | task | status | depends on | harness | notes |
-|----|------|--------|------------|---------|-------|
-| t001 | <define contracts for X> | todo | – | claude | |
-| t002 | <implement X slice A> | todo | t001 | codex | |
+| wave | id | task | status | depends on | harness | notes |
+|------|----|------|--------|------------|---------|-------|
+| 1 | t001 | <define contracts for X> | todo | – | claude | |
+| 2 | t002 | <implement X slice A> | todo | t001 | codex | |
 
 ## Open questions
 - <Question> — owner: <you/claude>, blocks: <task ids>

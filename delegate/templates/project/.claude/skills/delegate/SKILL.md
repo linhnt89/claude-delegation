@@ -21,6 +21,8 @@ never per task. Project rules in `.delegate.toml` set minimum tiers and required
 Keep it here if it is ambiguous, defines shared contracts or architecture, is
 security-sensitive, or is a debugging hunt with an unknown cause. Otherwise delegate.
 If it is too big for one reviewable diff, split it first and add the pieces to `PLAN.md`.
+Put contracts and checks in an earlier wave, then aim for waves of tasks with disjoint files
+listed in `Scope In`.
 
 ## 2. Write the specs
 - `delegate new <id>` (id like `t007`) prints the spec path; fill it in.
@@ -39,7 +41,8 @@ If it is too big for one reviewable diff, split it first and add the pieces to `
   needs, so a long task is not handed to a subscription that stops halfway.
 
 ## 3. Plan review (before a batch)
-For a multi-task plan, or any task you'd put at `deep`, run `delegate plan-review [ids...]`.
+For a multi-task plan, or any task you'd put at `deep`, run
+`delegate plan-review [ids...]` once per wave, before that wave runs.
 A model from a different family than you reviews `PLAN.md` and the specs against the code.
 Fix the plan for real findings; bring disagreements to the user. Skip it for one small task.
 
@@ -50,25 +53,32 @@ Fix the plan for real findings; bring disagreements to the user. Skip it for one
 | Implementation with clear contracts and tests | `standard` (default) |
 | Algorithms, concurrency, cross-module refactors, security-sensitive | `deep` |
 
-When showing the spec, tell the user the task and tier on a line of its own, in exactly this
-form: `t007: implement @ standard` (role `implement`, `research` or `review`). Repeat that line
-in every later update on the task (started, round N, done): the user may read only the last
-message. Then, without waiting for a yes, run it in the background (the user can still change
-the tier):
+When showing each task's spec, tell the user the task and tier on a line of its own, in exactly
+this form: `t007: implement @ standard` (role `implement`, `research` or `review`). Use one line
+per task, and repeat that line in every later update on the task (started, round N, done): the
+user may read only the last message. Then, without waiting for a yes, start every ready task
+of the wave with `run --background` (the user can still change the tier):
 
     delegate run <id> --background [--tier fast|standard|deep]
 
-Then start a wait as another background command, so the harness wakes you when something
-happens instead of polling:
+Run that command for every ready task before waiting. If `run` warns that a task's `Scope In`
+overlaps a running task, inspect the overlap; it warns but does not refuse.
+Before each wait, run `delegate list`; review finished tasks and read logs for interrupted
+tasks before deciding to rerun or discard. A wait with no ids watches only tasks still running.
+Then wait without ids:
 
-    delegate wait <id> --timeout 25m
+    delegate wait --timeout 25m
 
-Act on what `wait` printed when it exits:
+Act on whichever task the wait reports. Before waiting again, repeat the list step for other
+finished or interrupted tasks. While workers run, write specs and scenarios for the next wave or
+review finished tasks. As soon as a merge unblocks a task, start it at once.
+
 - `<id> done, <outcome>` — review the result (steps 5 and 6).
 - `<id> interrupted` — read the run log, then `delegate run <id>` again or `delegate discard <id>`.
 - `<id> stalled in <phase> for <duration>` — check the last step, the worker's processes and
   the log tail; then wait again, stop it and rerun, or tell the user.
-- nothing happened yet (exit 3) — it timed out; start `delegate wait <id> --timeout 25m` again.
+- nothing happened yet (exit 3) — it timed out; list again, then run
+  `delegate wait --timeout 25m`.
 
 What happens:
 - **Question phase** (first round): the worker reads the spec and code and answers `READY` or
@@ -77,8 +87,11 @@ What happens:
 - **Work phase** continues in the same session, then the runner commits and runs the
   acceptance commands itself (`CHECKS.txt`).
 - **Fallbacks:** if a candidate can't start (quota, auth), the next one in the tier is used.
-  Before each run the runner reads each candidate account's quota itself and skips one that is
-  out or would run out before the spec's `size:`; an unreadable login warns and is used anyway.
+  Before each run the runner reads each candidate account's quota. It skips one that is out or
+  whose shared runway is too short for the spec's `size:`; an unreadable login warns and is used
+  anyway. Parallel tasks can share one account: divide its runway by the tasks already running
+  there plus one for the new task, and try accounts in tier order. A busy account is not skipped
+  while that shared runway covers the new task.
   A worker that hits its quota mid-round has its committed work kept, and the next candidate
   continues at the same tier; that quota round never counts toward a step-up.
   An explicit `--worker` is still checked, but only warns and then runs.
@@ -123,9 +136,13 @@ the worker's, so the record shows what each model did. Judge by the spec's Accep
 contract, not taste: a choice that works, passes the checks and keeps the contract (a test
 file named differently, other wording) is accepted and mentioned to the user, not reworked.
 
+Ask one merge question per batch of finished tasks, naming the ids. Include tasks needing
+another round in the same message, for example: "Merge t061, t062? t063 needs another round."
+Do not ask one question per task.
+
 Then:
-- **Accept:** ask the user, naming the action ("Merge t007?", not "shall I go ahead?"), then
-  `delegate merge <id>`. Merge is refused unless checks pass on
+- **Accept:** after the batch question is approved, run `delegate merge <id>` for each accepted
+  task. Merge is refused unless checks pass on
   the final commit, project rules are met, and any review on the final commit has no
   high-severity findings (`--accept-findings` only if the user accepts them). It squash-merges
   with the spec's title and Goal as the message and deletes all task state.
