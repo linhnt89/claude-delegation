@@ -21,7 +21,9 @@ A new git repo with a small app; `delegate init` has run.
   task as soon as the merge it depends on lands.
 - It asks one merge question per batch, naming the ids.
 - `CLAUDE.md` says plans are split into waves of tasks that touch different files.
-- `delegate upgrade` on a project with the previous kit brings the same text in.
+- `delegate upgrade` on a project with the previous kit replaces the delegate skill with the
+  new text, and reports the `CLAUDE.md` and `PLAN.md` template changes (the wave line and
+  column) for the user to take in; it never edits those two files (decision 005).
 
 ## If this fails
 The lead keeps running one task at a time, and the user waits on each worker in turn.
