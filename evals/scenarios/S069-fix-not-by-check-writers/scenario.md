@@ -2,7 +2,7 @@
 - Job: J3
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude as lead, who had one task write the checks and now hands the fix to another. Decision 013.

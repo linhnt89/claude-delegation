@@ -2,7 +2,7 @@
 - Job: J3
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude as lead, with a `workers.toml` whose tier has only one family. Decision 013.
