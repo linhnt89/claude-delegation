@@ -38,7 +38,6 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t052 | Native quota readers, `delegate quota`, quota-aware candidates, `size:` (decision 014) | todo | t053 | A worker out of quota mid-round hands over to the next candidate (decision 014) | ready | t052 | standard | S075 + `scripts/check` | `checks_by: t051` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
@@ -62,6 +61,8 @@
 - A task that adds a crate fails `scripts/check` in the sandbox: `~/.cargo` is read-only there,
   so cargo can't download it (t052). Workaround: the lead runs `cargo fetch` in the task's
   worktree on the host, then `delegate check`. Fix idea: the runner fetches before checks.
+- Pi's Hyper login on this machine is expired (2026-10-28): `delegate quota` shows hyper as unknown;
+  log in to Hyper in Pi again.
 - `delegate list` says "vault: N commit(s) not pushed" when the vault has no remote at all.
 - A card beside the desktop app's Environment/Context cards isn't possible: the mod API
   (`claude-code.d.ts`, Claude Code 2.1.308) has no side-card component. Revisit when it does.
