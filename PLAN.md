@@ -55,9 +55,9 @@ Decision 016 (J5, J9): the lead works in waves. Wave 2 tasks touch disjoint file
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t060 | Scenarios: `run` warns on Scope In overlap with a running task; the kit's lead text describes the batch loop (wave, `wait` with no ids, one merge ask per batch); parallel tasks share an account while its runway covers them all | 1 | done | – | lead | scenarios fail until built | `/evaluate feature`; checks by a worker |
-| t061 | `delegate run` warns when the new task's `Scope In` overlaps a running task's | 2 | running | t060 | standard | t060's overlap scenario, `scripts/check` | `checks_by: t060`; `spec::scope_paths` exists |
+| t061 | `delegate run` warns when the new task's `Scope In` overlaps a running task's | 2 | done | t060 | standard | t060's overlap scenario, `scripts/check` | `checks_by: t060`; `spec::scope_paths` exists |
 | t062 | Delegate skill §1, §3, §4, §6 around waves and the batch loop; `wave` column in the `PLAN.md` template; one parallel-work line in the template `CLAUDE.md` | 2 | running | t060 | fast | t060's kit-text scenario, `scripts/check` | mirror into `delegate/templates/project/`, run `scripts/kit-history` |
-| t063 | Candidate selection divides an account's runway by (tasks running on it + 1); the first candidate whose shared runway covers the size runs (decision 017) | 3 | todo | t061 | standard | S080, S081, P021, `scripts/check` | after t061: both touch selection in `commands.rs` |
+| t063 | Candidate selection divides an account's runway by (tasks running on it + 1); the first candidate whose shared runway covers the size runs (decision 017) | 3 | running | t061 | standard | S080, S081, P021, `scripts/check` | after t061: both touch selection in `commands.rs` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
