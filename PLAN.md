@@ -50,9 +50,15 @@
   S050–S054, P017 pass. Checks from t026, fix by Claude Opus (Copilot) and Sol, review by DeepSeek.
 
 ## Next
-| id | task | status | depends on | tier | acceptance | notes |
-|----|------|--------|------------|------|------------|-------|
-| t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
+Decision 016 (J5, J9): the lead works in waves. Wave 2 tasks touch disjoint files and run together.
+
+| id | task | wave | status | depends on | tier | acceptance | notes |
+|----|------|------|--------|------------|------|------------|-------|
+| t060 | Scenarios: `run` warns on Scope In overlap with a running task; the kit's lead text describes the batch loop (wave, `wait` with no ids, one merge ask per batch); a batch spreads over accounts | 1 | todo | – | lead | scenarios fail until built | `/evaluate feature`; checks by a worker |
+| t061 | `delegate run` warns when the new task's `Scope In` overlaps a running task's | 2 | todo | t060 | standard | t060's overlap scenario, `scripts/check` | `checks_by: t060`; `spec::scope_paths` exists |
+| t062 | Delegate skill §1, §3, §4, §6 around waves and the batch loop; `wave` column in the `PLAN.md` template; one parallel-work line in the template `CLAUDE.md` | 2 | todo | t060 | fast | t060's kit-text scenario, `scripts/check` | mirror into `delegate/templates/project/`, run `scripts/kit-history` |
+| t063 | Candidate selection divides runway by (tasks running on the account + 1) and prefers an idle account in the tier | 3 | todo | t061 | standard | t060's spread scenario, `scripts/check` | after t061: both touch selection in `commands.rs` |
+| t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
 - Accepted at t056's merge (review, medium): a shell edit by the lead from the main checkout

@@ -13,11 +13,11 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 | J2 Hand off a ready task | Claude shows me the spec and the tier, then starts it without waiting for a yes. Later I get a commit whose checks passed, without watching the worker |
 | J3 Trust what comes back | Merge refuses failing checks, missing reviews and high-severity findings. Review comes from a different model family. Workers can't touch my checkout, branches or hidden checks |
 | J4 Keep going when a model fails | A model with no quota or broken auth is skipped for the next one. A failed round retries one tier stronger |
-| J5 Run several tasks at once | Parallel tasks don't step on each other, and `delegate list` shows where each one stands |
+| J5 Run several tasks at once | Parallel tasks don't step on each other, are told when their files overlap, spread over my accounts instead of draining one, and `delegate list` shows where each one stands |
 | J6 Research and plan review | A read-only research run returns a report and changes no code. Plan review uses a model that isn't Claude and finds real problems before work starts |
 | J7 The repo stays the shared memory | Decisions and scenarios are kept in the repo. After merge or discard, no task state is left behind and none ends up in git history |
 | J8 See what running tasks are doing | I start a run in the background and can see any time, from the terminal or Claude Code, each task's phase, what it is for, which session started it, its worker's steps as they happen, and whether it has stalled or died. Claude can check the same thing to decide what to do next |
-| J9 Claude leads, workers build | Once a plan is agreed, Claude writes neither product code nor checks itself. Its attempts are refused with what to do instead, and workers are never slowed by it. Only I can turn that off |
+| J9 Claude leads, workers build | Once a plan is agreed, Claude writes neither product code nor checks itself. Its attempts are refused with what to do instead, and workers are never slowed by it. Only I can turn that off. Once a wave is agreed, Claude starts all its ready tasks together and keeps working while workers run |
 
 ## What would make them give up
 - It claims success when it didn't succeed: a merge that went through with broken checks, or a commit that's empty.
