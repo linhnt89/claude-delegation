@@ -7,6 +7,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::config::user_config_path;
+use crate::guard::Install;
 use crate::task::git;
 
 // Keep include_str! calls on one line: historical kit readers parse this list.
@@ -78,27 +79,40 @@ pub(crate) const CLAUDE_SETTINGS: &str = ".claude/settings.json";
 pub(crate) const STATUS_LINE: &str = "delegate statusline";
 
 /// Explain the optional status line without changing or creating settings.
-fn configure_status_line(root: &Path) -> Result<()> {
+fn configure_status_line() {
     println!(
         "status line: delegate adds none; tasks show above the prompt (add `{STATUS_LINE}` to a status line to see them there too)"
     );
+}
+
+/// Add the lead guard's hooks to the user's settings (decision 015), keeping everything else.
+fn install_guard(root: &Path) -> Result<()> {
     let path = root.join(CLAUDE_SETTINGS);
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+    let existing = match fs::read(&path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("read {CLAUDE_SETTINGS}; check permissions and retry"));
         }
     };
-    match serde_json::from_slice::<serde_json::Value>(&bytes) {
-        Err(_) => println!(
-            "kept     {CLAUDE_SETTINGS} (not valid JSON; left as is, fix it and run delegate init again)"
-        ),
-        Ok(settings) if !settings.is_object() => {
-            println!("kept     {CLAUDE_SETTINGS} (not a JSON object; left as is)");
+    match crate::guard::install(existing.as_deref()) {
+        Install::Added(bytes) => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, bytes)
+                .with_context(|| format!("write {CLAUDE_SETTINGS}; check permissions and retry"))?;
+            println!("{}", crate::guard::ADDED);
         }
-        Ok(_) => {}
+        Install::Present => {}
+        Install::NotJson => println!(
+            "kept     {CLAUDE_SETTINGS} (not valid JSON, couldn't read it; left as is, so the lead guard was not added: fix it and run delegate init again)"
+        ),
+        Install::NotObject => println!(
+            "kept     {CLAUDE_SETTINGS} (not a JSON object, couldn't read it; left as is, so the lead guard was not added)"
+        ),
+        Install::BadHooks => println!("{}", crate::guard::BAD_HOOKS),
     }
     Ok(())
 }
@@ -140,7 +154,8 @@ pub fn init(dir: &Path) -> Result<()> {
         &toml::to_string(&record)?,
         crate::upgrade::RECORD,
     )?;
-    configure_status_line(root)?;
+    configure_status_line();
+    install_guard(root)?;
     println!(
         "\nNext: fill in AGENTS.md (commands first) and .delegate.toml rules, run /evaluate define, then commit (including .delegate-kit.toml)."
     );
@@ -155,26 +170,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_line_advice_never_changes_or_creates_settings() {
+    fn guard_is_added_once_and_unreadable_settings_are_left_alone() {
         let root =
             std::env::temp_dir().join(format!("delegate-init-test-{}", uuid::Uuid::new_v4()));
-        configure_status_line(&root).unwrap();
-        assert!(!root.exists());
+        fs::create_dir_all(&root).unwrap();
         let path = root.join(CLAUDE_SETTINGS);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        for bytes in [
-            "{\"permissions\": {\"allow\": [\"Bash(ls:*)\"]}}\n",
-            "{\"statusLine\": {\"command\": \"delegate statusline\"}}\n",
-            "{\"statusLine\": {\"command\": \"~/bin/my-line\"}}\n",
-            "{\"statusLine\": null}\n",
-            "{invalid json\n",
-            "[]\n",
-            "null\n",
-        ] {
+        install_guard(&root).unwrap();
+        let fresh = fs::read(&path).unwrap();
+        install_guard(&root).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), fresh);
+        for bytes in ["{invalid json\n", "[]\n", "null\n", "{\"hooks\": [1]}\n"] {
             fs::write(&path, bytes).unwrap();
-            configure_status_line(&root).unwrap();
+            install_guard(&root).unwrap();
             assert_eq!(fs::read(&path).unwrap(), bytes.as_bytes());
         }
+        fs::write(
+            &path,
+            "{\"statusLine\": {\"command\": \"~/bin/my-line\"}}\n",
+        )
+        .unwrap();
+        install_guard(&root).unwrap();
+        let after: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(after["statusLine"]["command"], "~/bin/my-line");
+        assert!(after["hooks"]["UserPromptSubmit"].is_array());
         fs::remove_dir_all(root).unwrap();
     }
 }

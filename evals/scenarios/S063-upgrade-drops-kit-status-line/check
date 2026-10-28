@@ -3,14 +3,21 @@
 . "$EVALS_LIB/common.sh"
 # The last kit whose init added delegate's status line to .claude/settings.json.
 KIT=1b75a2e710500009068a17a4fbbdd12993204793
-OTHER='"permissions": {"allow": ["Bash(ls:*)"]}, "env": {"SHOP_ENV": "dev"}'
+OTHER='"permissions": {"allow": ["Bash(ls:*)"]}, "env": {"SHOP_ENV": "dev"}, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": ": # our stop hook"}]}]}'
 old_project() { # <status line command>: $PROJ as that kit left it, the user's settings added
   rm -rf "$PROJ"; old_kit_project "$KIT"
   mkdir -p "$PROJ/.claude"
   printf '{"statusLine": {"type": "command", "command": "%s"}, %s}\n' "$1" "$OTHER" >"$PROJ/.claude/settings.json"
   (cd "$PROJ" && git add -A && git commit -qm "Settings")
 }
-settings() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])), sort_keys=True))' "$PROJ/.claude/settings.json" 2>/dev/null; }
+# The settings but their hooks, where upgrade adds the lead guard's (decision 015).
+settings() { python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); s.pop("hooks", None); print(json.dumps(s, sort_keys=True))' "$PROJ/.claude/settings.json" 2>/dev/null; }
+all_settings() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])), sort_keys=True))' "$PROJ/.claude/settings.json" 2>/dev/null; }
+# Every hook of the user's own is still there, as in S031.
+own_hooks_kept() {
+  python3 -c 'import json,sys; ours={"type": "command", "command": ": # our stop hook"}; groups=json.load(open(sys.argv[1])).get("hooks", {}).get("Stop", []); sys.exit(0 if any(ours in g.get("hooks", []) for g in groups) else 1)' "$PROJ/.claude/settings.json" ||
+    fail "upgrade dropped or changed one of the user's own hooks: $(all_settings)"
+}
 
 old_project "delegate statusline"
 d upgrade
@@ -23,15 +30,17 @@ if s.get("permissions") != {"allow": ["Bash(ls:*)"]} or s.get("env") != {"SHOP_E
     print(f"FAIL: upgrade changed the user's other settings: {s}"); sys.exit(1)
 PY
 [ "$(printf '%s\n' "$OUT" | grep -ci 'status line')" -eq 1 ] || fail "upgrade didn't say, in one line, that it removed the kit's status line: $OUT"
-before="$(settings)"
+own_hooks_kept
+before="$(all_settings)"
 d upgrade
-[ "$(settings)" = "$before" ] || fail "a second upgrade changed the settings again"
+[ "$(all_settings)" = "$before" ] || fail "a second upgrade changed the settings again"
 
 old_project "~/bin/my-line; delegate statusline"
 before="$(settings)"
 d upgrade
 [ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
 [ "$(settings)" = "$before" ] || fail "upgrade changed a status line the user made their own (or their other settings): $(settings)"
+own_hooks_kept
 [ "$(printf '%s\n' "$OUT" | grep -ci 'status line')" -eq 1 ] || fail "upgrade didn't say, in one line, why it left the user's status line alone: $OUT"
 
 old_project "delegate statusline"

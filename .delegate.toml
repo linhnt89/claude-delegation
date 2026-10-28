@@ -16,3 +16,13 @@
 # [[rules]]
 # paths    = ["docs/**"]
 # max_tier = "fast"
+#
+# The lead guard (decision 015) keeps Claude as lead out of product files. Besides root
+# *.md, docs/**, evals/jobs.md and evals/scenarios/*/scenario.md, the lead may write files
+# matching these globs (* also matches across folders):
+#
+# [guard]
+# lead_files = ["notes/**"]
+
+[guard]
+lead_files = ["evals/lib/streams/*.steps"]

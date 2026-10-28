@@ -3,6 +3,7 @@
 mod checkout;
 mod commands;
 mod config;
+mod guard;
 mod harness;
 mod init;
 mod migration;
@@ -147,6 +148,12 @@ enum Cmd {
     },
     /// Claude Code status line: one line of running tasks on stdin's project
     Statusline,
+    /// Claude Code hook keeping the lead out of product files (`DELEGATE_GUARD=off` disables)
+    #[command(hide = true)]
+    Guard {
+        #[arg(value_enum)]
+        event: guard::Event,
+    },
     /// Show each account's quota, runway and reset
     Quota {
         /// Machine-readable record (schemaVersion 1)
@@ -173,6 +180,11 @@ enum HiddenCmd {
 }
 
 fn dispatch(cmd: Cmd) -> Result<ExitCode> {
+    // A hook runs on every edit, also in a worker's sandbox: no locks, state or vault.
+    if let Cmd::Guard { event } = &cmd {
+        guard::run(*event);
+        return Ok(ExitCode::SUCCESS);
+    }
     // The status line resolves Claude's stdin project and must always fail silently.
     if let Cmd::Statusline = &cmd {
         statusline::run();
@@ -245,6 +257,7 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         | Cmd::Upgrade { .. }
         | Cmd::Wait { .. }
         | Cmd::Quota { .. }
+        | Cmd::Guard { .. }
         | Cmd::Statusline => {
             unreachable!("handled above")
         }

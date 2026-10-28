@@ -694,6 +694,40 @@ impl ProjectRules {
     }
 }
 
+/// `[guard]` in `.delegate.toml`; the rest of the file is read by [`ProjectRules`].
+#[derive(Debug, Default, Deserialize)]
+struct GuardFile {
+    #[serde(default)]
+    guard: GuardSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GuardSection {
+    #[serde(default)]
+    lead_files: Vec<String>,
+}
+
+/// The `[guard] lead_files` globs of `.delegate.toml`: files the lead writes itself, beside
+/// the default lead files (decision 015). No file means none.
+pub fn lead_files(root: &Path) -> Result<Vec<globset::GlobMatcher>> {
+    let path = root.join(".delegate.toml");
+    if !path.is_file() {
+        return Ok(vec![]);
+    }
+    let text = std::fs::read_to_string(&path)?;
+    let file: GuardFile =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    file.guard
+        .lead_files
+        .iter()
+        .map(|pattern| {
+            Glob::new(pattern)
+                .with_context(|| format!("bad glob '{pattern}' in [guard] lead_files"))
+                .map(|glob| glob.compile_matcher())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

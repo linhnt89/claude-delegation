@@ -279,6 +279,7 @@ pub(crate) fn run_streamed(
     cwd: &Path,
     log: &Path,
     stream: &mut events::Stream,
+    task: Option<&str>,
 ) -> Result<i32> {
     if let Ok(mut lf) = OpenOptions::new().create(true).append(true).open(log)
         && let Err(error) = writeln!(
@@ -309,7 +310,7 @@ pub(crate) fn run_streamed(
         })
     });
     let (program, args) = cmd.split_first().context("empty command")?;
-    let mut child = Command::new(program)
+    let mut child = worker_command(program, task)
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -350,12 +351,24 @@ pub fn new_session(h: Harness) -> Option<Session> {
     })
 }
 
+/// A worker process. A task's worker carries `DELEGATE_WORKER=<task id>`, which with its
+/// task worktree tells the lead guard's hooks to let it be (decision 015).
+fn worker_command(program: &str, task: Option<&str>) -> Command {
+    let mut command = Command::new(program);
+    match task {
+        Some(id) => command.env("DELEGATE_WORKER", id),
+        None => command.env_remove("DELEGATE_WORKER"),
+    };
+    command
+}
+
 /// Run a command, appending stderr (and stdout unless `stdout_file`) to `log`. Returns the exit code.
 pub fn run_logged(
     cmd: &[String],
     cwd: &Path,
     log: &Path,
     stdout_file: Option<&Path>,
+    task: Option<&str>,
 ) -> Result<i32> {
     let mut lf = OpenOptions::new().create(true).append(true).open(log)?;
     let shown: Vec<&str> = cmd.iter().take(12).map(String::as_str).collect();
@@ -370,7 +383,7 @@ pub fn run_logged(
         None => Stdio::from(lf.try_clone()?),
     };
     let (program, args) = cmd.split_first().context("empty command")?;
-    let status = Command::new(program)
+    let status = worker_command(program, task)
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -537,9 +550,24 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let cmd = ["sh", "-c", "test \"$DELEGATE_SANDBOXED\" = 1"].map(str::to_owned);
         let log = dir.join("run.log");
-        assert_eq!(run_logged(&cmd, &dir, &log, None).unwrap(), 0);
+        assert_eq!(run_logged(&cmd, &dir, &log, None, None).unwrap(), 0);
         let mut stream = events::Stream::new(&dir, Harness::Codex, &dir);
-        assert_eq!(run_streamed(&cmd, &dir, &log, &mut stream).unwrap(), 0);
+        assert_eq!(
+            run_streamed(&cmd, &dir, &log, &mut stream, None).unwrap(),
+            0
+        );
+        // A task's worker is named for the lead guard; anything else is not.
+        let worker = ["sh", "-c", "test \"$DELEGATE_WORKER\" = t007"].map(str::to_owned);
+        assert_eq!(
+            run_logged(&worker, &dir, &log, None, Some("t007")).unwrap(),
+            0
+        );
+        assert_eq!(
+            run_streamed(&worker, &dir, &log, &mut stream, Some("t007")).unwrap(),
+            0
+        );
+        let unnamed = ["sh", "-c", "test -z \"${DELEGATE_WORKER+set}\""].map(str::to_owned);
+        assert_eq!(run_logged(&unnamed, &dir, &log, None, None).unwrap(), 0);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -700,7 +728,7 @@ mod tests {
             let mut stream = events::Stream::new(&dir, Harness::Pi, &dir);
             let cmd = ["sh", "-c", "echo plain; echo '{\"type\":\"tool_execution_start\",\"toolCallId\":\"a\",\"toolName\":\"read\",\"args\":{\"path\":\"file\"}}'; exit 7"].map(str::to_owned);
             assert_eq!(
-                run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream).unwrap(),
+                run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream, None).unwrap(),
                 7
             );
             std::fs::remove_dir_all(dir).unwrap();
@@ -714,7 +742,7 @@ mod tests {
         let mut stream = events::Stream::new(&dir, Harness::Pi, &dir);
         let cmd = ["sh", "-c", "(sleep 0.2; echo final) & echo done; exit 7"].map(str::to_owned);
         assert_eq!(
-            run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream).unwrap(),
+            run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream, None).unwrap(),
             7
         );
         assert_eq!(
@@ -726,7 +754,8 @@ mod tests {
 
     #[test]
     fn review_streamed_returns_with_a_noisy_stderr_descendant() {
-        let dir = std::env::temp_dir().join(format!("delegate-stderr-review-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("delegate-stderr-review-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut stream = events::Stream::new(&dir, Harness::Pi, &dir);
         let cmd = [
@@ -735,11 +764,14 @@ mod tests {
             "(i=0; while [ $i -lt 50 ]; do echo background >&2; sleep 0.1; i=$((i+1)); done) >/dev/null & exit 7",
         ].map(str::to_owned);
         let started = Instant::now();
-        let rc = run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream).unwrap();
+        let rc = run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream, None).unwrap();
         let elapsed = started.elapsed();
         std::fs::remove_dir_all(dir).unwrap();
         assert_eq!(rc, 7);
-        assert!(elapsed < Duration::from_secs(3), "waited for stderr descendant: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "waited for stderr descendant: {elapsed:?}"
+        );
     }
 
     /// A worker that leaves a background process holding stdout must not block the run
@@ -754,7 +786,7 @@ mod tests {
             .map(ToString::to_string)
             .collect();
         let started = Instant::now();
-        let rc = run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream).unwrap();
+        let rc = run_streamed(&cmd, &dir, &dir.join("run.log"), &mut stream, None).unwrap();
         assert_eq!(rc, 0);
         assert!(
             started.elapsed().as_secs() < 5,

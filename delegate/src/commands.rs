@@ -377,7 +377,7 @@ fn implement_attempt(
     let sb = harness::sandbox(Some(w.harness), &task_bounds(ctx, t)?, &t.wt)?;
     let mut run = |session: Option<&Session>, prompt: &str| -> Result<(i32, bool)> {
         let cmd = [sb.clone(), harness::streaming_command(w, prompt, session)].concat();
-        let rc = harness::run_streamed(&cmd, &t.wt, log, &mut stream)?;
+        let rc = harness::run_streamed(&cmd, &t.wt, log, &mut stream, Some(t.id.as_str()))?;
         Ok((rc, stream.saw_quota()))
     };
     let mut session = harness::new_session(w.harness);
@@ -1239,6 +1239,7 @@ pub fn review(
             &t.wt,
             &log,
             None,
+            Some(t.id.as_str()),
         )?;
         if rc == 0 || review_file.exists() {
             used = Some(w.clone());
@@ -1358,7 +1359,13 @@ pub fn plan_review(
             harness::command(w, &prompt, None, true, codex.then_some(out.as_path())),
         ]
         .concat();
-        let rc = harness::run_logged(&cmd, &ctx.root, &log, (!codex).then_some(out.as_path()))?;
+        let rc = harness::run_logged(
+            &cmd,
+            &ctx.root,
+            &log,
+            (!codex).then_some(out.as_path()),
+            None,
+        )?;
         if rc == 0 && first_line(&out).is_some() {
             println!(
                 "\nplan review by {w}: {}\n  {}",

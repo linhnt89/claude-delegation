@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::guard::Install;
 use crate::init::{CLAUDE_SETTINGS, EXECUTABLE, PROJECT_FILES, STATUS_LINE};
 use crate::sha256;
 use crate::task::git;
@@ -305,13 +306,13 @@ impl Plan {
         };
         let Ok(mut settings) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
             self.output.push(format!(
-                "kept     {CLAUDE_SETTINGS} (not valid JSON; left as is, fix it and run delegate upgrade again)"
+                "kept     {CLAUDE_SETTINGS} (not valid JSON, couldn't read it; left as is, so the lead guard was not added: fix it and run delegate upgrade again)"
             ));
             return Ok(());
         };
         let Some(object) = settings.as_object_mut() else {
             self.output.push(format!(
-                "kept     {CLAUDE_SETTINGS} (not a JSON object; left as is)"
+                "kept     {CLAUDE_SETTINGS} (not a JSON object, couldn't read it; left as is, so the lead guard was not added)"
             ));
             return Ok(());
         };
@@ -332,6 +333,31 @@ impl Plan {
         self.output.push(format!(
             "removed  status line from {CLAUDE_SETTINGS} (tasks show above the prompt)"
         ));
+        Ok(())
+    }
+
+    /// Add the lead guard's hooks (decision 015) to the settings as the status line cleanup
+    /// left them. Settings it couldn't read were already reported by that cleanup.
+    fn add_guard(&mut self, root: &Path) -> Result<()> {
+        let existing = match self.writes.get(CLAUDE_SETTINGS) {
+            Some(bytes) => Some(bytes.clone()),
+            None => read_optional(&root.join(CLAUDE_SETTINGS))?,
+        };
+        match crate::guard::install(existing.as_deref()) {
+            Install::Added(_) if check_parents(root, CLAUDE_SETTINGS).is_err() => {
+                self.output.push(format!(
+                    "kept     {CLAUDE_SETTINGS} (its folder is a symlink upgrade doesn't write through; the lead guard was not added)"
+                ));
+            }
+            Install::Added(bytes) => {
+                self.writes.insert(CLAUDE_SETTINGS.into(), bytes);
+                self.output.push(crate::guard::ADDED.into());
+            }
+            Install::BadHooks => self.output.push(format!(
+                "skipped  lead guard in {CLAUDE_SETTINGS} (couldn't read its \"hooks\": not the shape Claude Code reads; the guard was not added)"
+            )),
+            Install::Present | Install::NotJson | Install::NotObject => {}
+        }
         Ok(())
     }
 
@@ -458,6 +484,7 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
     }
     if paths.is_empty() || paths.iter().any(|path| path == CLAUDE_SETTINGS) {
         plan.remove_status_line(&root)?;
+        plan.add_guard(&root)?;
     }
     let serialized = toml::to_string(&record)?;
     let record_changed = existing.as_deref() != Some(serialized.as_bytes());
@@ -575,6 +602,14 @@ mod tests {
         }
     }
 
+    /// Settings as a full upgrade leaves them: the lead guard's hooks added.
+    fn with_guard(settings: &[u8]) -> Vec<u8> {
+        match crate::guard::install(Some(settings)) {
+            Install::Added(bytes) => bytes,
+            other => panic!("guard not added: {other:?}"),
+        }
+    }
+
     impl Drop for Project {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
@@ -605,7 +640,7 @@ mod tests {
         )
         .unwrap();
         let mut expected = project.snapshot();
-        expected.insert(CLAUDE_SETTINGS.into(), b"{\n  \"ours\": true\n}\n".to_vec());
+        expected.insert(CLAUDE_SETTINGS.into(), with_guard(b"{\"ours\": true}"));
         upgrade(&project.0, &[CLAUDE_SETTINGS.into()]).unwrap();
         assert_eq!(project.snapshot(), expected);
         let record: Record =
@@ -635,12 +670,55 @@ mod tests {
         let mut expected = project.snapshot();
         expected.insert(
             CLAUDE_SETTINGS.into(),
-            format!("{}\n", serde_json::to_string_pretty(&other).unwrap()).into_bytes(),
+            with_guard(&serde_json::to_vec(&other).unwrap()),
         );
         upgrade(&project.0, &[]).unwrap();
         assert_eq!(project.snapshot(), expected);
         upgrade(&project.0, &[]).unwrap();
         assert_eq!(project.snapshot(), expected);
+    }
+
+    #[test]
+    fn malformed_hooks_do_not_claim_removed_status_line_was_left_alone() {
+        let project = Project::new();
+        project.install();
+        for hooks in [serde_json::json!([]), serde_json::json!({"Stop": {}})] {
+            let before = serde_json::json!({
+                "statusLine": {"type": "command", "command": STATUS_LINE},
+                "hooks": hooks,
+                "ours": true,
+            });
+            fs::write(
+                project.0.join(CLAUDE_SETTINGS),
+                serde_json::to_vec(&before).unwrap(),
+            )
+            .unwrap();
+            let mut plan = Plan::default();
+            plan.remove_status_line(&project.0).unwrap();
+            plan.add_guard(&project.0).unwrap();
+            let after: serde_json::Value =
+                serde_json::from_slice(&plan.writes[CLAUDE_SETTINGS]).unwrap();
+            assert_eq!(after, serde_json::json!({"hooks": hooks, "ours": true}));
+            assert_eq!(plan.output.len(), 2);
+            assert!(plan.output[0].contains("removed  status line"));
+            assert!(plan.output[1].contains(CLAUDE_SETTINGS));
+            assert!(plan.output[1].contains("couldn't read its \"hooks\""));
+            assert!(plan.output[1].contains("guard was not added"));
+            assert!(!plan.output.iter().any(|line| line.contains("left as is")));
+            assert!(!plan.output[1].starts_with("kept"));
+            for paths in [vec![], vec![CLAUDE_SETTINGS.into()]] {
+                upgrade(&project.0, &paths).unwrap();
+                let saved: serde_json::Value =
+                    serde_json::from_slice(&fs::read(project.0.join(CLAUDE_SETTINGS)).unwrap())
+                        .unwrap();
+                assert_eq!(saved, after);
+                fs::write(
+                    project.0.join(CLAUDE_SETTINGS),
+                    serde_json::to_vec(&before).unwrap(),
+                )
+                .unwrap();
+            }
+        }
     }
 
     #[test]
@@ -678,14 +756,24 @@ mod tests {
             } else {
                 assert_eq!(plan.output, Vec::<String>::new());
             }
-            let before = project.snapshot();
+            // Readable settings only gain the guard; the rest stays byte-for-byte.
+            let mut before = project.snapshot();
+            if serde_json::from_str::<serde_json::Value>(bytes).is_ok_and(|v| v.is_object()) {
+                before.insert(CLAUDE_SETTINGS.into(), with_guard(bytes.as_bytes()));
+                fs::write(project.0.join(CLAUDE_SETTINGS), with_guard(bytes.as_bytes())).unwrap();
+                upgrade(&project.0, &[]).unwrap();
+                assert_eq!(project.snapshot(), before);
+                fs::write(project.0.join(CLAUDE_SETTINGS), bytes).unwrap();
+            }
             upgrade(&project.0, &[]).unwrap();
             assert_eq!(project.snapshot(), before);
         }
         fs::remove_file(project.0.join(CLAUDE_SETTINGS)).unwrap();
-        let before = project.snapshot();
+        let mut before = project.snapshot();
         upgrade(&project.0, &[]).unwrap();
+        before.insert(CLAUDE_SETTINGS.into(), with_guard(b"{}"));
         assert_eq!(project.snapshot(), before);
+        fs::remove_file(project.0.join(CLAUDE_SETTINGS)).unwrap();
         let mut plan = Plan::default();
         plan.remove_status_line(&project.0).unwrap();
         assert_eq!(plan.output, Vec::<String>::new());
