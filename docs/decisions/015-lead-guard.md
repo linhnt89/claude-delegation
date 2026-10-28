@@ -46,3 +46,5 @@ same hooks; bwrap hides task state from them.
 The lead can't make even a one-line product fix; it costs a spec and a worker round.
 `delegate` must be on `PATH` for the hooks; a hook that can't run fails open. Projects
 that keep lead-written files outside the defaults list them in `.delegate.toml`.
+A turn the user interrupts runs no `Stop` hook, and the next prompt records a new start,
+so a shell edit in an interrupted turn goes unnoticed: accepted, as a seatbelt's limit.

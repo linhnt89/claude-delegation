@@ -43,7 +43,7 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
-| t056 | Build the lead guard (decision 015): `delegate guard`, the runner's `DELEGATE_WORKER`, hooks via `init`/`upgrade` | todo | – | deep | S050, S051, S052, S054, P017 pass; S053 at review; `scripts/check` | this repo's `.delegate.toml` gets `evals/lib/streams/*.steps` after the merge |
+| t056 | Build the lead guard (decision 015): `delegate guard`, the runner's `DELEGATE_WORKER`, hooks via `init`/`upgrade` | todo | – | deep | S050, S051, S052, S054, P017 pass; S053 at review; `scripts/check` | also S063's check (user-approved) and this repo's `[guard] lead_files` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
