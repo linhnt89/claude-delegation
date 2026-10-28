@@ -34,6 +34,9 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
+| t044 | Check errors (exit 3) don't step up a tier; `step_up_after` in `[defaults]`; never step down (decision 013) | todo | scenarios via `/evaluate feature` | standard | new scenarios + `scripts/check` | `evals/run`, `evals/lib`, `pick_tier`, round state, skill + kit mirror, `workers.example.toml` |
+| t045 | Implementers skip the family that wrote the task's checks: `checks_by` in specs, `Worker:` merge trailer (decision 013) | todo | scenarios via `/evaluate feature` | standard | new scenarios + `scripts/check` | `merge`, `run` candidates, spec template, skill + kit mirror |
+| t046 | Research: current models on artificialanalysis.ai, proposal for the user's `workers.toml` (cost → intelligence → time) | running | – | fast | `REPORT.md` | research only; result goes to the user, not the repo |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
