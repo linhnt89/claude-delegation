@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# evals/run tells a broken check (exit 3) apart from a failing product: it reports and counts
+# check errors, exits 3 when they are the only non-passes, 1 when anything failed. Decision 013.
+. "$EVALS_LIB/common.sh"
+setup_project
+
+# A project with the kit's evals/ and three scenarios: one passes, one fails, one is broken.
+scenario() { # id slug title check body
+  local dir="$PROJ/evals/scenarios/$1-$2"
+  mkdir -p "$dir"
+  printf '# %s %s\n- Job: J3\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' "$1" "$3" >"$dir/scenario.md"
+  printf '#!/usr/bin/env bash\n%s\n' "$4" >"$dir/check"
+  chmod +x "$dir/check"
+}
+scenario S901 good-works "A working check" 'echo "all good"; exit 0'
+scenario S902 product-broken "A failing product" 'echo "PRODUCT-IS-BROKEN-4471"; exit 1'
+scenario S903 check-broken "A broken check" 'echo "CHECK-ITSELF-IS-BROKEN-9137"; exit 3'
+
+ev() { # the project's evals/run; sets OUT and RC
+  OUT="$(cd "$PROJ" && evals/run "$@" 2>&1)"; RC=$?
+  printf '\n$ evals/run %s  (exit %s)\n%s\n' "$*" "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+}
+summary() { echo "$OUT" | grep '^-- ' | tail -1; }
+
+# 1. Only a check error: reported as such, with its last line, and the run exits 3.
+ev S901 S903
+[ "$RC" -eq 3 ] || fail "evals/run with only a check error exited $RC, expected 3: $(echo "$OUT" | grep -E 'S90|^--' | tr '\n' ' ')"
+line="$(echo "$OUT" | grep 'S903')"
+case "$line" in
+  "check error "*) ;;
+  *) fail "the broken check wasn't reported as 'check error': ${line:-no S903 line}" ;;
+esac
+echo "$line" | grep -qF "CHECK-ITSELF-IS-BROKEN-9137" \
+  || fail "the check error's reason wasn't its last line: $line"
+summary | grep -qE '(^|[^0-9])1 check error' \
+  || fail "the summary didn't count the check error on its own: $(summary)"
+
+# 2. A real failure and a check error: both shown, the run exits 1.
+ev S901 S902 S903
+[ "$RC" -eq 1 ] || fail "evals/run with a failing product and a check error exited $RC, expected 1"
+echo "$OUT" | grep 'S902' | grep -q "FAIL" \
+  || fail "the failing product wasn't reported as a failure: $(echo "$OUT" | grep S902)"
+echo "$OUT" | grep 'S903' | grep -q "check error" \
+  || fail "the check error was lost beside a real failure: $(echo "$OUT" | grep S903)"
+summary | grep -qE '(^|[^0-9])1 check error' \
+  || fail "the summary lost count of check errors beside a failure: $(summary)"
+
+# 3. The documented check exit codes list 3, in the runner's help and in the README.
+lists_3() { # text: an exit-code line with 3, or a line naming a check error with 3
+  printf '%s\n' "$1" | grep -E 'pass.*fail' | grep -qE '(^|[^0-9])3([^0-9]|$)' && return 0
+  printf '%s\n' "$1" | grep -E 'check error' | grep -qE '(^|[^0-9])3([^0-9]|$)' && return 0
+  return 1
+}
+help="$(cd "$PROJ" && evals/run --help 2>&1)"
+lists_3 "$help" || fail "evals/run --help's check exit codes don't list 3: $(echo "$help" | grep -iE 'exit code|pass|fail' | tr '\n' ' ')"
+lists_3 "$(cat "$PROJ/evals/README.md")" || fail "evals/README.md's check exit codes don't list 3"
+pass "evals/run reported the check error on its own, exited 3 then 1, and documents exit 3"

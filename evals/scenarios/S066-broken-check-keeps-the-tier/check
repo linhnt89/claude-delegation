@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# A broken acceptance check (exit 3) is not a product failure: the task keeps its tier, the
+# result says it is a check error, and merge stays refused. Decision 013.
+. "$EVALS_LIB/common.sh"
+setup_project
+simple_workers standard gpt-fine gpt-fine gpt-fine
+stub_worker gpt-fine <<'B'
+# The worker's work is fine: every round it adds a correct divide_bill.
+work() {
+  printf '\n\ndef divide_bill(amount, people):\n    return round(amount / people, 2)\n# round %s\n' \
+    "$(date +%s%N)" >>shop/pricing.py
+}
+B
+
+broken="python3 -c 'raise SystemExit(3)'"
+works="python3 -c 'from shop.pricing import divide_bill as d; r = d(10, 3); assert r == 3.33, r'"
+write_spec t001 "Split a bill" "Add divide_bill." "$broken" "$works"
+
+# 1. The round is reported as a check error, naming the command.
+d run t001
+echo "$OUT" | grep -q "checks:   CHECK ERROR" \
+  || fail "the run didn't report the exit-3 check as a check error: $(echo "$OUT" | grep -E 'checks:|PASS|FAIL' | head -3 | tr '\n' ' ')"
+echo "$OUT" | grep -qF "raise SystemExit(3)" \
+  || fail "the result doesn't name the command that exited 3: $(echo "$OUT" | head -6 | tr '\n' ' ')"
+got="$(sj 's["tasks"][0]["outcome"]' t001)"
+[ "$got" = "check error" ] \
+  || fail "delegate status --json says outcome '$got', expected 'check error'"
+d list
+echo "$OUT" | grep -E '^t001 ' | grep -q "check error" \
+  || fail "delegate list doesn't show a check error for t001: $(echo "$OUT" | grep -E '^t001 ' | tr '\n' ' ')"
+
+# 2. The next round stays at the same tier and says a check error is why.
+d run t001
+first="$(echo "$OUT" | head -1)"
+echo "$first" | grep -qF "@ standard (same tier (check error, not a product failure))" \
+  || fail "the round after a check error didn't stay at standard for that reason: $first"
+
+# 3. A broken check is never passing, so merge is still refused and the task kept.
+main_before="$(snapshot_main)"
+d merge t001
+[ "$RC" -ne 0 ] || fail "merge accepted a task whose last checks are a check error"
+same_main "$main_before" "a refused merge changed main"
+d list
+echo "$OUT" | grep -q "^t001 " || fail "the task disappeared after the refused merge"
+
+# 4. A round with a check error and a real failure in another command is a product failure:
+#    it counts, so the next round steps up.
+real_fail="python3 -c 'from shop.pricing import divide_bill as d; r = d(10, 3); assert r == 99, r'"
+write_spec t002 "Split a bill" "Add divide_bill." "$broken" "$works" "$real_fail"
+d run t002
+echo "$OUT" | grep -q "checks:   FAIL" \
+  || fail "a round with a real failure didn't count as a product failure: $(echo "$OUT" | grep -E 'checks:|CHECK ERROR' | tr '\n' ' ')"
+echo "$OUT" | grep -q "checks:   CHECK ERROR" \
+  && fail "a round with a real failure was called only a check error"
+d run t002
+first="$(echo "$OUT" | head -1)"
+echo "$first" | grep -qF "@ deep (stepped up after failed checks at standard)" \
+  || fail "a round with a real failure didn't step up: $first"
+pass "an exit-3 check stayed a check error: same tier, named command, merge refused"

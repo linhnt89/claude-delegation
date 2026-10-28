@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# `step_up_after` in workers.toml [defaults]: N failed rounds at a tier before the next one
+# moves up; check-error rounds don't count and don't reset the count. Decision 013.
+. "$EVALS_LIB/common.sh"
+setup_project
+
+# workers_config [step_up_after line]: a config with one stand-in per implement tier.
+workers_config() {
+  {
+    printf 'planner_family = "claude"\n[defaults]\nimplement = "standard"\nresearch = "fast"\nreview = "standard"\nplan_review = "standard"\n'
+    [ -n "${1:-}" ] && printf '%s\n' "$1"
+    cat <<'EOF'
+[implement]
+fast = ["pi:gpt-sloppy@high"]
+standard = ["pi:gpt-sloppy@high"]
+deep = ["pi:gpt-deep@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+EOF
+  } | workers_toml
+}
+
+# The stand-ins never get divide_bill right; one round can also break its own check.
+write_stub() {
+  stub_worker "$1" <<'B'
+tid="$(sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md)"
+mode="$(cat "$EVALS_WORK/flags/$tid" 2>/dev/null || echo fail)"
+work() {
+  rm -f shop/.checkerr
+  [ "$mode" = error ] && : > shop/.checkerr
+  printf '\n\ndef divide_bill(amount, people):\n    return amount // people\n# round %s\n' \
+    "$(date +%s%N)" >>shop/pricing.py
+}
+B
+}
+write_stub gpt-sloppy
+write_stub gpt-deep
+
+# A check that would fail the sloppy product, and that exits 3 while shop/.checkerr stands:
+# the check's own brokenness, not a verdict on the product.
+check_cmd="if [ -e shop/.checkerr ]; then exit 3; fi; python3 -c 'from shop.pricing import divide_bill as d; r = d(10, 3); assert r == 3.33, r'"
+
+# 1. With step_up_after = 2, the second round is a second try at standard, the third steps up.
+workers_config "step_up_after = 2"
+write_spec t001 "Split a bill" "Add divide_bill." "$check_cmd"
+d run t001
+echo "$OUT" | grep -q "checks:   FAIL" || fail "setup: the first round's checks didn't fail: $(echo "$OUT" | grep checks)"
+d run t001
+first="$(echo "$OUT" | head -1)"
+echo "$first" | grep -qF "@ standard (try 2 at standard (1 of 2 failed rounds))" \
+  || fail "round 2 wasn't a second try at standard after 1 failed round: $first"
+d run t001
+first="$(echo "$OUT" | head -1)"
+echo "$first" | grep -qF "@ deep (stepped up after 2 failed rounds at standard)" \
+  || fail "round 3 didn't step up after 2 failed rounds at standard: $first"
+
+# 2. Without step_up_after, one failed round still steps up, as before.
+workers_config ""
+write_spec t002 "Split a bill" "Add divide_bill." "$check_cmd"
+d run t002
+echo "$OUT" | grep -q "checks:   FAIL" || fail "setup: t002's first round didn't fail: $(echo "$OUT" | grep checks)"
+d run t002
+first="$(echo "$OUT" | head -1)"
+echo "$first" | grep -qF "@ deep (stepped up after failed checks at standard)" \
+  || fail "with no step_up_after, the second round didn't step up as before: $first"
+
+# 3. A check-error round neither counts toward the failures nor resets them. The reason on
+#    each round's first line describes the rounds before it, so the flags run one round ahead.
+workers_config "step_up_after = 2"
+write_spec t003 "Split a bill" "Add divide_bill." "$check_cmd"
+flag t003 fail
+d run t003
+echo "$OUT" | grep -q "checks:   FAIL" || fail "setup: t003's first round didn't fail: $(echo "$OUT" | grep checks)"
+flag t003 error
+d run t003
+first="$(echo "$OUT" | head -1)"
+echo "$first" | grep -qF "@ standard (try 2 at standard (1 of 2 failed rounds))" \
+  || fail "after one failure, round 2 wasn't a second try at standard: $first"
+flag t003 fail
+d run t003
+first="$(echo "$OUT" | head -1)"
+echo "$first" | grep -qF "@ standard (same tier (check error, not a product failure))" \
+  || fail "after a check-error round, round 3 didn't stay at standard for that reason: $first"
+flag t003 fail
+d run t003
+first="$(echo "$OUT" | head -1)"
+echo "$first" | grep -qF "@ deep (stepped up after 2 failed rounds at standard)" \
+  || fail "the two real failures didn't add up to a step-up: $first"
+
+# 4. Bad values are refused, naming the setting, the file and what works.
+for bad in "step_up_after = 0" 'step_up_after = "two"'; do
+  workers_config "$bad"
+  d run t001
+  [ "$RC" -ne 0 ] || fail "a run accepted '$bad'"
+  for part in step_up_after "$HOME/.config/delegate/workers.toml" "a whole number, 1 or more"; do
+    echo "$OUT" | grep -qF "$part" \
+      || fail "'$bad' wasn't refused with a message naming '$part': $(echo "$OUT" | tr '\n' ' ' | cut -c1-300)"
+  done
+done
+pass "step_up_after 2 gave a second try at standard, then deep; bad values were refused"

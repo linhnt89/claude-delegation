@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# P019: for any step_up_after (1..3) and any sequence of round results, the tier never goes
+# down and moves up exactly after enough product failures at the current tier; check errors and
+# rounds that didn't start neither count nor reset. Decision 013.
+. "$EVALS_LIB/common.sh"
+setup_project
+exec python3 - "$@" <<'PY'
+import os, re, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+from kit import *
+
+save_template()  # fresh() resets to this kit project before each trial
+
+TIERS = ["fast", "standard", "deep"]
+DEFAULT = "standard"
+SYMS = ["pass", "fail", "error", "nostart"]
+MODELS = {"fast": "gpt-a", "standard": "gpt-b", "deep": "gpt-c"}
+
+# One stand-in per tier: the flags/<id> file says what this round's product does.
+STUB = r'''
+tid="$(sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md)"
+mode="$(cat "$EVALS_WORK/flags/$tid" 2>/dev/null || echo pass)"
+start() { [ "$mode" = nostart ] && { echo "Error: 429 quota exceeded" >&2; exit 1; }; :; }
+work() {
+  rm -f shop/.checkerr
+  [ "$mode" = error ] && : > shop/.checkerr
+  f="shop/split_${tid}.py"
+  stamp="$(date +%s%N)"
+  case "$mode" in
+    fail) printf 'def share(amount, people):\n    return amount // people\n# round %s\n' "$stamp" >"$f" ;;
+    *)    printf 'def share(amount, people):\n    return round(amount / people, 2)\n# round %s\n' "$stamp" >"$f" ;;
+  esac
+}
+'''
+# The check exits 3 while the stand-in leaves shop/.checkerr: a bug in the check itself.
+ACC = ("if [ -e shop/.checkerr ]; then echo 'property generator produced invalid input'; exit 3; fi; "
+       "python3 -c 'from shop.split_t001 import share; assert share(10, 3) == 3.33'")
+
+
+def configure(step_up_after):
+    extra = "" if step_up_after is None else f"step_up_after = {step_up_after}\n"
+    workers('planner_family = "claude"\n[defaults]\nimplement = "standard"\nresearch = "fast"\n'
+            'review = "standard"\nplan_review = "standard"\n' + extra +
+            '[implement]\n' + "".join(f'{t} = ["pi:{MODELS[t]}@high"]\n' for t in TIERS) +
+            '[research]\nfast = ["pi:deepseek-research@medium"]\n'
+            '[review]\nstandard = ["pi:gpt-review@high", "pi:deepseek-review@high"]\n'
+            '[plan_review]\nstandard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]\n')
+
+
+def prepare(step_up_after):
+    fresh()
+    configure(step_up_after)
+    for model in MODELS.values():
+        stub(model, STUB)
+    spec("t001", (ACC,))
+
+
+def trial(seq, step_up_after):
+    """Run one sequence; return None when every tier follows the rule, else what went wrong."""
+    prepare(step_up_after)
+    want = TIERS.index(DEFAULT)
+    failures = 0
+    for round_no, sym in enumerate(seq, 1):
+        flag("t001", sym)
+        rc, out = d("run", "t001", "--no-ask")
+        first = out.splitlines()[0] if out else ""
+        case = {"step_up_after": step_up_after, "sequence": list(seq), "round": round_no, "result": sym}
+        found = re.search(r"@ (fast|standard|deep) \(", first)
+        if not found:
+            return f"round {round_no} ({sym}) printed no tier: {first[:160]}", case
+        got = found[1]
+        # The stand-in really produced the named result; otherwise the tier rule isn't what failed.
+        checks = next((l for l in out.splitlines() if l.startswith("checks:")), "checks: none")
+        if sym == "pass" and "checks:   pass" not in out:
+            return f"setup: round {round_no} should have passed: {checks}", case
+        if sym == "fail" and "checks:   FAIL" not in out:
+            return f"setup: round {round_no} should have failed its checks: {checks}", case
+        if sym == "nostart" and (rc == 0 or "no candidate could start" not in out):
+            return f"setup: round {round_no} should not have started (exit {rc}): {out.strip()[-200:]}", case
+        if got != TIERS[want]:
+            return (f"round {round_no} ({sym}) with step_up_after={step_up_after} ran at {got}, "
+                    f"expected {TIERS[want]}: {first[:200]}", case)
+        listed = list_tasks().get("t001")
+        if listed == "not run" or not listed:
+            return f"delegate list has no t001 after round {round_no}", case
+        if listed[1] != got:
+            return f"delegate list says round {round_no} ran at {listed[1]}, run said {got}", case
+        if listed[0] != round_no:
+            return f"delegate list has round {listed[0]} after {round_no} runs", case
+        if sym == "pass":
+            failures = 0
+        elif sym == "fail":
+            failures += 1
+            if failures >= step_up_after:
+                want = min(want + 1, len(TIERS) - 1)
+                failures = 0
+    return None
+
+
+def seeded():
+    """A random default seed explores new sequences; EVALS_SEED replays one."""
+    return seed()
+
+
+rng, s = seeded()
+
+
+def random_case():
+    return [rng.choice(SYMS) for _ in range(rng.randint(4, 6))]
+
+
+# Cover every step_up_after, then two more random mixes.
+cases = [(random_case(), step) for step in (1, 2, 3)] + [(random_case(), rng.randint(1, 3)) for _ in range(2)]
+for seq, step in cases:
+    problem = trial(seq, step)
+    if not problem:
+        continue
+    # Cheap shrink: the shortest failing prefix, then drop symbols one at a time.
+    best = seq
+    for k in range(1, len(seq) + 1):
+        cand = seq[:k]
+        if trial(cand, step):
+            best = cand
+            break
+    tries, changed = 0, True
+    while changed and tries < 6 and len(best) > 1:
+        changed = False
+        for i in range(len(best)):
+            cand = best[:i] + best[i + 1:]
+            if not cand:
+                continue
+            tries += 1
+            if trial(cand, step):
+                best, changed = cand, True
+                break
+    message, case = trial(best, step) or problem
+    fail(message, case, s)
+print(f"{len(cases)} random sequences of pass, product failure, check error and couldn't-start "
+      f"rounds followed the tier rule")
+PY
