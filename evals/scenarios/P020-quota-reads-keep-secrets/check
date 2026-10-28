@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/common.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "fast"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["claude:sonnet", "codex:codex-worker@high", "pi:github-copilot/copilot-worker@high", "pi:hyper/hyper-worker@high"]
+standard = ["claude:sonnet", "codex:codex-worker@high", "pi:github-copilot/copilot-worker@high", "pi:hyper/hyper-worker@high"]
+deep = ["claude:sonnet", "codex:codex-worker@high", "pi:github-copilot/copilot-worker@high", "pi:hyper/hyper-worker@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+[quota]
+check = true
+[quota.runway]
+small = "30m"
+medium = "1h"
+long = "3h"
+T
+install_stub claude
+install_stub codex
+stub_worker sonnet <<'B'
+work() { :; }
+B
+stub_worker codex-worker <<'B'
+work() { :; }
+B
+stub_worker copilot-worker <<'B'
+work() { :; }
+B
+stub_worker hyper-worker <<'B'
+work() { :; }
+B
+exec python3 "$EVALS_LIB/quota_checks.py" P020
