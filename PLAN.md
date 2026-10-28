@@ -48,16 +48,15 @@
   lead's product edits and hold its turn after a shell edit; workers are told apart by the
   runner's `DELEGATE_WORKER`; `init`/`upgrade` install it, `DELEGATE_GUARD=off` turns it off.
   S050–S054, P017 pass. Checks from t026, fix by Claude Opus (Copilot) and Sol, review by DeepSeek.
+- t060–t063 (2026-10-29): decisions 016, 017. The lead works in waves: the delegate skill and
+  templates teach the batch loop (one id-less `wait`, work while workers run, one merge ask per
+  batch); `run` warns when `Scope In` overlaps a running task; parallel tasks share an
+  account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
+  Luna (t062). S079–S082 pass, P021 hidden.
 
 ## Next
-Decision 016 (J5, J9): the lead works in waves. Wave 2 tasks touch disjoint files and run together.
-
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t060 | Scenarios: `run` warns on Scope In overlap with a running task; the kit's lead text describes the batch loop (wave, `wait` with no ids, one merge ask per batch); parallel tasks share an account while its runway covers them all | 1 | done | – | lead | scenarios fail until built | `/evaluate feature`; checks by a worker |
-| t061 | `delegate run` warns when the new task's `Scope In` overlaps a running task's | 2 | done | t060 | standard | t060's overlap scenario, `scripts/check` | `checks_by: t060`; `spec::scope_paths` exists |
-| t062 | Delegate skill §1, §3, §4, §6 around waves and the batch loop; `wave` column in the `PLAN.md` template; one parallel-work line in the template `CLAUDE.md` | 2 | done | t060 | fast | t060's kit-text scenario, `scripts/check` | mirror into `delegate/templates/project/`, run `scripts/kit-history` |
-| t063 | Candidate selection divides an account's runway by (tasks running on it + 1); the first candidate whose shared runway covers the size runs (decision 017) | 3 | running | t061 | standard | S080, S081, P021, `scripts/check` | after t061: both touch selection in `commands.rs` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
