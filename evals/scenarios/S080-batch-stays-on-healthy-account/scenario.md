@@ -2,7 +2,7 @@
 - Job: J5
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude as lead starting three ready tasks of a wave at once. Decisions 016, 017.

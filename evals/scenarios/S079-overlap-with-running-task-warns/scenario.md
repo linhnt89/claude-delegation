@@ -2,7 +2,7 @@
 - Job: J5
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 Claude as lead starting a wave of tasks in the background. Decision 016.

@@ -43,3 +43,4 @@ J8 P010 S028. J6 has none: its one scenario, S017, stays visible.
 Added for decision 007 (new feature: fail until built): J7 P015 P016.
 Added for session-scoped views (new feature: fails until built): J8 P018.
 Added for the lead guard (new feature: fails until built): J9 P017.
+Added for decisions 016, 017 (new feature: fails until built): J5 P021.
