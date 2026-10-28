@@ -61,8 +61,6 @@
 - A task that adds a crate fails `scripts/check` in the sandbox: `~/.cargo` is read-only there,
   so cargo can't download it (t052). Workaround: the lead runs `cargo fetch` in the task's
   worktree on the host, then `delegate check`. Fix idea: the runner fetches before checks.
-- Pi's Hyper login on this machine is expired (2026-10-28): `delegate quota` shows hyper as unknown;
-  log in to Hyper in Pi again.
 - `delegate list` says "vault: N commit(s) not pushed" when the vault has no remote at all.
 - A card beside the desktop app's Environment/Context cards isn't possible: the mod API
   (`claude-code.d.ts`, Claude Code 2.1.308) has no side-card component. Revisit when it does.
