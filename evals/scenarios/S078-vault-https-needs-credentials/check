@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# An HTTP remote that demands Basic auth, as GitLab does for an HTTPS clone URL.
+. "$EVALS_LIB/common.sh"
+use_machine fresh
+export GIT_CONFIG_NOSYSTEM=1
+port_file="$EVALS_WORK/auth-port"
+python3 - "$port_file" <<'PY' &
+import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="GitLab"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    do_POST = do_GET
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(s.server_port))
+s.serve_forever()
+PY
+server=$!
+trap 'kill $server 2>/dev/null' EXIT
+for _ in $(seq 50); do [ -s "$port_file" ] && break; sleep 0.1; done
+[ -s "$port_file" ] || { echo "setup: auth server didn't start"; exit 3; }
+url="http://127.0.0.1:$(cat "$port_file")/group/vault.git"
+
+OUT="$(timeout 60 "$DELEGATE" setup --vault "$url" </dev/null 2>&1)"; RC=$?
+printf '\n$ delegate setup --vault %s  (exit %s)\n%s\n' "$url" "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+[ "$RC" -ne 124 ] || fail "delegate setup waited for input"
+vault_line="$(echo "$OUT" | grep -i vault)"
+echo "$vault_line" | grep -qiE "(no|without) (saved |stored )?credentials?" || fail "setup doesn't say git has no saved credentials: $vault_line"
+echo "$vault_line" | grep -qiE "ssh" || fail "setup doesn't suggest the SSH URL: $vault_line"
+echo "$vault_line" | grep -qiE "credential[ .-]?helper|git (ls-remote|fetch|clone)" || fail "setup doesn't say how to save credentials: $vault_line"
+if [ -d "$HOME/.local/share/delegate/vault/.git" ]; then
+  remote="$(git -C "$HOME/.local/share/delegate/vault" remote 2>/dev/null)"
+  [ -z "$remote" ] || fail "setup connected a vault it couldn't reach (remote: $remote)"
+fi
+pass "setup explained the missing HTTPS credentials and connected nothing"

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+. "$EVALS_LIB/common.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "fast"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["claude:sonnet"]
+[research]
+fast = ["claude:sonnet"]
+[review]
+standard = ["pi:gpt-review@high"]
+[plan_review]
+standard = ["pi:gpt-plan@high"]
+[quota]
+check = true
+T
+install_stub claude
+stub_worker sonnet <<'B'
+work() { :; }
+B
+exec python3 "$EVALS_LIB/quota_checks.py" S077

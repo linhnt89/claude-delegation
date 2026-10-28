@@ -1,4 +1,4 @@
-"""Scenario assertions shared by S071--S074, S076 and P020."""
+"""Scenario assertions shared by S071--S074, S076, S077 and P020."""
 
 from __future__ import annotations
 
@@ -780,9 +780,110 @@ def check_p020() -> None:
     print(f"P020 checked five seeded vendor response mixes and five login-file mixes without leaks or mutations (seed {actual_seed})")
 
 
+def enterprise_body(used: int = 22_550, limit: int = 50_000) -> dict[str, Any]:
+    """Claude Enterprise: no plan windows, only a monthly spend cap (shape seen 2026-10-28)."""
+    percent = round(100 * used / limit, 1)
+    money = lambda amount: {"amount_minor": amount, "currency": "USD", "exponent": 2}  # noqa: E731
+    return {
+        "five_hour": None,
+        "seven_day": None,
+        "seven_day_oauth_apps": None,
+        "extra_usage": {
+            "is_enabled": True, "monthly_limit": limit, "used_credits": float(used),
+            "utilization": percent, "currency": "USD", "decimal_places": 2,
+            "disabled_reason": None, "user_disabled": False,
+            "spend_limit_reached": used >= limit, "credits_ever_enabled": True,
+            "daily": None, "weekly": None,
+        },
+        "limits": [],
+        "spend": {
+            "used": money(used), "limit": money(limit), "percent": int(percent),
+            "severity": "normal", "enabled": True, "disabled_reason": None,
+            "cap": {"money": None, "credits": {"amount_minor": limit, "exponent": 2}},
+            "balance": None, "auto_reload": None,
+            "can_purchase_credits": False, "can_toggle": False,
+        },
+        "member_dashboard_available": True,
+        "seven_day_breakdown": None,
+        "weekly_scoped_shares": None,
+    }
+
+
+def claude_windows_left(encoded: str) -> tuple[dict[str, Any], list[tuple[str, float]]]:
+    record = find_json_object(encoded)
+    require(record is not None, f"quota --json did not emit the account record: {encoded[-400:]}")
+    assert record is not None
+    claude = accounts_by_name(record).get("claude")
+    require(claude is not None, f"quota JSON has no claude account: {record}")
+    assert claude is not None
+    windows = claude.get("windows") or []
+    return claude, [(str(w.get("name", "")), json_percent(w.get("percentLeft"))) for w in windows]
+
+
+def check_s077() -> None:
+    token = "FAKE_S077_CLAUDE_ACCESS"
+    before = snapshots([make_claude_login(token)])
+    relogin = re.compile(r"log ?in again|auth login", re.I)
+    with VendorServer(WORK / "vendors.jsonl") as server:
+        os.environ.update(server.env())
+
+        server.set_routes(routes_for(claude=route(body=enterprise_body())))
+        rc, plain = run("quota")
+        assert_command_succeeded(rc, plain, "delegate quota")
+        line = account_line(plain, "claude")
+        require("unknown" not in line.lower(), f"the Enterprise spend cap was read as unknown: {line}")
+        require("monthly" in line.lower() and "55%" in line,
+                f"the Claude line doesn't show a monthly window with 55% left: {line}")
+        require(not relogin.search(line), f"a working Enterprise login was told to log in again: {line}")
+        rc, encoded = run("quota", "--json")
+        assert_command_succeeded(rc, encoded, "delegate quota --json")
+        claude, left = claude_windows_left(encoded)
+        require(claude.get("status") == "ok", f"Enterprise Claude status was not ok: {claude}")
+        require(any("month" in name.lower() and abs(value - 54.9) < 0.6 for name, value in left),
+                f"JSON has no monthly window with ~55% left: {left}")
+
+        server.set_routes(routes_for(claude=route(body=enterprise_body(50_000))))
+        rc, plain = run("quota", "--json")
+        assert_command_succeeded(rc, plain, "quota with the spend cap used up")
+        _, left = claude_windows_left(plain)
+        require(any("month" in name.lower() and value == 0 for name, value in left),
+                f"a used-up monthly cap didn't show 0% left: {left}")
+
+        pro = claude_body(30, 20)
+        pro["extra_usage"] = enterprise_body(45_000)["extra_usage"]
+        server.set_routes(routes_for(claude=route(body=pro)))
+        rc, plain = run("quota", "--json")
+        assert_command_succeeded(rc, plain, "quota for a Pro account with extra usage")
+        _, left = claude_windows_left(plain)
+        names = " ".join(name.lower() for name, _ in left)
+        require("5-hour" in names and "weekly" in names, f"Pro plan windows went missing: {left}")
+        require(not any("month" in name.lower() for name, _ in left),
+                f"Pro extra usage was shown as a monthly quota window: {left}")
+
+        server.set_routes(routes_for(claude=route(body={"limits": []})))
+        rc, plain = run("quota")
+        assert_command_succeeded(rc, plain, "quota with an unreadable answer")
+        line = account_line(plain, "claude")
+        require("unknown" in line.lower(), f"an unreadable answer wasn't unknown: {line}")
+        require(not relogin.search(line), f"an unreadable answer told a working login to log in again: {line}")
+
+        server.set_routes(routes_for(claude=route(status=401, body={"error": "expired"})))
+        rc, plain = run("quota")
+        assert_command_succeeded(rc, plain, "quota with an expired login")
+        line = account_line(plain, "claude")
+        require("unknown" in line.lower() and "claude auth login" in line,
+                f"an expired login didn't say to log in again with claude auth login: {line}")
+
+        assert_auth(server, "/api/oauth/usage", token)
+        assert_local_requests(server)
+    assert_unchanged(before)
+    print("S077 Enterprise showed its monthly cap, a used-up cap was 0%, Pro kept its plan windows, and only a 401 asked for a new login")
+
+
 def main() -> None:
     scenario = sys.argv[1] if len(sys.argv) > 1 else ""
     checks = {
+        "S077": check_s077,
         "S071": check_s071,
         "S072": check_s072,
         "S073": check_s073,
