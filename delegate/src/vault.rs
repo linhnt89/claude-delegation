@@ -1227,13 +1227,41 @@ pub(crate) fn add(ctx: &Ctx, folder: &Path) -> Result<()> {
     add_at(ctx, folder, &data_dir(), !sandboxed())
 }
 
+/// Whether git failed because it needed credentials and could not prompt for them.
+fn needs_credentials(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    [
+        "terminal prompts disabled",
+        "could not read username",
+        "could not read password",
+    ]
+    .iter()
+    .any(|phrase| stderr.contains(phrase))
+}
+
+/// What to do when an HTTPS vault needs credentials git could not ask for.
+fn credentials_hint(url: &str) -> String {
+    format!(
+        "git has no saved credentials for {url}; use the SSH URL instead, or save credentials with a \
+         credential helper (`git config --global credential.helper <helper>`) and run \
+         `git ls-remote {url}` once in a terminal; then rerun delegate setup --vault {url}"
+    )
+}
+
 /// Probe before changing local state, so an unreachable URL is never connected.
 fn connect_at(data: &Path, url: &str) -> Result<()> {
     let Some(sync) = SyncLock::take(data)? else {
         bail!("{SYNC_BUSY}; retry delegate setup --vault <url> in a minute");
     };
-    let refs = git_net(&std::env::current_dir()?, &["ls-remote", "--symref", url])
-        .context("cannot reach vault URL; check the URL and credentials, then rerun delegate setup --vault <url>")?;
+    let refs = match git_net(&std::env::current_dir()?, &["ls-remote", "--symref", url]) {
+        Ok(refs) => refs,
+        Err(e) if needs_credentials(&format!("{e:#}")) => bail!("{}", credentials_hint(url)),
+        Err(e) => {
+            return Err(e).context(
+                "cannot reach vault URL; check the URL and credentials, then rerun delegate setup --vault <url>",
+            )
+        }
+    };
     let branch = refs
         .lines()
         .find_map(|l| {
@@ -3054,6 +3082,30 @@ mod tests {
         let fixture = Fixture::new();
         let error = git(&fixture.0, &["-c", "alias.stall=!sleep 30", "stall"]).unwrap_err();
         assert!(error.to_string().contains("timed out after 10s"), "{error}");
+    }
+
+    #[test]
+    fn credential_failures_are_recognised_from_git_stderr() {
+        for stderr in [
+            "fatal: could not read Username for 'https://gitlab.example/vault.git': terminal prompts disabled",
+            "fatal: could not read Password for 'https://user@gitlab.example/vault.git': terminal prompts disabled",
+        ] {
+            assert!(needs_credentials(stderr), "{stderr}");
+        }
+        assert!(!needs_credentials(
+            "fatal: repository 'https://gitlab.example/nope.git/' not found"
+        ));
+        let hint = credentials_hint("https://gitlab.example/vault.git");
+        assert!(hint.contains("no saved credentials"), "{hint}");
+        assert!(hint.contains("SSH URL"), "{hint}");
+        assert!(
+            hint.contains("git config --global credential.helper") && hint.contains("git ls-remote"),
+            "{hint}"
+        );
+        assert!(
+            hint.ends_with("then rerun delegate setup --vault https://gitlab.example/vault.git"),
+            "{hint}"
+        );
     }
 
     #[test]
