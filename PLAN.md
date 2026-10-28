@@ -16,7 +16,7 @@
   007, 008, 010): task state by checkout id, one vault repo for hidden sets, `delegate setup`,
   automatic migration of old homes. This repo migrated on 2026-10-27; its vault's remote is on GitHub.
 - t026 (2026-10-27): checks for the lead guard (J9): S050–S054, P017 fail until the guard is
-  built. A pilot of delegating eval writing; the guard and the `evaluate` role are not distilled yet.
+  built. A pilot of delegating eval writing; the guard is decision 015 (t056), the `evaluate` role is not distilled yet.
 - t040–t041 (2026-10-27): tasks show once, in the row above the prompt, with other sessions
   dimmed; the pane opens only on request and reads one status at a time; `init` adds no status
   line and `upgrade` removes the kit's (J8, J1, decision 012). t042: in the desktop app the row
@@ -43,6 +43,7 @@
 ## Next
 | id | task | status | depends on | tier | acceptance | notes |
 |----|------|--------|------------|------|------------|-------|
+| t056 | Build the lead guard (decision 015): `delegate guard`, the runner's `DELEGATE_WORKER`, hooks via `init`/`upgrade` | todo | – | deep | S050, S051, S052, S054, P017 pass; S053 at review; `scripts/check` | this repo's `.delegate.toml` gets `evals/lib/streams/*.steps` after the merge |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
