@@ -76,3 +76,30 @@ standard = [
   "pi:hyper/deepseek-v4.1-flash-1017@max",
   "pi:github-copilot/gemini-4-argon@high",
 ]
+
+# Read each candidate's account quota before a run and skip an account that is out or
+# whose projected runway is shorter than the spec's `size:` needs. Logins are only read.
+[quota]
+check = true
+
+# Runway a task needs, by its spec's `size:` line (default medium).
+[quota.runway]
+small = "30m"
+medium = "1h"
+long = "3h"
+
+# Hyper is prepaid: the daily credit cap and the local time the day resets.
+[quota.hyper]
+daily_cap = 250
+resets_at = "00:08"
+
+# Map a candidate prefix to one of claude, codex, copilot, hyper or none when your logins
+# differ from the built-in table. `none` opts a prefix out of quota checks. The longest
+# matching key wins. Quote keys that contain `:` or `/`.
+[accounts]
+# "pi:openai-codex/" = "codex"
+# "pi:github-copilot/" = "copilot"
+# "pi:hyper/" = "hyper"
+# "codex:" = "codex"
+# "claude:" = "claude"
+# "pi:local/" = "none"

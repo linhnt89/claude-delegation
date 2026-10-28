@@ -73,6 +73,7 @@ Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
 | `delegate watch [id]` | `status`, refreshing in a terminal |
 | `delegate wait [ids] [--timeout D]` | Block until a task finishes, is interrupted or stalls (Claude runs it in the background) |
 | `delegate statusline` | One line for a Claude Code status line, if you add it to yours |
+| `delegate quota [--json]` | Each account's windows, runway, reset and login source; `--json` is versioned |
 | `delegate list` | Status of every task: round, tier, checks, review |
 | `delegate merge <id>` | Squash-merge if the gates pass, then delete all task state |
 | `delegate discard <id>` | Delete all task state without merging |
@@ -100,6 +101,17 @@ intelligence-vs-cost Pareto line; recheck it monthly and edit the lines, nothing
 `planner_family` (Claude), and implementation skips the family of any task named on the
 spec's `checks_by:` line (read from that task's `Worker:` merge trailer). Family is inferred from the model name (gpt, claude, deepseek,
 gemini, ...).
+
+**Quota:** before a run, delegate reads each candidate's account itself (Claude Code,
+Pi's `openai-codex`/`github-copilot`/`hyper`, and native Codex), skips an account that is out
+or whose projected runway is shorter than the task's `size:`, and warns but runs when a login
+is expired or a vendor is unreachable. Logins are read only; nothing is refreshed on disk and
+no token is printed. `[quota] check = false` turns run-time reads off; `delegate quota` still
+reads on request. `[quota.runway]` sets the runway `small`/`medium`/`long` tasks need (default
+30m/1h/3h) and `[quota.hyper]` sets the daily credit cap and local reset time. `[accounts]`
+maps a candidate prefix (for example `"pi:openai-codex/"`) to one of `claude`, `codex`,
+`copilot`, `hyper` or `none` when your logins differ from the built-in table; `none` opts a
+prefix out. An explicit `--worker` is still checked, but a warning is printed and it runs.
 
 **Tier choice:** the default comes from `[defaults]`. Claude picks `fast`/`deep` by the table
 in the delegate skill and tells you before running. After `step_up_after` failed rounds at a
@@ -224,10 +236,11 @@ sessions in `~/.pi`, Claude workers in `~/.claude/projects/`.
 | Path | Contents |
 |---|---|
 | `src/config.rs` | Tiers, harnesses, efforts, workers and families; `workers.toml` and `.delegate.toml` |
+| `src/quota.rs` | Native quota readers, account mapping and runway for quota-aware selection |
 | `src/spec.rs` | Reading Acceptance commands, Scope paths, title and Goal from a spec |
 | `src/task.rs` | Repo context, git, per-task state (`STATE.json`) |
 | `src/harness.rs` | Worker commands per harness, sessions, bwrap sandbox |
-| `src/commands.rs` | `new`, `run`, `check`, `review`, `plan-review`, `list`, `merge`, `discard` |
+| `src/commands.rs` | `new`, `run`, `quota`, `check`, `review`, `plan-review`, `list`, `merge`, `discard` |
 | `src/init.rs`, `src/prompts.rs` | `init` with embedded templates; worker prompts |
 | `src/setup.rs`, `src/vault.rs` | Machine setup, project IDs, `where` and the locked private vault |
 | `src/upgrade.rs`, `src/sha256.rs` | `upgrade`: kit record, earlier kits from `templates/kit-history.txt`; hashing |

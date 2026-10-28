@@ -8,9 +8,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::{Harness, ProjectRules, ReviewRule, Role, Tier, Worker, WorkersConfig};
+use crate::config::{
+    Harness, ProjectRules, ReviewRule, Role, TaskSize, Tier, Worker, WorkersConfig,
+    workers_config_path,
+};
 use crate::harness::{self, Bounds, Session};
 use crate::prompts;
+use crate::quota;
 use crate::spec;
 use crate::status::{self, Operation};
 use crate::task::{CheckOutcome, Checks, Ctx, Owner, ReviewState, Round, RoundStatus, Task, git};
@@ -90,6 +94,113 @@ pub fn new(ctx: &Ctx, id: &str, prune: bool) -> Result<()> {
     claim_owner(ctx, &mut t)?;
     println!("{}", t.spec.display());
     Ok(())
+}
+
+// ---------------------------------------------------------------- quota
+
+/// `delegate quota`: always reads, even when run-time checks are off.
+pub fn quota(json: bool) -> Result<()> {
+    let cfg = WorkersConfig::load()?;
+    let workers = cfg.all_workers();
+    let accounts = quota::accounts_in_order(&workers, &cfg.accounts);
+    let reports = quota::read_accounts(&accounts, &cfg.quota);
+    if json {
+        let accounts = reports
+            .iter()
+            .map(quota::AccountReport::json)
+            .collect::<Vec<_>>();
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "schemaVersion": quota::SCHEMA_VERSION,
+                "accounts": accounts,
+            }))?
+        );
+        return Ok(());
+    }
+    for report in &reports {
+        println!("{}", report.text_line());
+    }
+    if !cfg.quota.check {
+        println!(
+            "quota checks are off in {} (quota.check = false); run-time selection will not use them",
+            workers_config_path().display()
+        );
+    }
+    Ok(())
+}
+
+/// Drop candidates whose account is out or would run out before the task can finish.
+fn quota_aware_workers(
+    cfg: &WorkersConfig,
+    workers: Vec<Worker>,
+    role: Role,
+    tier: Tier,
+    size: TaskSize,
+    explicit: bool,
+) -> Result<Vec<Worker>> {
+    let accounts = quota::accounts_in_order(&workers, &cfg.accounts);
+    if accounts.is_empty() {
+        return Ok(workers);
+    }
+    let reports = quota::read_accounts(&accounts, &cfg.quota);
+    let required = cfg.quota.runway.for_size(size);
+    let mut kept = Vec::new();
+    let mut skipped: Vec<(quota::SkipReason, String)> = Vec::new();
+    for worker in workers {
+        let Some(account) = quota::account_for(&worker, &cfg.accounts) else {
+            kept.push(worker);
+            continue;
+        };
+        let Some(report) = reports
+            .iter()
+            .find(|report| report.account == account.name && report.login == account.source)
+        else {
+            kept.push(worker);
+            continue;
+        };
+        if report.status_for(&worker) == quota::ReportStatus::Unknown {
+            println!(
+                "quota for {} unknown ({}); using {worker} anyway",
+                account.name,
+                report.unknown_reason()
+            );
+            kept.push(worker);
+        } else if let Some(reason) = report.skip_reason_for(&worker, size, required) {
+            if explicit {
+                println!("{}", reason.explicit_warning(&worker));
+                kept.push(worker);
+            } else {
+                skipped.push((reason, worker.to_string()));
+            }
+        } else {
+            kept.push(worker);
+        }
+    }
+    if kept.is_empty() && !skipped.is_empty() {
+        skipped.sort_by_key(|(reason, _)| reason.reset.unwrap_or(i64::MAX));
+        let mut lines: Vec<String> = Vec::new();
+        let mut seen: Vec<(quota::AccountName, quota::LoginSource)> = Vec::new();
+        for (reason, _worker) in &skipped {
+            if seen.contains(&(reason.account, reason.login)) {
+                continue;
+            }
+            seen.push((reason.account, reason.login));
+            lines.push(format!("  {}", reason.summary));
+        }
+        bail!(
+            "no [{}].{tier} candidate has quota left:\n{}",
+            role.name(),
+            lines.join("\n")
+        );
+    }
+    for (reason, worker) in skipped {
+        println!(
+            "skipping {worker}: {} account {}",
+            reason.account, reason.reason
+        );
+    }
+    Ok(kept)
 }
 
 // ---------------------------------------------------------------- run
@@ -326,7 +437,7 @@ fn implement_candidates(
             .join(", ");
         bail!(
             "no [implement].{tier} candidate remains after excluding {reasons}; add a candidate of another family to [implement].{tier} in {}",
-            crate::config::workers_config_path().display()
+            workers_config_path().display()
         );
     }
     Ok(workers)
@@ -367,6 +478,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         );
     }
     let spec_text = t.spec_text()?;
+    let size = spec::size(&spec_text)?;
     // State may have changed between the first snapshot and obtaining the lock.
     t = Task::load(ctx, &a.id)?;
     let ask = asks_questions(&t, a);
@@ -400,6 +512,18 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         role.name(),
         if ask { "yes" } else { "no" }
     );
+    let workers = if cfg.quota.check {
+        quota_aware_workers(
+            &cfg,
+            workers,
+            role,
+            tier.unwrap_or(Tier::Fast),
+            size,
+            a.worker.is_some(),
+        )?
+    } else {
+        workers
+    };
     if a.dry_run {
         for w in &workers {
             let iso = if w.harness == Harness::Codex {
@@ -433,7 +557,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         }
     }
     if available.is_empty() {
-        let config_path = crate::config::workers_config_path();
+        let config_path = workers_config_path();
         let fix = if a.worker.is_some() {
             "install it or pick another --worker".to_string()
         } else {
@@ -1953,7 +2077,7 @@ deep = ["claude:sonnet@high"]
         ] {
             assert!(error.contains(want), "{error}");
         }
-        assert!(error.contains(&crate::config::workers_config_path().display().to_string()));
+        assert!(error.contains(&workers_config_path().display().to_string()));
         assert_eq!(
             implement_candidates(&ctx, &t, &cfg, Tier::Fast, "")?.len(),
             3

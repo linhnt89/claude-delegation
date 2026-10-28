@@ -159,7 +159,15 @@ pub fn command(
                 None => add(&["--no-session"]),
             }
             if let Some(m) = model {
-                add(&["--model", m]);
+                // Pi takes `provider/model` either as one value or as a pair; the
+                // pair keeps the bare model visible to stand-ins and log readers.
+                match m.split_once('/') {
+                    Some((provider, rest)) if !provider.is_empty() && !rest.is_empty() => {
+                        add(&["--provider", provider]);
+                        add(&["--model", rest]);
+                    }
+                    _ => add(&["--model", m]),
+                }
             }
             if let Some(e) = effort {
                 add(&["--thinking", e]);
@@ -569,8 +577,10 @@ mod tests {
                 "--approve",
                 "--session-id",
                 "abc",
+                "--provider",
+                "openai-codex",
                 "--model",
-                "openai-codex/gpt-6.1-sol",
+                "gpt-6.1-sol",
                 "--thinking",
                 "high",
                 "go"

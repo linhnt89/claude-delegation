@@ -2,6 +2,8 @@
 
 <!-- Optional: task ids that wrote these checks; implementers skip their model families. -->
 checks_by:
+<!-- Optional: small | medium | long (default medium); a long task needs more quota runway. -->
+size: medium
 
 ## Goal
 <1–2 lines, including why: the why lets you make good judgment calls.>

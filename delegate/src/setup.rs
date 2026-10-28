@@ -6,8 +6,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::config::{Harness, WORKERS_EXAMPLE, Worker, user_config_path};
-use crate::{harness, vault};
+use crate::config::{Harness, WORKERS_EXAMPLE, Worker, WorkersConfig, user_config_path};
+use crate::{harness, quota, vault};
 
 const HARNESSES: [Harness; 5] = [
     Harness::Pi,
@@ -148,6 +148,25 @@ pub(crate) fn run(url: Option<&str>, with_vault: bool) -> Result<()> {
         }
         Err(e) => println!(
             "cannot read worker choices: {e}; repair {} (left unchanged)",
+            path.display()
+        ),
+    }
+    match toml::from_str::<WorkersConfig>(&fs::read_to_string(&path)?) {
+        Ok(cfg) => match cfg.validate_accounts(&path) {
+            Ok(()) => {
+                let workers = cfg.all_workers();
+                let accounts = quota::accounts_in_order(&workers, &cfg.accounts);
+                for report in quota::read_accounts(&accounts, &cfg.quota) {
+                    println!("{}", report.text_line());
+                }
+            }
+            Err(e) => println!(
+                "quota status unavailable: {e}; repair {} (left unchanged)",
+                path.display()
+            ),
+        },
+        Err(e) => println!(
+            "quota status unavailable: {e}; repair {} (left unchanged)",
             path.display()
         ),
     }

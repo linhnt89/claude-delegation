@@ -7,6 +7,7 @@ mod harness;
 mod init;
 mod migration;
 mod prompts;
+mod quota;
 mod setup;
 mod sha256;
 mod spec;
@@ -146,6 +147,12 @@ enum Cmd {
     },
     /// Claude Code status line: one line of running tasks on stdin's project
     Statusline,
+    /// Show each account's quota, runway and reset
+    Quota {
+        /// Machine-readable record (schemaVersion 1)
+        #[arg(long)]
+        json: bool,
+    },
     /// Show every task's round, tier, checks and review
     List,
     /// Squash-merge once checks, project rules and review pass; delete the task state
@@ -169,6 +176,11 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
     // The status line resolves Claude's stdin project and must always fail silently.
     if let Cmd::Statusline = &cmd {
         statusline::run();
+        return Ok(ExitCode::SUCCESS);
+    }
+    // Quota is machine-level: it reads the user's logins, not a checkout.
+    if let Cmd::Quota { json } = &cmd {
+        commands::quota(*json)?;
         return Ok(ExitCode::SUCCESS);
     }
     // Inside the worker sandbox nothing of the vault is read, synced or named: one gate here.
@@ -232,6 +244,7 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         | Cmd::Init { .. }
         | Cmd::Upgrade { .. }
         | Cmd::Wait { .. }
+        | Cmd::Quota { .. }
         | Cmd::Statusline => {
             unreachable!("handled above")
         }

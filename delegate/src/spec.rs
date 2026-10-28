@@ -1,5 +1,9 @@
 //! Reading the parts of a task spec the runner acts on.
 
+use anyhow::{Result, bail};
+
+use crate::config::TaskSize;
+
 /// Body of a `## name` section, up to the next `## ` heading.
 pub fn section<'a>(text: &'a str, name: &str) -> &'a str {
     let heading = format!("## {name}");
@@ -66,6 +70,22 @@ pub fn checks_by(text: &str) -> Vec<String> {
     ids
 }
 
+/// Task size from a `size:` line anywhere in the spec; medium when absent.
+pub fn size(text: &str) -> Result<TaskSize> {
+    let mut value = None;
+    for line in text.lines() {
+        if let Some(rest) = line.trim().strip_prefix("size:") {
+            value = Some(rest.trim());
+        }
+    }
+    match value.unwrap_or("medium") {
+        "small" => Ok(TaskSize::Small),
+        "medium" => Ok(TaskSize::Medium),
+        "long" => Ok(TaskSize::Long),
+        other => bail!("size '{other}' is not valid; use size: small, size: medium or size: long"),
+    }
+}
+
 /// Spec title without the leading `# Task `: `t005: Add divide`.
 pub fn title(text: &str, id: &str) -> String {
     let first = text.lines().next().unwrap_or_default();
@@ -125,6 +145,26 @@ mod tests {
             checks_by("<!-- checks_by: t001 -->\nprose checks_by: t002"),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn reads_size_from_any_line_and_defaults_to_medium() {
+        use crate::config::TaskSize;
+        assert_eq!(size("# Task t1\n").unwrap(), TaskSize::Medium);
+        assert_eq!(size("size: small\n").unwrap(), TaskSize::Small);
+        assert_eq!(
+            size("## Goal\nlong text\n\nsize: long\n").unwrap(),
+            TaskSize::Long
+        );
+        assert_eq!(
+            size("size: small\n## Answers\nsize: medium\n").unwrap(),
+            TaskSize::Medium
+        );
+        let error = size("size: huge\n").unwrap_err().to_string();
+        assert!(error.contains("size"), "{error}");
+        for value in ["small", "medium", "long"] {
+            assert!(error.contains(value), "{error}");
+        }
     }
 
     #[test]

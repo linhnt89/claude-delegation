@@ -34,6 +34,9 @@ If it is too big for one reviewable diff, split it first and add the pieces to `
 - When another task wrote the checks, set `checks_by: t001` (comma-separated ids allowed).
   The runner skips those tasks' worker families on every implement round, including step-ups.
   If none remain at that tier, add a candidate of another family to that tier in `workers.toml`.
+- Set `size: small | medium | long` (default medium) when the task is unusually short or long.
+  Before running, the runner skips an account whose quota runway is shorter than that size
+  needs, so a long task is not handed to a subscription that stops halfway.
 
 ## 3. Plan review (before a batch)
 For a multi-task plan, or any task you'd put at `deep`, run `delegate plan-review [ids...]`.
@@ -74,6 +77,10 @@ What happens:
 - **Work phase** continues in the same session, then the runner commits and runs the
   acceptance commands itself (`CHECKS.txt`).
 - **Fallbacks:** if a candidate can't start (quota, auth), the next one in the tier is used.
+  Before each run the runner reads each candidate account's quota itself and skips one that is
+  out or would run out before the spec's `size:`; an unreadable login warns and is used anyway.
+  An explicit `--worker` is still checked, but only warns and then runs.
+  `delegate quota` shows every account, and `workers.toml` `[quota]` sets the runway thresholds.
 - **Step-up:** after `[defaults] step_up_after` product-failing rounds at the current tier
   (default 1), the next run goes one tier higher, up to deep. A passing round resets the count;
   check errors (exit 3) and unfinished rounds neither count nor reset it. After a check error,
