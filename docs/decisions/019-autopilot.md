@@ -14,8 +14,8 @@ the whole plan grows its context (decision 018).
   needs the user up front: open questions, scenarios, contracts, likely worker questions. It
   writes a `## Mandate` section in `PLAN.md`: the goal (tasks or scenarios), the merge rule
   (merge without asking when checks, the task's and hidden scenarios, and required reviews
-  pass), and what still needs the user (new decisions, scope changes, accepting findings,
-  discarding a feature).
+  pass), the project's gate command, and what still needs the user (new decisions, scope
+  changes, accepting findings, discarding a feature).
 - **Driver.** `delegate autopilot` is a plain loop, no model: it starts a fresh headless lead
   (`claude -p`, auto mode, the lead guard as the boundary) for one wave, waits for it to exit,
   checks `PLAN.md` and `delegate list`, and starts the next. Subcommands: start, stop, status, land.
@@ -28,8 +28,8 @@ the whole plan grows its context (decision 018).
   in `PLAN.md`; add fix tasks only for breakage it caused; take small, reversible choices as
   `proposed` decisions for the user to confirm. Anything else is parked: the task and its
   question go to "Waiting for you" in `PLAN.md`, its dependents wait, all other work continues.
-- **Stops** when the goal is met, everything left is parked, `scripts/check` fails on
-  `autopilot`, the lead's Claude account drops below a quota floor, or after a maximum number
+- **Stops** when the goal is met, everything left is parked, the mandate's gate command
+  fails on `autopilot`, the lead's Claude account drops below a quota floor, or after a maximum number
   of waves (flag, default 5). Numeric limits are flags; the mandate is prose.
 - **Records.** Each wave ends with a handoff in `PLAN.md` (decision 018). In the delegate home:
   an autopilot log (one line per action, plus each lead's `stream-json`) and a run report
