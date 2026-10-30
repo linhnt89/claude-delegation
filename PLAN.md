@@ -82,7 +82,7 @@
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
-| t081 | Builds go through sccache (`delegate/mise.toml`) | 1 | running | – | fast | `scripts/check`, cache hits on a second build | decision 021 |
+| t083 | Each task starts from a reflinked copy of `delegate/target` | 1 | running | – | fast | `scripts/check`, S092, S093; timings in the report | decision 022 (supersedes 021: sccache's server can act outside the sandbox) |
 | t082 | One read-only function decides whether autopilot is running | 1 | running | – | fast | `scripts/check`, autopilot scenarios | removes the copy in `status.rs` |
 
 ## Known, not fixed

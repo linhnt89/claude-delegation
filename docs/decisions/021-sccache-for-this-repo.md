@@ -1,7 +1,7 @@
 # 021: This repo's Rust builds go through sccache
 
 - Date: 2026-10-31
-- Status: accepted
+- Status: superseded by 022
 
 ## Context
 Every task worktree builds `delegate` from scratch, minutes per worker round. Warm worktrees
