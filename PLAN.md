@@ -51,6 +51,9 @@
 - t064 (2026-10-30): checks for autopilot and warm worktrees (decisions 018–020, J10): S083–S094,
   P022–P024, all failing until built; a stand-in headless lead in `evals/lib/autopilot_lead.sh`.
   Checks by DeepSeek, three rounds (questions, then the plan-review additions).
+- t080 (2026-10-31): S040's check works out which owned templates changed since the first kit
+  (t071 changed PLAN.md and .delegate.toml). By Luna. `evals/run fast` on main: 102 pass, P018
+  flaked once (passes alone).
 - t075 (2026-10-31): `delegate autopilot land`: fast-forward or a clean merge into the base
   branch; on a conflict it changes nothing and names the files (S083, S090, hidden P022). By Sol.
 - t072, t079 (2026-10-31): `list`, `watch`, `status --json`, the row above the prompt and the pane
