@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
-# A project from the first kit learns that the CLAUDE.md template changed since.
-# Between that kit and today, the CLAUDE.md template gained "Never commit on a task branch";
-# the other project-owned templates didn't change.
+# A project from the first kit learns which project-owned templates changed since.
+# The check derives that set by comparing the first kit's templates with the current ones.
 . "$EVALS_LIB/common.sh"
 first="$(python3 "$EVALS_LIB/kits.py" commits | head -1)"
+owned_files=(AGENTS.md CLAUDE.md PLAN.md .delegate.toml evals/jobs.md)
+baseline="$EVALS_WORK/first-kit"
+python3 "$EVALS_LIB/kits.py" install "$first" "$baseline"
+changed=()
+for f in "${owned_files[@]}"; do
+  if ! cmp -s "$baseline/$f" "$EVALS_ROOT/delegate/templates/project/$f"; then
+    changed+=("$f")
+  fi
+done
+[ "${#changed[@]}" -gt 0 ] || exit 3
+
 new_line="Never commit on a task branch"
 grep -qF "$new_line" "$EVALS_ROOT/delegate/templates/project/CLAUDE.md" ||
   fail "this check expects the current CLAUDE.md template to say '$new_line'; pick a new line"
@@ -24,9 +34,19 @@ d upgrade
 [ "$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)" = "$mine" ] || fail "upgrade changed the project's CLAUDE.md or AGENTS.md"
 echo "$OUT" | grep -qF "CLAUDE.md" || fail "upgrade didn't say the CLAUDE.md template changed"
 echo "$OUT" | grep -qF "$new_line" || fail "upgrade didn't show what changed in the CLAUDE.md template"
-for f in AGENTS.md PLAN.md .delegate.toml evals/jobs.md; do
-  echo "$OUT" | grep -qE "(^|[ /\`])$(printf '%s' "$f" | sed 's/\./\\./g')([ :\`]|$)" &&
-    fail "upgrade mentioned $f, whose template didn't change"
+for f in "${owned_files[@]}"; do
+  expected=false
+  for changed_file in "${changed[@]}"; do
+    if [ "$f" = "$changed_file" ]; then
+      expected=true
+      break
+    fi
+  done
+  if [ "$expected" = true ]; then
+    echo "$OUT" | grep -qF -- "$f" || fail "upgrade didn't name $f, whose template changed"
+  else
+    echo "$OUT" | grep -qF -- "$f" && fail "upgrade mentioned $f, whose template didn't change"
+  fi
 done
 
 # Without a way to tell the kit version (every kit file edited), it shows the difference
