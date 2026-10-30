@@ -36,7 +36,7 @@ grep -qi 'gate' <<<"$message" || fail "the notification does not say the gate br
 grep -q 't002' <<<"$message" || fail "the notification does not name t002: $message"
 
 # (b) the lead's Claude account has less runway than the floor.
-rm -rf "$PROJ" "$DHOME" "$EVALS_WORK/flags"
+rm -rf "$PROJ" "$DHOME" "$EVALS_WORK/flags" "$HOME/.cache/stub/calls"
 ap_setup
 rm -f "$EVALS_WORK/notify.log"
 # `delegate quota` lists the accounts its workers name; add the lead's Claude account so the

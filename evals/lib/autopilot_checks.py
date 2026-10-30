@@ -62,7 +62,7 @@ work() {
     crash) exit 1 ;;
     fail) printf '# %s wrong\n' "$id" >"shop/${id}.py" ;;
     broken) printf '# %s ok\n' "$id" >"shop/${id}.py"; printf 'broken\n' >shop/broken.txt ;;
-    slow) flag "$id-started" "$id"; wait_flag "$id-release" 300 || true; printf '# %s ok\n' "$id" >"shop/${id}.py" ;;
+    slow) mkdir -p "$EVALS_WORK/flags"; printf '%s\n' "$id" >"$EVALS_WORK/flags/$id-started"; wait_flag "$id-release" 300 || true; printf '# %s ok\n' "$id" >"shop/${id}.py" ;;
     *) printf '# %s ok\n' "$id" >"shop/${id}.py" ;;
   esac
 }
