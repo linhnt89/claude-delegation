@@ -57,6 +57,11 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
+| – | Scenarios for J10 (autopilot) and warm worktrees: `/evaluate feature`, by the lead | 0 | todo | – | – | scenarios agreed with the user | decisions 019, 020 |
+| t070 | `delegate autopilot` start/stop/status/land: headless lead per wave, `autopilot` worktree and branch, lead lock, stop conditions, log, run report, `notify` | 1 | todo | wave 0 | deep | J10 scenarios | decision 019 |
+| t071 | Skills and templates: prep pass and `## Mandate`, parking in "Waiting for you", per-wave handoff, session per phase, catch-up brief, respecting the lock | 1 | todo | wave 0 | standard | J10 scenarios | decisions 018, 019; mirror `templates/project/`, run `scripts/kit-history` |
+| t074 | Warm task worktrees: per-project shared build cache or copied ignored paths | 1 | todo | wave 0 | standard | warm-start scenarios | decision 020 |
+| t072 | Live lead row in `watch` and the pane, read from the autopilot log | 2 | todo | t070 | standard | J10 scenarios | decision 019 |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed

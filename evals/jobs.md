@@ -18,6 +18,7 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 | J7 The repo stays the shared memory | Decisions and scenarios are kept in the repo. After merge or discard, no task state is left behind and none ends up in git history |
 | J8 See what running tasks are doing | I start a run in the background and can see any time, from the terminal or Claude Code, each task's phase, what it is for, which session started it, its worker's steps as they happen, and whether it has stalled or died. Claude can check the same thing to decide what to do next |
 | J9 Claude leads, workers build | Once a plan is agreed, Claude writes neither product code nor checks itself. Its attempts are refused with what to do instead, and workers are never slowed by it. Only I can turn that off. Once a wave is agreed, Claude starts all its ready tasks together and keeps working while workers run |
+| J10 Work goes on while I'm away | Before I leave, Claude asks everything it will need in one go. While I'm away it runs the plan wave after wave, merges what passes on its own branch, parks only what needs me and keeps the rest going. When it stops I get one message, and on return one report says what was merged, what waits for me and why it stopped; one question lands the work |
 
 ## What would make them give up
 - It claims success when it didn't succeed: a merge that went through with broken checks, or a commit that's empty.
