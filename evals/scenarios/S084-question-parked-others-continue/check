@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# S084: one task's worker asks a question only the user can answer. Autopilot parks it,
+# keeps the independent work going, and stops with "waiting for you". Decision 019.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+ap_setup
+ap_specs t001 t002 t003 t004
+ap_setup_lead 2 "t001 t002 t003 t004" "t003=t001"
+ap_write_plan "true" t001 t002 t003 t004
+flag t001 questions
+
+ap_start
+ap_wait_stopped 90 || ap_status_fail "did not stop with everything left waiting for the user"
+
+[ "$(ap_get stop_reason)" = waiting_for_user ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want waiting_for_user"
+wt="$(ap_get worktree)"
+[ -n "$wt" ] && [ -f "$wt/PLAN.md" ] || fail "delegate autopilot status: no worktree PLAN.md ($wt)"
+grep -qx '## Waiting for you' "$wt/PLAN.md" ||
+  fail "PLAN.md has no '## Waiting for you' section after the parked question"
+grep -Eq '^- t001:' "$wt/PLAN.md" || fail "PLAN.md does not park t001 under 'Waiting for you'"
+grep -qi 'round down' "$wt/PLAN.md" || fail "PLAN.md does not quote t001's question"
+
+merged=" $(ap_merged | tr '\n' ' ') "
+case "$merged" in *" t002 "*) ;; *) fail "t002 was not merged while t001 waited (merged:$merged)" ;; esac
+case "$merged" in *" t004 "*) ;; *) fail "the independent t004 was not merged while t001 waited (merged:$merged)" ;; esac
+case "$merged" in *" t001 "* | *" t003 "*) fail "work was built on the parked answer (merged:$merged)" ;; esac
+
+for call in "$HOME"/.cache/stub/calls/*/spec; do
+  [ -f "$call" ] || continue
+  grep -q '^# Task t003:' "$call" && fail "t003, which depends on the parked t001, was started"
+done
+
+ap_wait_notify 10 || fail "autopilot never notified that work waits for the user"
+message="$(grep '^MESSAGE=' "$EVALS_WORK/notify.log" | head -1)"
+grep -qi 'waiting' <<<"$message" || fail "the notification does not say it waits for the user: $message"
+grep -q 't001' <<<"$message" || fail "the notification does not name the parked task: $message"
+grep -Eq '(^|[^0-9])1([^0-9]|$)' <<<"$message" ||
+  fail "the notification does not count one item waiting: $message"
+report="$(ap_wait_report 10)" || fail "delegate autopilot status: no run report"
+grep -qi 'waiting' "$report" || fail "the run report does not name the waiting stop reason"
+grep -q 't001' "$report" || fail "the run report does not list the parked task t001"
+grep -qi 'round down' "$report" || fail "the run report does not quote the parked question"
+pass "t001 parked with its question, t002 and t004 merged, t003 untouched, one waiting notification and report"

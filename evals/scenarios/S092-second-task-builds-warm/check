@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# S092: with warm start on, a later task's worktree sees the build cache an earlier task
+# left; with it off, the task starts cold exactly as today. Decision 020.
+. "$EVALS_LIB/common.sh"
+
+warm_project() { # enabled|disabled
+  setup_project
+  cat >"$PROJ/build.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p target
+echo built >target/cache
+EOF
+  chmod +x "$PROJ/build.sh"
+  printf 'target/\n' >"$PROJ/.gitignore"
+  (cd "$PROJ" && git add build.sh .gitignore && git commit -qm "Add build cache fixture")
+  if [ "$1" = enabled ]; then
+    printf '\n[warm]\nshare = ["target"]\n' >>"$PROJ/.delegate.toml"
+    (cd "$PROJ" && git add .delegate.toml && git commit -qm "Enable warm start")
+  fi
+  simple_workers standard gpt-good gpt-good gpt-good
+  stub_worker gpt-good <<'B'
+ask() { printf 'READY\n' >.task/QUESTIONS.md; }
+work() {
+  id="$(sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md 2>/dev/null)"
+  if [ "$id" = t001 ]; then
+    ./build.sh
+    printf '# t001 ok\n' >shop/t001.py
+  elif [ -f target/cache ]; then
+    printf 'warm\n' >"$HOME/.cache/warm-s092"
+  else
+    printf 'cold\n' >"$HOME/.cache/warm-s092"
+  fi
+}
+B
+  rm -f "$HOME/.cache/warm-s092"
+  write_spec t001 "Build the cache" "Write the build cache." "test -f target/cache"
+  write_spec t002 "Look for the cache" "See whether the cache is warm." "true"
+}
+
+warm_run() { # enabled|disabled -> prints warm or cold
+  d run t001
+  [ "$RC" -eq 0 ] || fail "delegate run t001 ($1 warm start): $OUT"
+  d merge t001
+  [ "$RC" -eq 0 ] || fail "delegate merge t001 ($1 warm start): $OUT"
+  d run t002
+  [ "$RC" -eq 0 ] || fail "delegate run t002 ($1 warm start): $OUT"
+  cat "$HOME/.cache/warm-s092" 2>/dev/null || echo missing
+}
+
+warm_project disabled
+seen="$(warm_run disabled)"
+[ "$seen" = cold ] ||
+  fail "with warm start off, t002 started $seen: it should start cold exactly as today (want cold)"
+
+rm -rf "$PROJ" "$DHOME"
+warm_project enabled
+seen="$(warm_run enabled)"
+[ "$seen" = warm ] ||
+  fail "with warm start on, t002 started $seen: its worktree did not see t001's build cache (want warm)"
+pass "warm start shared t001's build cache with t002's worktree, and with warm start off t002 still started cold"

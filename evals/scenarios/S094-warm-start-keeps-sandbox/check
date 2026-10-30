@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# S094: warm start shares a build cache read-write inside the sandbox, but the worker still
+# cannot write the main checkout or read the hidden scenario set. Decision 020.
+. "$EVALS_LIB/common.sh"
+vault="$(bare_remote vault-s094-url)"
+setup_machine "$vault"
+setup_project
+printf '\n[warm]\nshare = ["target"]\n' >>"$PROJ/.delegate.toml"
+(cd "$PROJ" && git add .delegate.toml && git commit -qm "Enable warm share")
+simple_workers standard gpt-good gpt-good gpt-good
+hide_scenario S901 s094-secret
+hidden="$(hidden_of "$PROJ")"
+[ -n "$hidden" ] || { echo "CHECK ERROR: no hidden scenario folder after delegate hidden add"; exit 3; }
+stub_worker gpt-good <<B
+ask() { printf 'READY\n' >.task/QUESTIONS.md; }
+work() {
+  log="\$HOME/.cache/s094.log"; : >"\$log"
+  main="\$(dirname "\$(git rev-parse --path-format=absolute --git-common-dir)")"
+  mkdir -p target 2>/dev/null
+  if printf 'shared write\\n' >target/SC094-marker 2>/dev/null; then
+    echo "CACHE WROTE" >>"\$log"
+  else
+    echo "CACHE BLOCKED" >>"\$log"
+  fi
+  if (echo hacked >"\$main/README.md") 2>/dev/null; then
+    echo "MAIN WROTE" >>"\$log"
+  else
+    echo "MAIN BLOCKED" >>"\$log"
+  fi
+  if grep -rqs 'Hidden check' "$hidden" 2>/dev/null; then
+    echo "HIDDEN READ" >>"\$log"
+  else
+    echo "HIDDEN BLOCKED" >>"\$log"
+  fi
+}
+B
+write_spec t001 "Use the shared cache" "Write the shared build cache." "true"
+rm -f "$HOME/.cache/s094.log"
+before="$(snapshot_main)"
+d run t001
+[ "$RC" -eq 0 ] || fail "delegate run t001 with a shared warm cache: $OUT"
+log="$HOME/.cache/s094.log"
+[ -f "$log" ] || fail "the worker didn't run (no sandbox log)"
+grep -q 'CACHE WROTE' "$log" ||
+  fail "the worker could not write the shared build cache inside the sandbox: $(tr '\n' ' ' <"$log")"
+grep -q 'HIDDEN BLOCKED' "$log" ||
+  fail "the worker read the hidden scenarios through warm start: $(tr '\n' ' ' <"$log")"
+marker="$(find "$DHOME" -path "$DHOME/t001" -prune -o -name 'SC094-marker' -type f -print 2>/dev/null | head -1)"
+[ -n "$marker" ] ||
+  fail "the cache write stayed in the task worktree instead of reaching the shared cache in the task home"
+grep -qx 'shared write' "$marker" || fail "the shared cache marker has the wrong contents"
+same_main "$before" "warm start changed the main checkout or its branches"
+pass "the worker wrote the shared cache, could not write the main checkout, and could not read the hidden set"

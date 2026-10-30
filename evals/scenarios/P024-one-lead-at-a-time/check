@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# P024: property check driven by evals/lib/autopilot_checks.py (seeded; prints the seed and the
+# shortest failing sequence).
+. "$EVALS_LIB/common.sh"
+setup_project
+exec python3 "$EVALS_LIB/autopilot_checks.py" P024

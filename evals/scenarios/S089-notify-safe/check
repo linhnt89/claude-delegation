@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# S089: a failing or missing notify never breaks the run, and what is sent carries only
+# reasons, counts and ids. Decision 019.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+ap_setup
+ap_specs t001 t002 t003
+ap_setup_lead 1 "t001 t002 t003"
+ap_write_plan "true" t001 t002 t003
+
+# 1. notify exits 1: the run still stops with a report, and the log says notify failed.
+ap_workers "exit 1"
+rm -f "$EVALS_WORK/notify.log"
+ap_start --max-waves 1
+ap_wait_stopped 90 || ap_status_fail "a failing notify broke the run"
+report="$(ap_wait_report 10)" || fail "a failing notify lost the run report"
+logdir="$(ap_get log)"
+[ -n "$logdir" ] && [ -f "$logdir/autopilot.log" ] ||
+  fail "delegate autopilot status: no autopilot log in the log dir ($logdir)"
+ap_wait_log 'notify failed' 10 ||
+  fail "the autopilot log does not note the failed notify"
+
+# 2. notify unset: nothing is sent, the report is still written.
+ap_workers ""
+before_notify="$(cat "$EVALS_WORK/notify.log" 2>/dev/null || true)"
+ap_start --max-waves 1
+ap_wait_stopped 90 || ap_status_fail "the run with notify unset did not stop"
+report="$(ap_wait_report 10)" || fail "with notify unset the run report was not written"
+[ "$(cat "$EVALS_WORK/notify.log" 2>/dev/null || true)" = "$before_notify" ] ||
+  fail "notify was run although workers.toml configures none"
+
+# 3. a recording notify: one message with the reason and ids, no code or spec text.
+ap_workers "$AP_NOTIFY"
+rm -f "$EVALS_WORK/notify.log"
+ap_start --max-waves 1
+ap_wait_stopped 90 || ap_status_fail "the recorded run did not stop"
+ap_wait_notify 10 || fail "the configured notify command was not run"
+[ "$(grep -c '^MESSAGE=' "$EVALS_WORK/notify.log")" -eq 1 ] ||
+  fail "expected exactly one notification, got: $(tr '\n' ' ' <"$EVALS_WORK/notify.log")"
+message="$(grep '^MESSAGE=' "$EVALS_WORK/notify.log" | head -1)"
+grep -qiE 'goal|wave.limit|waiting|no.progress|quota|gate|stopped' <<<"$message" ||
+  fail "the message does not name the stop reason: $message"
+grep -q 't003' <<<"$message" || fail "the message does not name the ids merged in this run: $message"
+grep -q '^REPORT=' "$EVALS_WORK/notify.log" || fail "the notify env has no DELEGATE_REPORT"
+grep -Eq '^(diff|---|\+\+\+|## Goal|# Task )' <<<"$message" &&
+  fail "the notification carries code, a diff or spec text: $message"
+case "$message" in
+  *"def "* | *"shop/pricing.py"* | *"Acceptance"*) fail "the notification carries code or spec text: $message" ;;
+esac
+pass "a failing notify was logged without breaking the run, no notify sent nothing, and the recorded message carried the reason and ids only"

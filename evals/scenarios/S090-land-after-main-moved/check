@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# S090: landing autopilot on a base branch that moved. Non-overlapping work merges; a real
+# conflict refuses and changes nothing. Decision 019.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+
+# (a) the user committed other files on the base branch meanwhile.
+ap_setup
+ap_specs t001 t002
+ap_setup_lead 2 "t001 t002"
+ap_write_plan "true" t001 t002
+ap_start
+ap_wait_stopped 90 || ap_status_fail "the plan did not reach its goal"
+[ "$(ap_get stop_reason)" = goal_met ] || ap_status_fail "the plan did not reach its goal"
+(cd "$PROJ" && printf '\nuser notes\n' >>README.md && git add README.md &&
+  git commit -qm "User note on main")
+d autopilot land
+[ "$RC" -eq 0 ] || fail "delegate autopilot land after unrelated user commits: $OUT"
+(cd "$PROJ" && git log --format=%s main) | grep -q '^User note on main$' ||
+  fail "land dropped the user's own commit from the base branch"
+for id in t001 t002; do
+  (cd "$PROJ" && git log --format=%s main | grep -q "^$id: ") ||
+    fail "after land the base branch has no $id merge"
+done
+
+# (b) the user changed a file autopilot also changed: land must refuse and change nothing.
+rm -rf "$PROJ" "$DHOME" "$EVALS_WORK/flags"
+ap_setup
+printf 'base\n' >"$PROJ/conflict.txt"
+(cd "$PROJ" && git add conflict.txt && git commit -qm "Add conflict file")
+stub_worker gpt-good <<'B'
+task_id() { sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md 2>/dev/null; }
+ask() { printf 'READY\n' >.task/QUESTIONS.md; }
+work() { printf 'autopilot\n' >conflict.txt; }
+B
+write_spec t001 "Change conflict file" "Change conflict.txt." "true"
+ap_setup_lead 1 "t001"
+ap_write_plan "true" t001
+ap_start
+ap_wait_stopped 90 || ap_status_fail "the conflicting plan did not reach its goal"
+[ "$(ap_get stop_reason)" = goal_met ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want goal_met"
+(cd "$PROJ" && printf 'user\n' >conflict.txt && git add conflict.txt &&
+  git commit -qm "User change to conflict file")
+before="$(ap_snapshot)"
+d autopilot land
+[ "$RC" -ne 0 ] || fail "delegate autopilot land changed the base branch across a real conflict"
+grep -q 'conflict.txt' <<<"$OUT" || fail "the refusal does not name the conflicting file: $OUT"
+grep -qiE 'merge|resolve|conflict' <<<"$OUT" || fail "the refusal does not say what to do next: $OUT"
+ap_same_checkout "$before" "a refused land changed the base branch, index or working tree"
+pass "land merged autopilot over unrelated user commits, and a real conflict refused, named the file and left the checkout untouched"

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# S086: autopilot stops when the mandate's gate breaks, and when the lead's Claude account
+# is below the quota floor. No task starts on a broken branch. Decision 019.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+
+# (a) a merge breaks the gate.
+ap_setup
+ap_specs t001 t002 t003 t004
+ap_setup_lead 3 "t001 t002 t003 t004"
+ap_write_plan "test ! -e shop/broken.txt" t001 t002 t003 t004
+flag t002 broken
+ap_start
+ap_wait_stopped 90 || ap_status_fail "did not stop after the gate broke"
+[ "$(ap_get stop_reason)" = gate_failed ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want gate_failed"
+merged=" $(ap_merged | tr '\n' ' ') "
+case "$merged" in *" t001 "*) ;; *) fail "t001 was not merged before the gate broke (merged:$merged)" ;; esac
+case "$merged" in *" t002 "*) ;; *) fail "t002, whose merge broke the gate, was not merged (merged:$merged)" ;; esac
+case "$merged" in *" t003 "* | *" t004 "*) fail "a task merged after the broken merge (merged:$merged)" ;; esac
+grep -q 'lead run t003' "$AP_WORK/lead.log" 2>/dev/null ||
+  fail "the lead never tried the second ready task t003 after t002's merge"
+grep -q '^\$ lead run t003 (exit [1-9]' "$AP_WORK/lead.log" 2>/dev/null ||
+  fail "delegate run t003 was allowed after t002's merge broke the gate: $(grep -A2 'lead run t003' "$AP_WORK/lead.log" 2>/dev/null | tr '\n' ' ')"
+for call in "$HOME"/.cache/stub/calls/*/spec; do
+  [ -f "$call" ] || continue
+  grep -Eq '^# Task t00[34]:' "$call" && fail "a task started after the broken merge"
+done
+report="$(ap_wait_report 10)" || fail "delegate autopilot status: no run report"
+grep -q 't002' "$report" || fail "the run report does not name t002, merged in the last wave"
+grep -q 'test ! -e shop/broken.txt' "$report" || fail "the run report does not name the failing gate command"
+ap_wait_notify 10 || fail "autopilot did not notify that the gate broke"
+message="$(grep '^MESSAGE=' "$EVALS_WORK/notify.log" | head -1)"
+grep -qi 'gate' <<<"$message" || fail "the notification does not say the gate broke: $message"
+grep -q 't002' <<<"$message" || fail "the notification does not name t002: $message"
+
+# (b) the lead's Claude account has less runway than the floor.
+rm -rf "$PROJ" "$DHOME" "$EVALS_WORK/flags"
+ap_setup
+rm -f "$EVALS_WORK/notify.log"
+# `delegate quota` lists the accounts its workers name; add the lead's Claude account so the
+# check can read the same reset clock the run report must name.
+sed -i '0,/^deep = \["pi:gpt-good@high"\]/s//deep = ["pi:gpt-good@high", "claude:sonnet"]/' \
+  "$HOME/.config/delegate/workers.toml"
+ap_specs t001
+ap_setup_lead 1 t001
+ap_write_plan "true" t001
+mkdir -p "$AP_WORK"
+python3 "$EVALS_LIB/autopilot_quota.py" "$AP_WORK" 95 7200 "$AP_WORK/quota.ready" \
+  >"$AP_WORK/quota.out" 2>"$AP_WORK/quota.err" &
+quota_pid=$!
+ap_cleanup_quota() { kill "$quota_pid" 2>/dev/null; wait "$quota_pid" 2>/dev/null; }
+trap 'ap_cleanup_quota; ap_cleanup' EXIT
+wait_until 20 test -f "$AP_WORK/quota.ready" ||
+  { echo "CHECK ERROR: stand-in quota server: $(cat "$AP_WORK/quota.err" 2>/dev/null)"; exit 3; }
+. "$AP_WORK/quota.env"
+quota_line="$(cd "$PROJ" && "$DELEGATE" quota 2>/dev/null | grep -i '^claude')"
+reset_clock="$(sed -n 's/.*resets  *//p' <<<"$quota_line" | awk '{print $1}')"
+[ -n "$reset_clock" ] || { echo "CHECK ERROR: delegate quota did not show Claude's reset: $quota_line"; exit 3; }
+
+ap_start --quota-floor 5h
+ap_wait_stopped 60 || ap_status_fail "did not stop at the quota floor"
+[ "$(ap_get stop_reason)" = quota_floor ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want quota_floor"
+waves="$(wc -l <"$AP_WORK/waves" 2>/dev/null || echo 0)"
+[ "$waves" -eq 0 ] || fail "a wave started although the Claude account was below the floor"
+for call in "$HOME"/.cache/stub/calls/*/spec; do
+  [ -f "$call" ] || continue
+  grep -q '^# Task t001:' "$call" && fail "a task started although the quota floor was already broken"
+done
+ap_wait_notify 10 || fail "autopilot did not notify that the quota floor stopped it"
+message="$(grep '^MESSAGE=' "$EVALS_WORK/notify.log" 2>/dev/null | head -1)"
+grep -qi 'quota' <<<"$message" || fail "the notification does not say the quota floor stopped it: $message"
+grep -qF "$reset_clock" <<<"$message" ||
+  fail "the notification does not name the reset time $reset_clock as delegate quota shows it: $message"
+report="$(ap_wait_report 10)" || fail "delegate autopilot status: no run report at the quota floor"
+grep -qi 'quota' "$report" || fail "the run report does not name the quota floor"
+grep -qF "$reset_clock" "$report" ||
+  fail "the run report does not name the reset time $reset_clock as delegate quota shows it"
+pass "a broken gate stopped the run naming t002 and the gate; a low Claude account stopped it before any wave, naming the reset"

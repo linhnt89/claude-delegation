@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# S083: autopilot runs a two-wave plan, keeps the user's checkout untouched, reports and
+# notifies once, and lands with one command. It also refuses a bad mandate, enforces the
+# round limit, and names proposed decisions in the run report. Decision 019.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+ap_setup
+ap_specs t001 t002 t003 t004 t005
+ap_setup_lead 2 "t001 t002 t003 t005 t004" "t004=t003"
+LEAD_GOAL="t001 t002 t003 t004"
+LEAD_MANDATE_EXTRA="- Max rounds: 2"
+ap_write_plan "true" t001 t002 t003 t004 t005
+flag t005 fail
+cp "$PROJ/PLAN.md" "$AP_WORK/PLAN.good"
+
+clean_autopilot() {
+  (cd "$PROJ" && git worktree remove --force "$DHOME/autopilot/worktree" >/dev/null 2>&1 || true
+   git branch -D autopilot >/dev/null 2>&1 || true)
+  rm -rf "$DHOME/autopilot"
+}
+restore_plan() {
+  cp "$AP_WORK/PLAN.good" "$PROJ/PLAN.md"
+  (cd "$PROJ" && git add PLAN.md && git commit -qm "Restore the mandate" >/dev/null 2>&1 || true)
+  clean_autopilot
+}
+expect_start_refused() { # <what> <message pattern>
+  local what="$1" want="$2" before
+  before="$(ap_snapshot)"
+  d autopilot start
+  [ "$RC" -ne 0 ] || fail "delegate autopilot start was allowed with $what"
+  grep -qiE "$want" <<<"$OUT" ||
+    fail "a refused start with $what does not say what to do ($want): $OUT"
+  ap_same_checkout "$before" "a refused start with $what changed the user's checkout"
+  clean_autopilot
+}
+
+# A bad mandate must be refused before any run, saying what to write.
+printf '\n- an uncommitted change\n' >>"$PROJ/PLAN.md"
+expect_start_refused "an uncommitted PLAN.md change" 'commit PLAN\.md first'
+restore_plan
+
+sed -i 's/^- Goal: .*/- Goal:/' "$PROJ/PLAN.md"
+(cd "$PROJ" && git add PLAN.md && git commit -qm "Empty the mandate goal")
+expect_start_refused "an empty Goal:" 'Goal'
+restore_plan
+
+sed -i '/^- Gate: /d' "$PROJ/PLAN.md"
+(cd "$PROJ" && git add PLAN.md && git commit -qm "Drop the mandate gate")
+expect_start_refused "a missing Gate:" 'Gate'
+restore_plan
+
+# Wave 1 exercises the round limit and records a proposed decision, then merges t001/t002.
+# Wave 2 merges t003/t004. t005 is not a goal: after two failing rounds its third run is
+# refused, so the two goal ids in wave 2 still reach goal_met.
+cat >>"$AP_WORK/lead.sh" <<'LEAD'
+proposed_once() {
+  [ -f "$EVALS_WORK/autopilot/proposed" ] && return 0
+  mkdir -p docs/decisions
+  cat >docs/decisions/999-s083-proposed.md <<'D'
+# 999: S083 proposed rounding decision
+
+- Date: 2026-10-30
+- Status: proposed
+
+The headless lead kept the shop's current rounding for the user to confirm.
+D
+  git add docs/decisions/999-s083-proposed.md
+  git commit -qm "Proposal: keep the shop's rounding" >/dev/null 2>&1
+  : >"$EVALS_WORK/autopilot/proposed"
+}
+wave() {
+  case "${DELEGATE_AUTOPILOT_WAVE:-1}" in
+    1)
+      proposed_once
+      lead_run t005
+      lead_merge t005
+      lead_run t005
+      lead_merge t005
+      lead_run t005
+      printf '%s\n' "$LEAD_RC" >"$EVALS_WORK/autopilot/round-limit.rc"
+      printf '%s\n' "$LEAD_OUT" >"$EVALS_WORK/autopilot/round-limit.out"
+      if [ "$LEAD_RC" -ne 0 ]; then
+        lead_park t005 "the round limit was reached; park it under Waiting for you"
+      fi
+      lead_run t001
+      lead_merge t001
+      lead_run t002
+      lead_merge t002
+      ;;
+    2)
+      lead_run t003
+      lead_merge t003
+      lead_run t004
+      lead_merge t004
+      ;;
+  esac
+}
+LEAD
+
+before="$(ap_snapshot)"
+ap_start
+ap_wait_stopped 120 || ap_status_fail "did not stop after the plan's two waves"
+ap_same_checkout "$before" "the user's checkout or base branch changed before land"
+
+[ "$(ap_get stop_reason)" = goal_met ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want goal_met"
+merged=" $(ap_merged | tr '\n' ' ') "
+for id in t001 t002 t003 t004; do
+  case "$merged" in *" $id "*) ;; *) fail "delegate autopilot: $id was not merged on autopilot (merged:$merged)" ;; esac
+done
+case "$merged" in *" t005 "*) fail "t005, whose checks always fail, was merged (merged:$merged)" ;; esac
+order="$(cd "$PROJ" && git log --reverse --format=%s autopilot |
+  sed -n 's/^\(t[0-9][0-9][0-9]\): .*/\1/p' | tr '\n' ' ')"
+[ "$order" = "t001 t002 t003 t004 " ] ||
+  fail "delegate autopilot merged outside its waves (want t001 t002 t003 t004, got: $order)"
+waves="$(wc -l <"$AP_WORK/waves" 2>/dev/null || echo 0)"
+[ "$waves" -eq 2 ] ||
+  fail "delegate autopilot ran $waves lead sessions, want one per wave (2): $(tr '\n' ' ' <"$AP_WORK/waves" 2>/dev/null)"
+
+# The round limit: after two product-failing rounds, delegate run must refuse the third.
+rc="$(cat "$AP_WORK/round-limit.rc" 2>/dev/null || echo 0)"
+[ "$rc" -ne 0 ] ||
+  fail "delegate run t005 was allowed after two product-failing rounds under Max rounds: 2"
+grep -qi 'waiting for you' "$AP_WORK/round-limit.out" 2>/dev/null ||
+  fail "the round-limit refusal does not say to park t005 under 'Waiting for you': $(tr '\n' ' ' <"$AP_WORK/round-limit.out" 2>/dev/null)"
+
+ap_wait_notify 10 || fail "autopilot never ran the configured notify command"
+[ "$(grep -c '^MESSAGE=' "$EVALS_WORK/notify.log")" -eq 1 ] ||
+  fail "autopilot notified more than once: $(tr '\n' ' ' <"$EVALS_WORK/notify.log")"
+grep -qi 'goal' "$EVALS_WORK/notify.log" ||
+  fail "the notification does not say the goal was met: $(grep '^MESSAGE=' "$EVALS_WORK/notify.log")"
+
+report="$(ap_wait_report 10)" || fail "delegate autopilot status: no run report was written"
+for id in t001 t002 t003 t004; do
+  grep -q "$id" "$report" || fail "the run report does not list the merged task $id"
+done
+grep -qi 'goal' "$report" || fail "the run report does not say why the run stopped (goal met)"
+grep -qi 'proposed' "$report" || fail "the run report does not list the decision committed with status proposed"
+grep -qi 's083' "$report" || fail "the run report does not name the proposed decision committed on autopilot"
+
+d autopilot land
+[ "$RC" -eq 0 ] || fail "delegate autopilot land: $OUT"
+for id in t001 t002 t003 t004; do
+  (cd "$PROJ" && git log --format=%s main | grep -q "^$id: ") ||
+    fail "after land, the base branch has no $id merge"
+done
+d list
+printf '%s' "$OUT" | grep -Eq '^t[0-9]{3}[[:space:]]' &&
+  fail "delegate list still shows task state after land: $OUT"
+pass "two waves, four merges, a refused bad mandate, a refused third round of t005, a proposed decision in the report, and one-command land"

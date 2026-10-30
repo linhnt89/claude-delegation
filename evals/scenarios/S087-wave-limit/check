@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# S087: --max-waves 2 stops a five-wave plan at the limit; a second start continues and
+# reaches the goal without redoing merged tasks. Decision 019.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+ap_setup
+ap_specs t001 t002 t003 t004 t005
+ap_setup_lead 1 "t001 t002 t003 t004 t005"
+ap_write_plan "true" t001 t002 t003 t004 t005
+
+ap_start --max-waves 2
+ap_wait_stopped 90 || ap_status_fail "did not stop at the wave limit"
+[ "$(ap_get stop_reason)" = wave_limit ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want wave_limit"
+merged=" $(ap_merged | tr '\n' ' ') "
+for id in t001 t002; do
+  case "$merged" in *" $id "*) ;; *) fail "the first run did not merge $id (merged:$merged)" ;; esac
+done
+case "$merged" in *" t003 "* | *" t004 "* | *" t005 "*) fail "the first run passed its wave limit (merged:$merged)" ;; esac
+report="$(ap_wait_report 10)" || fail "the first run wrote no report"
+grep -qi 'wave' "$report" || fail "the first run's report does not name the wave limit"
+
+ap_start
+ap_wait_stopped 120 || ap_status_fail "the second run did not reach the goal"
+[ "$(ap_get stop_reason)" = goal_met ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want goal_met"
+merged=" $(ap_merged | tr '\n' ' ') "
+for id in t001 t002 t003 t004 t005; do
+  case "$merged" in *" $id "*) ;; *) fail "the second run did not reach the goal: $id is missing (merged:$merged)" ;; esac
+done
+for id in t001 t002 t003 t004 t005; do
+  n="$(cd "$PROJ" && git log --format=%s autopilot | grep -c "^$id: ")"
+  [ "$n" -eq 1 ] || fail "$id appears in $n merge commits on autopilot, want exactly one"
+done
+pass "the wave limit stopped the first run after waves 1-2, the second continued from wave 3 and merged every task exactly once"

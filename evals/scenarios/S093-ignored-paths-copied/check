@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# S093: warm start copies named ignored paths from the main checkout into a new worktree,
+# not unnamed ones, and the worker's change never reaches the user's checkout. Decision 020.
+. "$EVALS_LIB/common.sh"
+setup_project
+printf '.venv/\n.cache/\n' >"$PROJ/.gitignore"
+(cd "$PROJ" && git add .gitignore && git commit -qm "Ignore the environment folders")
+mkdir -p "$PROJ/.venv" "$PROJ/.cache"
+printf 'main\n' >"$PROJ/.venv/config"
+printf 'lib\n' >"$PROJ/.venv/lib.txt"
+printf 'not copied\n' >"$PROJ/.cache/large"
+printf '\n[warm]\ncopy = [".venv"]\n' >>"$PROJ/.delegate.toml"
+(cd "$PROJ" && git add .delegate.toml && git commit -qm "Enable warm copy")
+simple_workers standard gpt-good gpt-good gpt-good
+stub_worker gpt-good <<'B'
+ask() { printf 'READY\n' >.task/QUESTIONS.md; }
+work() {
+  mkdir -p .venv
+  printf 'worker\n' >>.venv/config
+}
+B
+write_spec t001 "Use the environment" "Change the environment." "true"
+before="$(cd "$PROJ" && find .venv .cache -type f -print0 | sort -z | xargs -0 sha256sum)"
+
+d run t001
+[ "$RC" -eq 0 ] || fail "delegate run t001 with a copied ignored path: $OUT"
+wt="$DHOME/t001/worktree"
+[ -d "$wt" ] || fail "the task worktree was not created at $wt"
+[ -f "$wt/.venv/config" ] ||
+  fail "the new worktree has no .venv/config: the named ignored path was not copied from the main checkout"
+[ -f "$wt/.venv/lib.txt" ] ||
+  fail "the new worktree's .venv lacks the main checkout's other files"
+grep -qx 'main' "$wt/.venv/config" ||
+  fail "the copied .venv/config does not have the main checkout's contents"
+grep -qx 'worker' "$wt/.venv/config" ||
+  fail "the worker could not change a file in the copied .venv"
+[ ! -e "$wt/.cache" ] ||
+  fail "an ignored folder not named in [warm] copy was copied into the worktree"
+
+after="$(cd "$PROJ" && find .venv .cache -type f -print0 | sort -z | xargs -0 sha256sum)"
+[ "$before" = "$after" ] ||
+  fail "the main checkout's .venv or unnamed ignored folder changed during the run"
+pass "the new worktree had the main checkout's .venv (and not the unnamed folder), the worker changed it there, and the main checkout stayed untouched"

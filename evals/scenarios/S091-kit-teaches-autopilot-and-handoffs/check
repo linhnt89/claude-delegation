@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# S091: the installed kit teaches the lead the prep pass, the mandate, parking and session
+# handoffs; an upgraded project keeps its own CLAUDE.md/PLAN.md but gets the new skill, and
+# upgrade reports the template changes. Decisions 018, 019.
+. "$EVALS_LIB/common.sh"
+
+missing="$(python3 "$EVALS_LIB/autopilot_text.py" "$PROJ" 2>&1)" || {
+  fail "the freshly installed kit does not teach autopilot and handoffs: $missing"
+}
+
+prev="$(python3 "$EVALS_LIB/autopilot_text.py" --previous-kit 2>&1)" || {
+  echo "CHECK ERROR: $prev"; exit 3
+}
+rm -rf "$PROJ"
+old_kit_project "$prev"
+cp "$PROJ/CLAUDE.md" "$EVALS_WORK/CLAUDE.before"
+cp "$PROJ/PLAN.md" "$EVALS_WORK/PLAN.before"
+upgrade_out="$EVALS_WORK/upgrade.out"
+OUT="$(cd "$PROJ" && timeout 60 "$DELEGATE" upgrade </dev/null 2>&1)"; RC=$?
+printf '\n$ delegate upgrade  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+printf '%s\n' "$OUT" >"$upgrade_out"
+[ "$RC" -ne 124 ] || fail "delegate upgrade waited for input on a project set up by the previous kit"
+[ "$RC" -eq 0 ] || fail "delegate upgrade failed on a project set up by the previous kit: $(printf '%s' "$OUT" | tr '\n' ' ')"
+cmp -s "$PROJ/CLAUDE.md" "$EVALS_WORK/CLAUDE.before" ||
+  fail "delegate upgrade edited CLAUDE.md; it must only report its autopilot/handoff template change"
+cmp -s "$PROJ/PLAN.md" "$EVALS_WORK/PLAN.before" ||
+  fail "delegate upgrade edited PLAN.md; it must only report its mandate/waiting template change"
+missing="$(python3 "$EVALS_LIB/autopilot_text.py" "$PROJ" --upgrade-output "$upgrade_out" 2>&1)" || {
+  fail "delegate upgrade did not bring the autopilot prep, mandate, parking and handoff text to the previous kit's project: $missing"
+}
+
+pass "the installed kit teaches the prep pass and mandate, parking, one session per phase with /clear, catch-up briefs and leaving tasks alone under the lock; upgrade replaces the skill and reports the CLAUDE.md/PLAN.md changes without editing them"

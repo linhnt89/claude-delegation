@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# S085: while autopilot runs wave 1, the user keeps working in the main checkout and a
+# second lead's run is refused by the autopilot lock. Decision 019.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+ap_setup
+# Existing behaviour: writing and filling a spec works today. The autopilot part below is new.
+ap_specs t999
+[ -f "$DHOME/t999/SPEC.md" ] || fail "delegate new did not write a new spec"
+rm -rf "$DHOME/t999"
+ap_specs t001 t002 t003 t004
+ap_setup_lead 1 "t001 t002 t003 t004"
+ap_write_plan "true" t001 t002 t003 t004
+flag t001 slow
+
+ap_start
+wait_until 30 test -f "$EVALS_WORK/flags/t001-started" ||
+  ap_status_fail "wave 1 never started t001"
+[ "$(ap_get running)" = true ] || ap_status_fail "autopilot isn't running while wave 1's worker is slow"
+
+# The user, present, in another session in the main checkout.
+printf '\n# my notes while autopilot runs\n' >>"$PROJ/README.md"
+ap_specs t005
+[ -f "$DHOME/t005/SPEC.md" ] || fail "writing the t005 spec while autopilot ran did not work"
+after_user="$(ap_snapshot)"
+
+d run t005 --background
+[ "$RC" -ne 0 ] || fail "delegate run t005 was allowed while autopilot held the lead lock"
+grep -q 'delegate autopilot stop' <<<"$OUT" ||
+  fail "the refusal does not name 'delegate autopilot stop': $OUT"
+(cd "$PROJ" && git rev-parse -q --verify refs/heads/task/t005 >/dev/null) &&
+  fail "delegate run t005 started a task despite the autopilot lock"
+
+flag t001-release
+ap_wait_stopped 120 || ap_status_fail "did not finish after the user's work was done"
+[ "$(ap_get stop_reason)" = goal_met ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want goal_met"
+ap_same_checkout "$after_user" "autopilot changed the user's checkout or files under their hands"
+
+# The same lead can run a task once autopilot has stopped.
+d run t005 --no-ask
+[ "$RC" -eq 0 ] || fail "after autopilot stopped, delegate run t005 still failed: $OUT"
+
+# t005 now belongs to the user's checkout (base main), so autopilot must not start over it.
+d autopilot start
+[ "$RC" -ne 0 ] || fail "delegate autopilot start was allowed while the open task t005 belonged to the user's checkout"
+grep -q 't005' <<<"$OUT" || fail "the refusal does not name the foreign open task t005: $OUT"
+grep -qiE 'merge, discard or finish' <<<"$OUT" ||
+  fail "the refusal does not say to merge, discard or finish t005 first: $OUT"
+pass "user edits and the new spec survived untouched, the run was refused naming 'delegate autopilot stop', worked again after the stop, and a later start named the foreign t005"
