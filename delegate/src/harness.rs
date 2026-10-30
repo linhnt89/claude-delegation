@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::{Harness, Worker, home};
+use crate::config::{Harness, Warm, Worker, home};
 
 #[path = "events.rs"]
 pub(crate) mod events;
@@ -82,6 +82,198 @@ pub(crate) fn require_bwrap() -> Result<()> {
     Ok(())
 }
 
+/// Populate only a newly created task worktree. Shared caches belong to the
+/// checkout's task home, never to the main checkout or an individual task.
+pub(crate) fn warm_worktree(
+    warm: &Warm,
+    root: &Path,
+    task_home: &Path,
+    worktree: &Path,
+) -> Result<()> {
+    let manifest = worktree
+        .parent()
+        .context("task worktree has no task directory")?
+        .join("warm-shares.json");
+    match std::fs::remove_file(&manifest) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .context("clearing stale warm cache grants; check task home permissions");
+        }
+    }
+    if !warm.share.is_empty() {
+        ignore_warm_shares(root, &warm.share)?;
+    }
+    for name in &warm.share {
+        let cache = task_home.join("warm").join(name);
+        create_warm_dirs(task_home, &Path::new("warm").join(name))?;
+        let destination = worktree.join(name);
+        if let Some(parent) = Path::new(name).parent() {
+            create_warm_dirs(worktree, parent)?;
+        }
+        std::os::unix::fs::symlink(&cache, &destination).with_context(|| {
+            format!("linking [warm] share '{name}'; check the worktree and cache permissions")
+        })?;
+    }
+    for name in &warm.copy {
+        let source = root.join(name);
+        match std::fs::symlink_metadata(&source) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("note: [warm] copy '{name}' is missing in the main checkout; skipping");
+                continue;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("reading [warm] copy '{name}'"));
+            }
+            Ok(_) => {}
+        }
+        if let Some(parent) = Path::new(name).parent() {
+            create_warm_dirs(worktree, parent)?;
+        }
+        copy_warm_path(&source, &worktree.join(name)).with_context(|| {
+            format!("copying [warm] path '{name}'; check permissions and available disk space")
+        })?;
+    }
+    if !warm.share.is_empty() {
+        // Keep the grant outside the writable worktree. Later rounds must not
+        // trust a worker-edited .delegate.toml to expand their sandbox bounds.
+        std::fs::write(manifest, serde_json::to_vec(&warm.share)?)?;
+    }
+    Ok(())
+}
+
+// A pattern like target/ ignores directories, not the symlink used here. Keep
+// that link out of commits too, without changing the project's tracked files.
+fn ignore_warm_shares(root: &Path, names: &[String]) -> Result<()> {
+    let gitdir = crate::task::git(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let exclude = Path::new(&gitdir).join("info/exclude");
+    let mut text = match std::fs::read_to_string(&exclude) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).context("reading git warm exclusions; check permissions"),
+    };
+    for name in names {
+        let normalized: PathBuf = Path::new(name).components().collect();
+        let mut pattern = String::from("/");
+        for character in normalized.to_string_lossy().chars() {
+            if matches!(character, '\\' | '*' | '?' | '[' | ']' | ' ') {
+                pattern.push('\\');
+            }
+            pattern.push(character);
+        }
+        if !text.lines().any(|line| line == pattern) {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(&pattern);
+            text.push('\n');
+        }
+    }
+    std::fs::create_dir_all(exclude.parent().context("git exclude has no parent")?)?;
+    std::fs::write(exclude, text).context("writing git warm exclusions; check permissions")
+}
+
+// Never follow a pre-existing symlink in cache storage or worktree parents.
+fn create_warm_dirs(root: &Path, relative: &Path) -> Result<()> {
+    let mut directory = root.to_path_buf();
+    for component in relative.components() {
+        directory.push(component);
+        match std::fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if !std::fs::symlink_metadata(&directory)?.is_dir() {
+                    bail!(
+                        "warm directory {} is not a real directory; remove it and retry",
+                        directory.display()
+                    );
+                }
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("creating warm directory {}", directory.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn copy_warm_path(source: &Path, destination: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink() {
+        std::os::unix::fs::symlink(std::fs::read_link(source)?, destination)?;
+    } else if metadata.is_dir() {
+        std::fs::create_dir(destination)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            copy_warm_path(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        std::fs::set_permissions(destination, metadata.permissions())?;
+    } else if metadata.is_file() {
+        // create_new prevents overwriting a tracked file (or following a symlink)
+        // if this task's base differs from the main checkout.
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)?;
+        std::io::copy(&mut File::open(source)?, &mut output)?;
+        std::fs::set_permissions(destination, metadata.permissions())?;
+    } else {
+        bail!(
+            "{} is not a regular file, directory or symlink",
+            source.display()
+        );
+    }
+    Ok(())
+}
+
+/// Only this task's cache subdirectories are granted, never their parent or
+/// sibling task state. Missing grants preserve the pre-warm sandbox exactly.
+fn warm_cache_dirs(task_home: &Path, worktree: &Path) -> Result<Vec<PathBuf>> {
+    let Some(task_dir) = worktree
+        .parent()
+        .filter(|dir| dir.parent() == Some(task_home))
+    else {
+        return Ok(vec![]);
+    };
+    let manifest = task_dir.join("warm-shares.json");
+    let text = match std::fs::read(&manifest) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) => {
+            return Err(error).context("reading warm cache grants; check task home permissions");
+        }
+    };
+    let names: Vec<String> = serde_json::from_slice(&text)
+        .context("invalid warm cache grants; discard this task and retry")?;
+    let mut directories = Vec::new();
+    for name in names {
+        let relative = Path::new(&name);
+        if name.is_empty()
+            || relative
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            bail!("invalid warm cache grant '{name}'; discard this task and retry");
+        }
+        let mut directory = task_home.to_path_buf();
+        for component in Path::new("warm").join(relative).components() {
+            directory.push(component);
+            if !std::fs::symlink_metadata(&directory)?.is_dir() {
+                bail!(
+                    "warm cache {} is not a real directory; remove it and retry",
+                    directory.display()
+                );
+            }
+        }
+        directories.push(directory);
+    }
+    Ok(directories)
+}
+
 /// bwrap prefix for a worker (or for acceptance checks when `harness` is None).
 /// Codex keeps its own sandbox; `DELEGATE_SANDBOX=0` disables sandboxing.
 pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Result<Vec<String>> {
@@ -105,6 +297,13 @@ pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Resul
     .to_vec();
     sb.extend(["--tmpfs".into(), "/tmp".into()]);
     sb.extend(["--setenv".into(), "DELEGATE_SANDBOXED".into(), "1".into()]);
+    let warm = bounds
+        .task_home
+        .as_deref()
+        .map(|home| warm_cache_dirs(home, chdir))
+        .transpose()?
+        .unwrap_or_default();
+    let writable: Vec<_> = bounds.rw.iter().chain(&warm).collect();
     let s = |p: &Path| p.to_string_lossy().into_owned();
     for p in &bounds.hide {
         sb.extend(["--tmpfs".into(), s(p)]);
@@ -112,7 +311,7 @@ pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Resul
     for p in &bounds.ro {
         sb.extend(["--ro-bind".into(), s(p), s(p)]);
     }
-    for p in state_dirs(harness).iter().chain(&bounds.rw) {
+    for p in state_dirs(harness).iter().chain(writable.iter().copied()) {
         if p.exists() {
             sb.extend(["--bind".into(), s(p), s(p)]);
         }
@@ -128,7 +327,7 @@ pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Resul
                 sb.extend(["--ro-bind".into(), s(p), s(p)]);
             }
         }
-        for p in &bounds.rw {
+        for p in writable {
             if p.starts_with(&data) && p != &data && p.exists() {
                 sb.extend(["--bind".into(), s(p), s(p)]);
             }
@@ -310,8 +509,9 @@ pub(crate) fn run_streamed(
         })
     });
     let (program, args) = cmd.split_first().context("empty command")?;
+    let args = warm_worker_args(program, args, cwd, task)?;
     let mut child = worker_command(program, task)
-        .args(args)
+        .args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .env("DELEGATE_SANDBOXED", "1")
@@ -362,6 +562,44 @@ fn worker_command(program: &str, task: Option<&str>) -> Command {
     command
 }
 
+// Codex bypasses bwrap and uses its own workspace-write sandbox. Add only the
+// same per-task cache grants, including on resume; read-only reviews stay so.
+fn warm_worker_args(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    task: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut args = args.to_vec();
+    if program != "codex"
+        || !args
+            .iter()
+            .any(|arg| arg == "sandbox_mode=\"workspace-write\"")
+    {
+        return Ok(args);
+    }
+    let Some(task_dir) = cwd
+        .parent()
+        .filter(|dir| dir.file_name().and_then(|name| name.to_str()) == task)
+    else {
+        return Ok(args);
+    };
+    let Some(task_home) = task_dir.parent() else {
+        return Ok(args);
+    };
+    let caches = warm_cache_dirs(task_home, cwd)?;
+    if !caches.is_empty() {
+        let setting = format!(
+            "sandbox_workspace_write.writable_roots={}",
+            serde_json::to_string(&caches)?
+        );
+        // -c is accepted by both exec and exec resume. Keep the prompt last.
+        let position = args.len().saturating_sub(1);
+        args.splice(position..position, ["-c".into(), setting]);
+    }
+    Ok(args)
+}
+
 /// Run a command, appending stderr (and stdout unless `stdout_file`) to `log`. Returns the exit code.
 pub fn run_logged(
     cmd: &[String],
@@ -383,8 +621,9 @@ pub fn run_logged(
         None => Stdio::from(lf.try_clone()?),
     };
     let (program, args) = cmd.split_first().context("empty command")?;
+    let args = warm_worker_args(program, args, cwd, task)?;
     let status = worker_command(program, task)
-        .args(args)
+        .args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .env("DELEGATE_SANDBOXED", "1")
@@ -435,6 +674,183 @@ pub fn codex_thread(log: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct WarmFixture {
+        base: PathBuf,
+        root: PathBuf,
+        task_home: PathBuf,
+        worktree: PathBuf,
+    }
+
+    impl WarmFixture {
+        fn new() -> Self {
+            let base = std::env::temp_dir().join(format!("delegate-warm-{}", uuid::Uuid::new_v4()));
+            let root = base.join("main");
+            let task_home = base.join("tasks");
+            let worktree = task_home.join("t001/worktree");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::create_dir_all(&worktree).unwrap();
+            crate::task::git(&root, &["init", "-q"]).unwrap();
+            Self {
+                base,
+                root,
+                task_home,
+                worktree,
+            }
+        }
+
+        fn prepare(&self, warm: &Warm) {
+            warm_worktree(warm, &self.root, &self.task_home, &self.worktree).unwrap();
+        }
+    }
+
+    impl Drop for WarmFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    #[test]
+    fn warm_caches_survive_tasks_and_copies_are_independent() {
+        let fixture = WarmFixture::new();
+        let venv = fixture.root.join(".venv");
+        std::fs::create_dir(&venv).unwrap();
+        std::fs::write(venv.join("config"), "main").unwrap();
+        std::fs::set_permissions(venv.join("config"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::os::unix::fs::symlink("config", venv.join("link")).unwrap();
+        std::fs::write(fixture.root.join("env.txt"), "environment").unwrap();
+        std::fs::create_dir(fixture.root.join("unnamed")).unwrap();
+        let warm = Warm {
+            share: vec!["target".into(), "build/cache[1]".into()],
+            copy: vec![".venv".into(), "env.txt".into(), "missing".into()],
+        };
+        fixture.prepare(&warm);
+        assert_eq!(
+            std::fs::read_link(fixture.worktree.join("target")).unwrap(),
+            fixture.task_home.join("warm/target")
+        );
+        std::fs::write(fixture.worktree.join("target/cache"), "built").unwrap();
+        assert!(!fixture.root.join("target").exists());
+        assert!(!fixture.worktree.join("unnamed").exists());
+        assert!(!fixture.worktree.join("missing").exists());
+        assert_eq!(
+            std::fs::read_to_string(fixture.worktree.join("env.txt")).unwrap(),
+            "environment"
+        );
+        assert_eq!(
+            std::fs::read_link(fixture.worktree.join(".venv/link")).unwrap(),
+            Path::new("config")
+        );
+        assert_eq!(
+            std::fs::metadata(fixture.worktree.join(".venv/config"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        std::fs::write(fixture.worktree.join(".venv/link"), "worker").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(venv.join("config")).unwrap(),
+            "main"
+        );
+        let exclude = std::fs::read_to_string(fixture.root.join(".git/info/exclude")).unwrap();
+        assert!(exclude.lines().any(|line| line == "/target"));
+        assert!(exclude.lines().any(|line| line == "/build/cache\\[1\\]"));
+        assert_eq!(
+            warm_cache_dirs(&fixture.task_home, &fixture.worktree).unwrap(),
+            [
+                fixture.task_home.join("warm/target"),
+                fixture.task_home.join("warm/build/cache[1]")
+            ]
+        );
+
+        std::fs::remove_dir_all(fixture.worktree.parent().unwrap()).unwrap();
+        let second = fixture.task_home.join("t002/worktree");
+        std::fs::create_dir_all(&second).unwrap();
+        warm_worktree(&warm, &fixture.root, &fixture.task_home, &second).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(second.join("target/cache")).unwrap(),
+            "built"
+        );
+        assert_eq!(
+            std::fs::read_to_string(second.join(".venv/config")).unwrap(),
+            "main"
+        );
+        let cold = fixture.task_home.join("t003/worktree");
+        std::fs::create_dir_all(&cold).unwrap();
+        warm_worktree(&Warm::default(), &fixture.root, &fixture.task_home, &cold).unwrap();
+        assert!(!cold.join("target").exists());
+        assert_eq!(
+            warm_cache_dirs(&fixture.task_home, &cold).unwrap(),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[test]
+    fn warm_setup_and_grants_refuse_symlink_escapes() {
+        let fixture = WarmFixture::new();
+        std::os::unix::fs::symlink(&fixture.root, fixture.task_home.join("warm")).unwrap();
+        let warm = Warm {
+            share: vec!["target".into()],
+            ..Warm::default()
+        };
+        assert!(
+            warm_worktree(&warm, &fixture.root, &fixture.task_home, &fixture.worktree).is_err()
+        );
+        assert!(!fixture.root.join("target").exists());
+        std::fs::remove_file(fixture.task_home.join("warm")).unwrap();
+        fixture.prepare(&warm);
+        std::fs::remove_dir(fixture.task_home.join("warm/target")).unwrap();
+        std::os::unix::fs::symlink(&fixture.root, fixture.task_home.join("warm/target")).unwrap();
+        assert!(warm_cache_dirs(&fixture.task_home, &fixture.worktree).is_err());
+        std::fs::write(
+            fixture.worktree.parent().unwrap().join("warm-shares.json"),
+            "[\"../main\"]",
+        )
+        .unwrap();
+        assert!(warm_cache_dirs(&fixture.task_home, &fixture.worktree).is_err());
+    }
+
+    #[test]
+    fn codex_warm_grants_apply_to_writes_and_resume_only() {
+        let fixture = WarmFixture::new();
+        fixture.prepare(&Warm {
+            share: vec!["target".into()],
+            ..Warm::default()
+        });
+        for session in [
+            None,
+            Some(Session {
+                id: "thread".into(),
+                resume: true,
+            }),
+        ] {
+            for read_only in [false, true] {
+                let cmd = command(&w("codex:gpt"), "prompt", session.as_ref(), read_only, None);
+                let args =
+                    warm_worker_args(&cmd[0], &cmd[1..], &fixture.worktree, Some("t001")).unwrap();
+                assert_eq!(args.last().unwrap(), "prompt");
+                assert_eq!(
+                    args.iter()
+                        .any(|arg| arg.starts_with("sandbox_workspace_write.writable_roots=")),
+                    !read_only
+                );
+                if !read_only {
+                    assert!(args.iter().any(|arg| {
+                        arg.contains(fixture.task_home.join("warm/target").to_str().unwrap())
+                    }));
+                }
+            }
+        }
+        let cmd = command(&w("pi:gpt"), "prompt", None, false, None);
+        assert_eq!(
+            warm_worker_args(&cmd[0], &cmd[1..], &fixture.worktree, Some("t001")).unwrap(),
+            cmd[1..]
+        );
+    }
+
     fn w(s: &str) -> Worker {
         s.parse().unwrap()
     }
@@ -476,7 +892,7 @@ mod tests {
                 .windows(2)
                 .position(|w| w == ["--tmpfs", data.to_str().unwrap()])
                 .unwrap();
-            for path in [wt, admin] {
+            for path in [&wt, &admin] {
                 let bind = args
                     .windows(3)
                     .rposition(|w| w == ["--bind", path.to_str().unwrap(), path.to_str().unwrap()])
@@ -489,6 +905,54 @@ mod tests {
                     "DELEGATE_HOME",
                     data.join("checkouts/test-project").to_str().unwrap()
                 ]));
+            // Warm binds must be re-exposed after the data hide too, without
+            // opening task metadata, the main checkout, or the hidden set.
+            let task_home = data.join("checkouts/test-project");
+            let cache = task_home.join("warm/target");
+            std::fs::create_dir_all(&cache).unwrap();
+            std::fs::write(
+                wt.parent().unwrap().join("warm-shares.json"),
+                "[\"target\"]",
+            )
+            .unwrap();
+            let hidden = data.join("vault/hidden");
+            std::fs::create_dir_all(&hidden).unwrap();
+            let bounds = Bounds {
+                hide: vec![task_home.clone(), root.join("main"), hidden.clone()],
+                ro: vec![data.join("git")],
+                rw: vec![admin, wt.clone()],
+                task_home: Some(task_home.clone()),
+            };
+            for harness in [Some(Harness::Pi), Some(Harness::Claude), None] {
+                let args = sandbox(harness, &bounds, &wt).unwrap();
+                let hide = args
+                    .windows(2)
+                    .rposition(|w| w == ["--tmpfs", data.to_str().unwrap()])
+                    .unwrap();
+                let bind = args
+                    .windows(3)
+                    .rposition(|w| {
+                        w == ["--bind", cache.to_str().unwrap(), cache.to_str().unwrap()]
+                    })
+                    .unwrap();
+                assert!(bind > hide, "{args:?}");
+                for forbidden in [
+                    &task_home,
+                    &task_home.join("warm"),
+                    &hidden,
+                    &root.join("main"),
+                ] {
+                    assert!(
+                        !args.windows(3).any(|w| w
+                            == [
+                                "--bind",
+                                forbidden.to_str().unwrap(),
+                                forbidden.to_str().unwrap()
+                            ]),
+                        "{args:?}"
+                    );
+                }
+            }
             return;
         }
         let root =

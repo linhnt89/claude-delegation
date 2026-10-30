@@ -668,9 +668,19 @@ impl Rule {
 }
 
 #[derive(Debug, Default, Deserialize)]
+pub struct Warm {
+    #[serde(default)]
+    pub share: Vec<String>,
+    #[serde(default)]
+    pub copy: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 pub struct ProjectRules {
     #[serde(default)]
     pub rules: Vec<Rule>,
+    #[serde(default)]
+    pub warm: Warm,
 }
 
 impl ProjectRules {
@@ -680,7 +690,105 @@ impl ProjectRules {
             return Ok(Self::default());
         }
         let text = std::fs::read_to_string(&path)?;
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        let mut rules: Self =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        for name in rules.warm.share.iter_mut().chain(&mut rules.warm.copy) {
+            if !Path::new(name).is_absolute() {
+                *name = name.trim_end_matches('/').to_owned();
+            }
+        }
+        rules.validate_warm(root)?;
+        Ok(rules)
+    }
+
+    fn validate_warm(&self, root: &Path) -> Result<()> {
+        let names: Vec<_> = self.warm.share.iter().chain(&self.warm.copy).collect();
+        if names.is_empty() {
+            return Ok(());
+        }
+        let root = root.canonicalize()?;
+        for (index, name) in names.iter().enumerate() {
+            let path = Path::new(name);
+            if path.as_os_str().is_empty()
+                || name.contains(['\n', '\r', '\0'])
+                || path
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                || path.starts_with(".git")
+                || path.starts_with(".task")
+            {
+                bail!(
+                    "[warm] path '{name}' must be inside the checkout, relative, and outside .git/.task; change .delegate.toml"
+                );
+            }
+            if names[..index]
+                .iter()
+                .any(|other| path.starts_with(other) || Path::new(other).starts_with(path))
+            {
+                bail!(
+                    "[warm] path '{name}' overlaps another share/copy path; remove the overlap in .delegate.toml"
+                );
+            }
+            // Check every existing prefix, including symlinks and missing leaves.
+            let mut source = root.clone();
+            for component in path.components() {
+                source.push(component);
+                match std::fs::symlink_metadata(&source) {
+                    Ok(_) => {
+                        let resolved = source.canonicalize().with_context(|| {
+                            format!("resolving [warm] path '{name}'; fix its symlink or remove it from .delegate.toml")
+                        })?;
+                        if !resolved.starts_with(&root) {
+                            bail!(
+                                "[warm] path '{name}' is outside the checkout; change .delegate.toml"
+                            );
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("checking [warm] path '{name}'"));
+                    }
+                }
+            }
+            let tracked = std::process::Command::new("git")
+                .current_dir(&root)
+                .env("GIT_LITERAL_PATHSPECS", "1")
+                .args(["ls-files", "-z", "--", name])
+                .output()
+                .context("checking tracked [warm] paths; ensure git is installed")?;
+            if !tracked.status.success() {
+                bail!(
+                    "cannot check [warm] path '{name}' for tracked files; run git status and retry"
+                );
+            }
+            if !tracked.stdout.is_empty() {
+                bail!(
+                    "[warm] path '{name}' contains tracked files; choose an ignored path in .delegate.toml"
+                );
+            }
+            // A missing directory needs a trailing slash to match e.g. target/.
+            let ignored_name = if source.exists() && !source.is_dir() {
+                (*name).clone()
+            } else {
+                format!("{}/", name.trim_end_matches('/'))
+            };
+            let ignored = std::process::Command::new("git")
+                .current_dir(&root)
+                .args(["check-ignore", "--quiet", "--no-index", "--", &ignored_name])
+                .status()
+                .context("checking ignored [warm] paths; ensure git is installed")?;
+            if !ignored.success() {
+                bail!(
+                    "[warm] path '{name}' is not ignored by git; add it to .gitignore or remove it from .delegate.toml"
+                );
+            }
+            if self.warm.share.contains(name) && source.exists() && !source.is_dir() {
+                bail!(
+                    "[warm] share path '{name}' is not a directory; choose an ignored directory in .delegate.toml"
+                );
+            }
+        }
+        Ok(())
     }
 
     pub fn matching(&self, paths: &[String]) -> Result<Vec<&Rule>> {
@@ -892,6 +1000,72 @@ standard = ["claude:sonnet@high", "pi:github-copilot/claude-opus-5.5@high"]
                 }
             }
         }
+    }
+
+    #[test]
+    fn warm_paths_are_validated_at_load() {
+        let root =
+            std::env::temp_dir().join(format!("delegate-warm-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        crate::task::git(&root, &["init", "-q"]).unwrap();
+        std::fs::write(
+            root.join(".gitignore"),
+            "target/\n.venv/\nmissing/\ntracked/\nenv.txt\nescape\n",
+        )
+        .unwrap();
+        std::fs::create_dir(root.join("tracked")).unwrap();
+        std::fs::write(root.join("tracked/file"), "tracked").unwrap();
+        crate::task::git(&root, &["add", "--force", "tracked/file"]).unwrap();
+        std::fs::write(root.join("env.txt"), "environment").unwrap();
+        std::os::unix::fs::symlink(std::env::temp_dir(), root.join("escape")).unwrap();
+
+        assert_eq!(
+            ProjectRules::load(&root).unwrap().warm.share,
+            Vec::<String>::new()
+        );
+        std::fs::write(
+            root.join(".delegate.toml"),
+            "[warm]\nshare = ['target/']\ncopy = ['.venv/', 'missing', 'env.txt']\n",
+        )
+        .unwrap();
+        let rules = ProjectRules::load(&root).unwrap();
+        assert_eq!(rules.warm.share, ["target"]);
+        assert_eq!(rules.warm.copy, [".venv", "missing", "env.txt"]);
+
+        for setting in ["share", "copy"] {
+            for name in [
+                "tracked",
+                "tracked/file",
+                "../outside",
+                "/tmp",
+                "escape/missing",
+                "",
+                ".",
+                ".git",
+                ".task",
+                "not-ignored",
+            ] {
+                let text = format!(
+                    "[warm]\n{setting} = [{}]\n",
+                    serde_json::to_string(name).unwrap()
+                );
+                std::fs::write(root.join(".delegate.toml"), text).unwrap();
+                let message = ProjectRules::load(&root).unwrap_err().to_string();
+                assert!(message.contains(name), "{message}");
+                if name.starts_with("tracked") {
+                    assert!(message.contains("tracked"), "{message}");
+                }
+            }
+        }
+        for text in [
+            "[warm]\nshare = ['env.txt']",
+            "[warm]\nshare = ['target']\ncopy = ['target/sub']",
+            "[warm]\nshare = ['target', 'target/']",
+        ] {
+            std::fs::write(root.join(".delegate.toml"), text).unwrap();
+            assert!(ProjectRules::load(&root).is_err(), "{text}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

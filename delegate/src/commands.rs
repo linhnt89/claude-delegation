@@ -730,6 +730,14 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
                 &base,
             ],
         )?;
+        if let Err(error) = harness::warm_worktree(&rules.warm, &ctx.root, &ctx.dhome, &t.wt) {
+            // A failed setup must not turn the next run into a partially warmed
+            // "existing worktree" run. Shared caches intentionally survive.
+            git(&ctx.root, &["worktree", "remove", "--force", &t.wt.to_string_lossy()])
+                .context("warm setup failed and its worktree could not be removed; remove it with git worktree remove --force and retry")?;
+            git(&ctx.root, &["branch", "-D", &t.branch])?;
+            return Err(error);
+        }
         t.state.base = Some(base);
     }
     let task_dir = t.wt.join(".task");
