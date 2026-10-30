@@ -19,7 +19,8 @@ A project after `delegate init` with a `## Mandate` in `PLAN.md` (goal: t001–t
 - All four tasks are merged on the `autopilot` branch, wave 1 before wave 2; each wave had its own lead session.
 - Until `land`, the user's checkout and base branch are unchanged.
 - Exactly one notification, saying the goal is met; the run report lists the four merges and why it stopped.
-- After `land`, the base branch has all four merges and `delegate list` shows no task state.
+- After `land`, the base branch has all four merges and `delegate list` shows no task state
+  except tasks parked under `## Waiting for you`.
 
 ## If this fails
 Work the user left to run overnight isn't done, or lands somewhere they didn't expect.
