@@ -6,6 +6,12 @@
 ## Goal
 <What the current milestone delivers, in one or two lines.>
 
+## Mandate
+<!-- Goal, Gate command, Merge without asking when, Needs the user: fill in before autopilot. -->
+
+## Waiting for you
+<!-- Park tasks needing the user as: - <id>: <question> -->
+
 ## Tasks
 | wave | id | task | status | depends on | harness | notes |
 |------|----|------|--------|------------|---------|-------|

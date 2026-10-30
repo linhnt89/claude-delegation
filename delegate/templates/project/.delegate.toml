@@ -16,3 +16,7 @@
 # [[rules]]
 # paths    = ["docs/**"]
 # max_tier = "fast"
+
+# [warm]
+# share = ["target"]
+# copy = [".venv"]

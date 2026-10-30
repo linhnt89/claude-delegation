@@ -33,3 +33,5 @@ Show the list to the user and let them correct it before writing.
   is to change the code, in which case add a task.
 - No transcript excerpts or summaries of the conversation were saved.
 - Report what was written, one line per file.
+- End the discussion phase with a handoff in `PLAN.md`: what's next and what waits for the
+  user. Then suggest `/clear` or a new session; do this before the user leaves for long, too.
