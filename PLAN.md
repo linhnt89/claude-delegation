@@ -51,6 +51,11 @@
 - t064 (2026-10-30): checks for autopilot and warm worktrees (decisions 018–020, J10): S083–S094,
   P022–P024, all failing until built; a stand-in headless lead in `evals/lib/autopilot_lead.sh`.
   Checks by DeepSeek, three rounds (questions, then the plan-review additions).
+- t070, t078 (2026-10-30): `delegate autopilot start/stop/status` (decision 019): a fresh headless
+  Claude lead per wave in an `autopilot` worktree, a lead lock with per-run ids, mandate checks,
+  gate after every merge, round limit, stop reasons, log, run report, one notify with timeout.
+  S084–S089, P023, P024 pass. By Sol (five rounds: check bugs, then a Sonnet review). t078
+  fixed P024's check and wrote S095's.
 - t074, t077 (2026-10-30): warm task worktrees (decision 020): `.delegate.toml` `[warm]` `share`
   dirs live in the task home and are writable in the sandbox, `copy` paths are copied in; both
   must be ignored by git. t077 fixed two autopilot checks (sandboxed stand-in signalling, stale
@@ -67,12 +72,14 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t070 | `delegate autopilot` start/stop/status: headless lead per wave, `autopilot` worktree and branch, lead lock, stop conditions, log, run report, `notify` | 1 | running | t064 | deep | S084–S087, S089, P023, P024 (hidden: S088, P022) | decision 019; plan review 2026-10-30: per-run lead auth, mandate validated in the worktree, gate after every merge, round limit |
-| t075 | `delegate autopilot land`: fast-forward or clean merge into the base branch, refuse on conflict changing nothing | 2 | ready | t070 | standard | S083, S090 (hidden: P022) | split from t070 at plan review |
-| t072 | Live lead row in `watch` and the pane, read from the autopilot log | 2 | todo | t070 | standard | scenario to add with the user before its spec | decision 019 |
+| t075 | `delegate autopilot land`: fast-forward or clean merge into the base branch, refuse on conflict changing nothing | 2 | running | t070 | standard | S083, S090 (hidden: P022) | split from t070 at plan review |
+| t072 | Autopilot line in `list`, `watch`, the row above the prompt and the pane, from the lead's stream | 2 | running | t070 | standard | S095 | decision 019; checks by t078 |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
+- Warm `share` of a build output dir (e.g. `delegate/target`) is unsafe for parallel tasks: they
+  overwrite one another's binaries, so evals can test another task's build. Use it only for
+  caches keyed by content; a safe cargo setup (sccache, per-task target) is a follow-up.
 - Accepted at t056's merge (review, medium): a shell edit by the lead from the main checkout
   into a task worktree isn't caught at `Stop` (it watches only the lead's own worktree, so a
   running worker's edits are never blamed). Edit/Write there are still refused.
