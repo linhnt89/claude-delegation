@@ -51,6 +51,10 @@
 - t064 (2026-10-30): checks for autopilot and warm worktrees (decisions 018–020, J10): S083–S094,
   P022–P024, all failing until built; a stand-in headless lead in `evals/lib/autopilot_lead.sh`.
   Checks by DeepSeek, three rounds (questions, then the plan-review additions).
+- t072, t079 (2026-10-31): `list`, `watch`, `status --json`, the row above the prompt and the pane
+  show an autopilot line: wave, the lead's latest step, a "quiet" hint, stop reason, waiting
+  count (S095). By Claude Sonnet. t079 fixed S083's post-land check; S083 now allows parked
+  tasks after land (agreed with the user).
 - t070, t078 (2026-10-30): `delegate autopilot start/stop/status` (decision 019): a fresh headless
   Claude lead per wave in an `autopilot` worktree, a lead lock with per-run ids, mandate checks,
   gate after every merge, round limit, stop reasons, log, run report, one notify with timeout.
@@ -73,10 +77,13 @@
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t075 | `delegate autopilot land`: fast-forward or clean merge into the base branch, refuse on conflict changing nothing | 2 | running | t070 | standard | S083, S090 (hidden: P022) | split from t070 at plan review |
-| t072 | Autopilot line in `list`, `watch`, the row above the prompt and the pane, from the lead's stream | 2 | running | t070 | standard | S095 | decision 019; checks by t078 |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
+- `status.rs` repeats `autopilot.rs`'s driver-alive test (t072 couldn't touch `autopilot.rs`);
+  move it to one place when `autopilot.rs` is next changed.
+- P018 (hidden) failed again under a full parallel `evals/run fast` (2026-10-31: "t101 belongs to
+  <session>, created by None"), passing on rerun: flakiness under load, not tied to a change.
 - Warm `share` of a build output dir (e.g. `delegate/target`) is unsafe for parallel tasks: they
   overwrite one another's binaries, so evals can test another task's build. Use it only for
   caches keyed by content; a safe cargo setup (sccache, per-task target) is a follow-up.
