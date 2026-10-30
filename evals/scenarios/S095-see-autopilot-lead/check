@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# S095: while the lead runs wave 2, `delegate list`, `delegate watch`, the status line and
+# `delegate status --json` show the wave and the lead's latest step, and the pane and the row
+# above the prompt show them too; after the stop they show the reason and "waiting for you: 1";
+# a project that never used autopilot shows nothing extra. Decision 019.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+
+trap ap_cleanup EXIT
+ap_setup
+ap_specs t001 t002 t003
+ap_setup_lead 2 "t001 t002 t003"
+ap_write_plan "true" t001 t002 t003
+
+# ap_line <text>: the view's "autopilot" line without its indent; empty when there is none.
+ap_line() { printf '%s\n' "$1" | sed 's/^[[:space:]]*//' | grep -i '^autopilot' | tail -1; }
+
+# watch_frame [seconds]: the last complete frame of `delegate watch`.
+watch_frame() {
+  local wpid
+  rm -f "$AP_WORK/watch.out"
+  (cd "$PROJ" && exec env --default-signal=INT "$DELEGATE" watch >"$AP_WORK/watch.out" 2>&1) & wpid=$!
+  sleep "${1:-3}"
+  kill -INT "$wpid" 2>/dev/null
+  wait "$wpid" 2>/dev/null
+  awk '/^delegate watch/{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' "$AP_WORK/watch.out"
+}
+
+# statusline_line: what the row above the prompt prints, as Claude Code runs it.
+statusline_line() {
+  (cd "$PROJ" && printf '{"cwd":"%s","workspace":{"current_dir":"%s"}}' "$PROJ" "$PROJ" |
+    "$DELEGATE" statusline 2>&1)
+}
+
+# ap_json_problem <absent|running|stopped> <status.json> [step]: why the autopilot object is
+# wrong, or nothing. `steps` may be the adapter's objects or plain text, so only what each step
+# shows is compared.
+ap_json_problem() {
+  python3 - "$@" <<'PY'
+import json, sys
+
+mode, path = sys.argv[1], sys.argv[2]
+marker = sys.argv[3] if len(sys.argv) > 3 else ""
+text = open(path, encoding="utf-8").read()
+try:
+    doc = json.loads(text)
+except Exception as error:
+    print(f"delegate status --json is not JSON ({error}): {text[:200]}")
+    sys.exit(0)
+if not isinstance(doc, dict):
+    print(f"delegate status --json is not an object: {text[:200]}")
+    sys.exit(0)
+if mode == "absent":
+    if "autopilot" in doc:
+        print("a project that never used autopilot still has an autopilot key: "
+              f"{json.dumps(doc['autopilot'])[:200]}")
+    sys.exit(0)
+ap = doc.get("autopilot")
+if not isinstance(ap, dict):
+    print(f"delegate status --json has no autopilot object: {text[:300]}")
+    sys.exit(0)
+want = {"running": mode == "running", "wave": 2, "max_waves": 3,
+        "waiting": 0 if mode == "running" else 1}
+for key, value in want.items():
+    if ap.get(key) != value:
+        print(f"autopilot.{key} is {ap.get(key)!r}, want {value!r}: {json.dumps(ap)[:300]}")
+        sys.exit(0)
+
+
+def shows(step):
+    if isinstance(step, str):
+        return step
+    if isinstance(step, dict):
+        return " ".join(str(step[k]) for k in ("kind", "target", "result") if step.get(k))
+    return str(step)
+
+
+steps = ap.get("steps")
+if not isinstance(steps, list) or not 1 <= len(steps) <= 5:
+    print(f"autopilot.steps is not the last 5 steps (a 1-5 item list): {steps!r}")
+    sys.exit(0)
+latest = shows(ap.get("step"))
+if not latest.strip():
+    print(f"autopilot.step is empty while the lead has printed steps: {json.dumps(ap)[:300]}")
+    sys.exit(0)
+if marker and marker not in latest:
+    print(f"autopilot.step is not the lead's latest step ('{marker}'): {latest!r}")
+    sys.exit(0)
+if marker and not any(marker in shows(step) for step in steps):
+    print(f"autopilot.steps does not hold the lead's latest step ('{marker}'): {steps!r}")
+    sys.exit(0)
+if mode == "running":
+    if ap.get("stop_reason"):
+        print(f"autopilot.stop_reason is {ap.get('stop_reason')!r} while it still runs")
+elif str(ap.get("stop_reason") or "") != "waiting_for_user":
+    print("autopilot.stop_reason is "
+          f"{ap.get('stop_reason')!r} after everything left was parked, want 'waiting_for_user'")
+PY
+}
+
+# running_line <view> <text> <step>: that view shows wave 2/3 and the lead's latest step.
+running_line() {
+  local line
+  line="$(ap_line "$2")"
+  [ -n "$line" ] ||
+    fail "$1 shows no 'autopilot' line while the lead runs wave 2: $(printf '%s' "$2" | head -3 | tr '\n' '|')"
+  echo "$line" | grep -Eq 'wave[[:space:]]*2[[:space:]]*/[[:space:]]*3' ||
+    fail "$1: the autopilot line does not say wave 2/3: $line"
+  echo "$line" | grep -qF -- "$3" ||
+    fail "$1: the autopilot line does not show the lead's latest step ('$3'): $line"
+}
+
+# stopped_line <view> <text>: that view shows the stop reason and the waiting count.
+stopped_line() {
+  local line
+  line="$(ap_line "$2")"
+  [ -n "$line" ] ||
+    fail "$1 shows no 'autopilot' line after the run stopped: $(printf '%s' "$2" | head -3 | tr '\n' '|')"
+  echo "$line" | grep -Eiq 'waiting[ _]for[ _]you[[:space:]]*[:][[:space:]]*1' ||
+    fail "$1: the autopilot line does not say 'waiting for you: 1' after the stop: $line"
+}
+
+# running_text <view> <text> <step>: a one-line view names the wave 2/3 and that step.
+running_text() {
+  echo "$2" | grep -qi 'autopilot' || fail "$1 shows no autopilot: ${2:-nothing}"
+  echo "$2" | grep -Eq 'wave[[:space:]]*2[[:space:]]*/[[:space:]]*3' ||
+    fail "$1: no 'wave 2/3': $2"
+  echo "$2" | grep -qF -- "$3" ||
+    fail "$1: no lead's latest step ('$3'): $2"
+}
+
+# stopped_text <view> <text>: a one-line view names the stop reason and the waiting count.
+stopped_text() {
+  echo "$2" | grep -qi 'autopilot' || fail "$1 shows no autopilot: ${2:-nothing}"
+  echo "$2" | grep -Eiq 'waiting[ _]for[ _]you[[:space:]]*[:][[:space:]]*1' ||
+    fail "$1: no 'waiting for you: 1' after the stop: $2"
+}
+
+# wait_step <step> [seconds]: `delegate status --json` shows that step, wave 2/3 while running.
+wait_step() {
+  local end=$(( $(date +%s) + ${2:-30} ))
+  while :; do
+    d status --json
+    printf '%s' "$OUT" >"$AP_WORK/status.json"
+    [ -z "$(ap_json_problem running "$AP_WORK/status.json" "$1")" ] && return 0
+    [ "$(date +%s)" -ge "$end" ] && return 1
+    sleep 0.3
+  done
+}
+
+# ---- a project that never used autopilot: nothing extra in any view -------------------------
+d list
+[ "$RC" -eq 0 ] || fail "delegate list: $OUT"
+[ -z "$(ap_line "$OUT")" ] ||
+  fail "delegate list has an autopilot line in a project that never used autopilot: $(ap_line "$OUT")"
+frame="$(watch_frame 2)"
+[ -z "$(ap_line "$frame")" ] ||
+  fail "delegate watch has an autopilot line in a project that never used autopilot: $(ap_line "$frame")"
+d status --json
+printf '%s' "$OUT" >"$AP_WORK/status.json"
+problem="$(ap_json_problem absent "$AP_WORK/status.json")"
+[ -z "$problem" ] || fail "$problem"
+line="$(statusline_line)"
+echo "$line" | grep -qi 'autopilot' &&
+  fail "the status line mentions autopilot in a project that never used it: $line"
+
+# ---- two waves: wave 1 merges two tasks, wave 2 prints steps and then holds ------------------
+cat >>"$AP_WORK/lead.sh" <<'LEAD'
+wave() {
+  case "${DELEGATE_AUTOPILOT_WAVE:-1}" in
+    1)
+      lead_run t001; lead_merge t001
+      lead_run t002; lead_merge t002
+      ;;
+    2)
+      lead_stream_read PLAN.md
+      lead_stream_run "delegate run t003"
+      lead_stream_say "reviewing t003"
+      lead_flag s095-wave2
+      lead_wait s095-next 120 || true
+      lead_stream_run "delegate merge t003"
+      lead_flag s095-next-step
+      lead_wait s095-park 120 || true
+      lead_park t003 "should the total round down or to the nearest cent?"
+      ;;
+  esac
+}
+LEAD
+
+ap_start --max-waves 3
+ap_wait_running 30 || ap_status_fail "autopilot never started"
+wait_flag s095-wave2 120 || ap_status_fail "the stand-in lead never reached wave 2"
+wait_step "reviewing t003" 30 ||
+  ap_status_fail "delegate status --json never showed the lead's wave-2 step"
+
+d list
+running_line "delegate list" "$OUT" "reviewing t003"
+frame="$(watch_frame 3)"
+running_line "delegate watch" "$frame" "reviewing t003"
+line="$(statusline_line)"
+running_text "the status line" "$line" "reviewing t003"
+
+# ---- the lead prints its next step: every view follows within a few seconds -------------------
+started=$(date +%s)
+flag s095-next
+wait_flag s095-next-step 30 || ap_status_fail "the stand-in lead did not print its next step"
+wait_step "delegate merge t003" 30 ||
+  ap_status_fail "delegate status --json never showed the lead's next step"
+took=$(( $(date +%s) - started ))
+[ "$took" -le 10 ] ||
+  fail "the lead's next step took ${took}s to reach delegate status --json (want a few seconds)"
+d list
+running_line "delegate list" "$OUT" "delegate merge t003"
+frame="$(watch_frame 3)"
+running_line "delegate watch" "$frame" "delegate merge t003"
+
+# ---- the pane and the row above the prompt read that object ----------------------------------
+ap_object="$(python3 -c 'import json,sys
+try: ap=json.load(open(sys.argv[1]))["autopilot"]
+except Exception: sys.exit(0)
+print(json.dumps(ap))' "$AP_WORK/status.json")"
+[ -n "$ap_object" ] || fail "delegate status --json gave no autopilot object for the pane to show"
+python3 - "$ap_object" "$EVALS_WORK/pane.test.tsx" <<'PY'
+import json, sys
+
+ap, path = sys.argv[1], sys.argv[2]
+json.loads(ap)  # fail the check, not the test, on a bad object
+path_text = f'''import {{ expect, mock, test }} from 'claude-code/testing'
+import {{ START, host, openCommand, paneText, rowOf, task }} from './mod-host'
+
+// A host whose `delegate status --json` carries the autopilot object the views read; mod-host
+// only answers with tasks, so the autopilot is served here.
+const HOST = '(drawn by Claude Code, not the mod)'
+const AP = {ap}
+const STEPS = ['reviewing t003', 'delegate merge t003']
+
+function autopilotHost(on: any) {{
+  const seen = {{ open: false }}
+  on('command.register', () => ({{ value: {{ command: 'delegate-pane' }} }}))
+  on('ui.open', () => {{ seen.open = true; return {{ value: {{ isPlaced: true }} }} }})
+  on('ui.panes', () => ({{
+    value: seen.open
+      ? [{{ id: 'delegate', title: 'Delegate tasks', isPlaced: true, isShown: true, isFocused: false }}]
+      : [],
+  }}))
+  on('ui.close', () => {{ seen.open = false; return {{ value: undefined }} }})
+  on('session.id', () => ({{ value: 'a' }}))
+  on('session.start', (_: unknown, e: {{ cwd: string }}) => ({{ cwd: e.cwd }}))
+  on('ui.render', (render: any, e: any) => {{
+    const {{ Text }} = render.ui.resolve(e)
+    return <Text>{{HOST}}</Text>
+  }})
+  on('process.run', () => ({{
+    value: {{
+      exitCode: 0, stderr: '',
+      stdout: JSON.stringify({{ tasks: [task('t021')], autopilot: AP }}),
+    }},
+  }}))
+}}
+
+test('the pane shows the autopilot lead: the wave and its last steps', async ($, on) => {{
+  const clock = mock.clock(on)
+  autopilotHost(on)
+  await $.session.start(START)
+  await clock.advance(3000)
+  await $.command.run(openCommand())
+  const pane = (await paneText($)).toLowerCase()
+  expect(pane).toContain('autopilot')
+  for (const step of STEPS) expect(pane).toContain(step)
+}})
+
+test('the row above the prompt shows the autopilot lead and its latest step', async ($, on) => {{
+  const clock = mock.clock(on)
+  autopilotHost(on)
+  await $.session.start(START)
+  await clock.advance(3000)
+  const row = ((await rowOf($))?.text ?? '(no row)').toLowerCase()
+  expect(row).toContain('autopilot')
+  expect(row).toMatch(/wave\\s*2|2\\s*\\/\\s*3/)
+  expect(row).toContain('delegate merge t003')
+}})
+
+test('a project that never used autopilot shows no autopilot in the pane or the row', async ($, on) => {{
+  const clock = mock.clock(on)
+  host(on, {{ session: 'a', tasks: [task('t021')] }})
+  await $.session.start(START)
+  await clock.advance(3000)
+  await $.command.run(openCommand())
+  expect((await paneText($)).toLowerCase()).not.toContain('autopilot')
+  expect(((await rowOf($))?.text ?? '').toLowerCase()).not.toContain('autopilot')
+}})
+'''
+open(path, "w", encoding="utf-8").write(path_text)
+PY
+. "$EVALS_LIB/mod.sh"
+# The stand-in lead is called `claude` in $EVALS_WORK/bin; the pane's harness needs the real one.
+(
+  PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx "$EVALS_WORK/bin" | paste -sd: -)"
+  mod_setup
+  mod_check "$EVALS_WORK/pane.test.tsx"
+) || exit $?
+
+# ---- the stop: every view names the reason and the task waiting for the user -----------------
+flag s095-park
+ap_wait_stopped 120 || ap_status_fail "autopilot did not stop after its only task left was parked"
+[ "$(ap_get stop_reason)" = waiting_for_user ] ||
+  fail "autopilot stop_reason is '$(ap_get stop_reason)', want waiting_for_user"
+d status --json
+printf '%s' "$OUT" >"$AP_WORK/status.json"
+problem="$(ap_json_problem stopped "$AP_WORK/status.json" "delegate merge t003")"
+[ -z "$problem" ] || fail "$problem"
+d list
+stopped_line "delegate list" "$OUT"
+frame="$(watch_frame 3)"
+stopped_line "delegate watch" "$frame"
+line="$(statusline_line)"
+stopped_text "the status line" "$line"
+
+pass "wave 2/3 and the lead's latest step in list, watch, the status line, status --json, the pane and the row; the next step within ${took}s; after the stop 'waiting for you: 1' in every view; nothing in a project that never used autopilot"

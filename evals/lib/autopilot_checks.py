@@ -471,8 +471,9 @@ def p024(rng: random.Random, s: int) -> None:
             state = wait_stopped(30)
             if state.get("running") is not False:
                 return "autopilot still reads as running after the driver was killed"
-            if not alive(int(lead_pid)):
-                return "the lead of the killed run was gone before the restart"
+            # Killing the driver orphans its lead. A command that noticed the driver gone may
+            # already have killed it (t070), which is fine: nothing is left to act, and the
+            # refusal below starts its own process, so it does not need the orphan alive.
             for action in ("run t002", "merge t001"):
                 problem = refused({"DELEGATE_AUTOPILOT": run_id}, action,
                                   "after its driver died, holding the dead run id")
@@ -507,7 +508,8 @@ def p024(rng: random.Random, s: int) -> None:
             break
     if failing is None:
         print(f"seed {s}: every run/merge/discard interleaving was refused while autopilot held work, "
-              "and a dead driver left no lead process or usable run id")
+              "and after its driver died nothing could act on the dead run id, "
+              "and the restart left none of it alive")
         return
     smallest = shrink(failing, lambda seq: trial(seq) is not None)
     case_fail(trial(smallest) or "a second lead got through", s, smallest)

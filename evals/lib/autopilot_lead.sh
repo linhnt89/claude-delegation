@@ -58,6 +58,48 @@ lead_park() {
   lead_log "parked $id"
 }
 
+# --- the lead's stream, and what the checks watching it do ----------------------------------
+# A headless lead prints stream-json on stdout; the driver records it in the wave's log and a
+# view's step adapter (the one Claude workers use) turns it into steps. The stand-in lead prints
+# the same events, so a check can watch a running wave. Arguments are one line of text each
+# (no newlines); quotes and backslashes are escaped.
+lead_stream_text() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+lead_stream_event() { # <tool name> <input key> <input value>
+  LEAD_STREAM_N=$(( ${LEAD_STREAM_N:-0} + 1 ))
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"lead-step-%s","name":"%s","input":{"%s":"%s"}}]}}\n' \
+    "$LEAD_STREAM_N" "$1" "$2" "$(lead_stream_text "$3")"
+}
+
+# lead_stream_read <path>: the lead reads a file.
+lead_stream_read() { lead_stream_event Read file_path "$1"; }
+
+# lead_stream_run <command>: the lead runs a command.
+lead_stream_run() { lead_stream_event Bash command "$1"; }
+
+# lead_stream_say <text>: the lead tells the user something.
+lead_stream_say() {
+  LEAD_STREAM_N=$(( ${LEAD_STREAM_N:-0} + 1 ))
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}\n' \
+    "$(lead_stream_text "$1")"
+}
+
+# lead_flag <name>: tell the check this wave got here ($EVALS_WORK/flags/<name>).
+lead_flag() {
+  mkdir -p "$EVALS_WORK/flags"
+  : >"$EVALS_WORK/flags/$1"
+}
+
+# lead_wait <flag> [seconds]: hold the wave until the check writes that flag.
+lead_wait() {
+  local i
+  for i in $(seq $(( ${2:-120} * 5 ))); do
+    [ -f "$EVALS_WORK/flags/$1" ] && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
 wave() {
   local id dep ok ready="" n=0
   for id in ${LEAD_ORDER:-}; do
