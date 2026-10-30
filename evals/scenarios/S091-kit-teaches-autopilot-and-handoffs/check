@@ -3,6 +3,7 @@
 # handoffs; an upgraded project keeps its own CLAUDE.md/PLAN.md but gets the new skill, and
 # upgrade reports the template changes. Decisions 018, 019.
 . "$EVALS_LIB/common.sh"
+setup_project
 
 missing="$(python3 "$EVALS_LIB/autopilot_text.py" "$PROJ" 2>&1)" || {
   fail "the freshly installed kit does not teach autopilot and handoffs: $missing"
