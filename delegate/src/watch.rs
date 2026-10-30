@@ -4,8 +4,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
-use crate::status::{self, Depth, TaskView};
+use crate::status::{self, Autopilot, Depth, TaskView};
 use crate::task::Ctx;
+
+/// Width of the lead's latest step in the autopilot line.
+const AUTOPILOT_STEP_WIDTH: usize = 70;
 
 pub fn run(ctx: &Ctx, id: Option<&str>, interval: f64) -> Result<()> {
     let interval = refresh_interval(interval)?;
@@ -20,7 +23,21 @@ pub fn run(ctx: &Ctx, id: Option<&str>, interval: f64) -> Result<()> {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        draw_frame(&mut output, terminal, &views, id.is_some(), seconds)
+        let autopilot = if id.is_none() {
+            status::autopilot(ctx)
+        } else {
+            None
+        };
+        draw_frame(
+            &mut output,
+            terminal,
+            &Frame {
+                views: &views,
+                autopilot: autopilot.as_ref(),
+                detail: id.is_some(),
+                seconds,
+            },
+        )
             .context("writing watch output; check the terminal or output destination")?;
         std::thread::sleep(interval);
     }
@@ -35,13 +52,21 @@ fn refresh_interval(seconds: f64) -> Result<Duration> {
     Ok(interval)
 }
 
-fn draw_frame(
-    output: &mut impl Write,
-    terminal: bool,
-    views: &[TaskView],
+/// What one refresh shows.
+struct Frame<'a> {
+    views: &'a [TaskView],
+    autopilot: Option<&'a Autopilot>,
     detail: bool,
     seconds: u64,
-) -> io::Result<()> {
+}
+
+fn draw_frame(output: &mut impl Write, terminal: bool, frame: &Frame) -> io::Result<()> {
+    let Frame {
+        views,
+        autopilot,
+        detail,
+        seconds,
+    } = *frame;
     if terminal {
         write!(output, "\x1b[H\x1b[2J")?;
     }
@@ -52,6 +77,9 @@ fn draw_frame(
         seconds / 60 % 60,
         seconds % 60
     )?;
+    if let Some(autopilot) = autopilot {
+        writeln!(output, "{}", autopilot.line(AUTOPILOT_STEP_WIDTH))?;
+    }
     let text = if detail && let Some(view) = views.first() {
         status::render_detail(view, status::use_color(terminal))
     } else {
@@ -112,8 +140,8 @@ mod tests {
     #[test]
     fn piped_frames_repeat_headers_without_terminal_codes() -> Result<()> {
         let mut output = Vec::new();
-        draw_frame(&mut output, false, &[], false, 0)?;
-        draw_frame(&mut output, false, &[], false, 86_399)?;
+        draw_frame(&mut output, false, &Frame { views: &[], autopilot: None, detail: false, seconds: 0 })?;
+        draw_frame(&mut output, false, &Frame { views: &[], autopilot: None, detail: false, seconds: 86_399 })?;
         assert_eq!(
             String::from_utf8(output)?,
             concat!(
@@ -130,7 +158,7 @@ mod tests {
     fn terminal_frames_only_clear_and_reposition() -> Result<()> {
         let mut output = Vec::new();
         for _ in 0..2 {
-            draw_frame(&mut output, true, &[], false, 86_400)?;
+            draw_frame(&mut output, true, &Frame { views: &[], autopilot: None, detail: false, seconds: 86_400 })?;
         }
         let text = String::from_utf8(output)?;
         assert_eq!(text.matches("\x1b[H\x1b[2Jdelegate watch").count(), 2);
@@ -140,11 +168,42 @@ mod tests {
     }
 
     #[test]
+    fn the_autopilot_line_follows_the_header() -> Result<()> {
+        let autopilot = Autopilot {
+            running: true,
+            wave: 2,
+            max_waves: 3,
+            step: Some(serde_json::json!({"kind": "message", "target": "reviewing t003"})),
+            steps: vec![],
+            stop_reason: None,
+            waiting: 0,
+            quiet_secs: 0,
+        };
+        let mut output = Vec::new();
+        let frame = Frame {
+            views: &[],
+            autopilot: Some(&autopilot),
+            detail: false,
+            seconds: 0,
+        };
+        draw_frame(&mut output, false, &frame)?;
+        assert_eq!(
+            String::from_utf8(output)?,
+            concat!(
+                "delegate watch   refreshed 00:00:00 UTC\n",
+                "autopilot  wave 2/3  └ message reviewing t003\n",
+                "no tasks; start one with: delegate new <id>\n"
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
     fn frames_use_status_rows_and_detail() -> Result<()> {
         let views = [task_view()];
         for detail in [false, true] {
             let mut output = Vec::new();
-            draw_frame(&mut output, false, &views, detail, 0)?;
+            draw_frame(&mut output, false, &Frame { views: &views, autopilot: None, detail, seconds: 0 })?;
             let expected = if detail {
                 status::render_detail(&views[0], false)
             } else {

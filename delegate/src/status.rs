@@ -399,6 +399,151 @@ pub fn running_workers(ctx: &Ctx, exclude: &str) -> Vec<(String, Worker)> {
         .collect()
 }
 
+/// What the autopilot lead is doing, read from the driver's state file and the newest wave's
+/// stream (decision 019). `None` for a project that never used autopilot. Every field is read;
+/// no view changes autopilot state or creates a file.
+#[derive(Debug, Serialize)]
+pub struct Autopilot {
+    pub running: bool,
+    pub wave: u32,
+    pub max_waves: u32,
+    pub step: Option<serde_json::Value>,
+    /// The lead's last five steps, oldest first.
+    pub steps: Vec<serde_json::Value>,
+    pub stop_reason: Option<String>,
+    /// Entries under `## Waiting for you` in `PLAN.md` on the `autopilot` branch.
+    pub waiting: usize,
+    #[serde(skip)]
+    pub quiet_secs: u64,
+}
+
+/// The autopilot snapshot for `delegate list`, `status`, `watch` and the status line.
+pub fn autopilot(ctx: &Ctx) -> Option<Autopilot> {
+    let home = ctx.dhome.join("autopilot");
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(home.join("state.json")).ok()?).ok()?;
+    let driver = &state["driver"];
+    let driver_alive = driver["pid"].as_u64().is_some_and(|pid| {
+        u32::try_from(pid).is_ok_and(|pid| {
+            is_alive(
+                pid,
+                driver["start"].as_str().unwrap_or_default(),
+                driver["boot"].as_str().unwrap_or_default(),
+            )
+        })
+    });
+    let recorded = state["stop_reason"].as_str().map(str::to_owned);
+    let running = recorded.is_none() && driver_alive;
+    let log = state["log"].as_str().map(Path::new);
+    let stop_reason = if running {
+        None
+    } else {
+        Some(recorded.unwrap_or_else(|| {
+            let asked = log.is_some_and(|log| log.join("stop").exists());
+            if asked { "stopped" } else { "driver_died" }.into()
+        }))
+    };
+    let wave = u32::try_from(state["wave"].as_u64().unwrap_or(0)).unwrap_or(u32::MAX);
+    let max_waves = u32::try_from(state["max_waves"].as_u64().unwrap_or(0)).unwrap_or(u32::MAX);
+    let (mut steps, quiet_secs) = log.map_or((vec![], 0), |log| lead_steps(ctx, &state, log));
+    if steps.len() > 5 {
+        steps.drain(..steps.len() - 5);
+    }
+    Some(Autopilot {
+        running,
+        wave,
+        max_waves,
+        step: steps.last().cloned(),
+        steps,
+        stop_reason,
+        waiting: waiting_for_you(ctx, state["worktree"].as_str().map(Path::new)),
+        quiet_secs,
+    })
+}
+
+/// The steps of the newest `wave-<n>.jsonl` in the log folder, and how long ago it grew.
+fn lead_steps(ctx: &Ctx, state: &serde_json::Value, log: &Path) -> (Vec<serde_json::Value>, u64) {
+    let newest = fs::read_dir(log)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let wave: u64 = name
+                .strip_prefix("wave-")?
+                .strip_suffix(".jsonl")?
+                .parse()
+                .ok()?;
+            Some((wave, entry.path()))
+        })
+        .max_by_key(|(wave, _)| *wave);
+    let Some((_, path)) = newest else {
+        return (vec![], 0);
+    };
+    let cwd = state["worktree"].as_str().map_or(ctx.root.as_path(), Path::new);
+    let quiet = fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .map_or(0, |age| age.as_secs());
+    (crate::harness::events::claude_stream_steps(&path, cwd), quiet)
+}
+
+/// Parked tasks in `PLAN.md` on the `autopilot` branch: its worktree's file, else the branch.
+fn waiting_for_you(ctx: &Ctx, worktree: Option<&Path>) -> usize {
+    let text = worktree
+        .and_then(|worktree| fs::read_to_string(worktree.join("PLAN.md")).ok())
+        .or_else(|| git(&ctx.root, &["show", "autopilot:PLAN.md"]).ok())
+        .unwrap_or_default();
+    text.lines()
+        .skip_while(|line| line.trim() != "## Waiting for you")
+        .skip(1)
+        .take_while(|line| !line.starts_with("## "))
+        .filter(|line| {
+            line.trim().strip_prefix("- ").is_some_and(|entry| {
+                entry.split_once(':').is_some_and(|(id, question)| {
+                    let id = id.trim();
+                    !id.is_empty()
+                        && !id.starts_with(['.', '_'])
+                        && !id.contains(char::is_whitespace)
+                        && !question.trim().is_empty()
+                })
+            })
+        })
+        .count()
+}
+
+impl Autopilot {
+    /// One line: `autopilot  wave 2/3  <the lead's latest step>`, or after a stop the reason and
+    /// how many tasks wait for the user. `step_width` bounds the step's text.
+    pub fn line(&self, step_width: usize) -> String {
+        let mut line = format!("autopilot  wave {}/{}", self.wave, self.max_waves);
+        if let Some(reason) = &self.stop_reason {
+            let _ = write!(line, "  stopped: {}", reason.replace('_', " "));
+            if self.waiting > 0 {
+                let _ = write!(line, "  waiting for you: {}", self.waiting);
+            }
+            return line;
+        }
+        if self.quiet_secs >= 120 {
+            let _ = write!(line, "  quiet {}", duration(self.quiet_secs));
+        }
+        match &self.step {
+            Some(step) => {
+                let step = format!(
+                    "{} {} {}",
+                    step["kind"].as_str().unwrap_or(""),
+                    step["target"].as_str().unwrap_or(""),
+                    step["result"].as_str().unwrap_or("")
+                );
+                let _ = write!(line, "  └ {}", cut(one_line(step.trim()).as_str(), step_width));
+            }
+            None => line.push_str("  starting"),
+        }
+        line
+    }
+}
+
 /// Collect task snapshots without modifying the task, repository, index or worktree.
 pub fn collect(ctx: &Ctx, id: Option<&str>, depth: Depth) -> Result<Vec<TaskView>> {
     let ids = task_ids(ctx);
@@ -1017,7 +1162,13 @@ pub fn run(ctx: &Ctx, id: Option<&str>, json: bool) -> Result<()> {
     let views = collect(ctx, id, Depth::Full)?;
     let color = use_color(std::io::stdout().is_terminal());
     if json {
-        println!("{}", serde_json::json!({"tasks": views}));
+        let mut doc = serde_json::json!({"tasks": views});
+        if id.is_none()
+            && let Some(autopilot) = autopilot(ctx)
+        {
+            doc["autopilot"] = serde_json::to_value(autopilot)?;
+        }
+        println!("{doc}");
     } else if id.is_some() {
         if let Some(view) = views.first() {
             print!("{}", render_detail(view, color));
@@ -1059,6 +1210,108 @@ mod tests {
             elapsed_secs: 65,
             activity_age_secs: 425,
         }
+    }
+
+    fn lead_event(tool: &str, key: &str, value: &str) -> String {
+        format!(
+            "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"{value}\",\"name\":\"{tool}\",\"input\":{{\"{key}\":\"{value}\"}}}}]}}}}\n"
+        )
+    }
+
+    #[test]
+    fn autopilot_is_read_from_state_the_newest_wave_and_the_plan() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-ap-{}", uuid::Uuid::new_v4()));
+        let ctx = Ctx {
+            root: root.join("project"),
+            dhome: root.join("tasks"),
+            gitdir: root.join("project/.git"),
+        };
+        assert!(autopilot(&ctx).is_none(), "no state, no autopilot");
+        let log = root.join("tasks/autopilot/log");
+        let worktree = root.join("tasks/autopilot/worktree");
+        fs::create_dir_all(&log)?;
+        fs::create_dir_all(&worktree)?;
+        let (_, start) = process_stat(std::process::id()).context("own identity")?;
+        let state = |stop: serde_json::Value| {
+            serde_json::json!({
+                "driver": {"pid": std::process::id(), "start": start,
+                    "boot": fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap_or_default().trim()},
+                "wave": 2, "max_waves": 3, "stop_reason": stop,
+                "log": log, "worktree": worktree,
+            })
+        };
+        let state_file = root.join("tasks/autopilot/state.json");
+        fs::write(&state_file, state(serde_json::Value::Null).to_string())?;
+        fs::write(log.join("wave-1.jsonl"), lead_event("Bash", "command", "old wave"))?;
+        let mut stream = String::new();
+        for index in 0..7 {
+            stream.push_str(&lead_event("Bash", "command", &format!("step {index}")));
+        }
+        stream.push_str("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tex");
+        fs::write(log.join("wave-2.jsonl"), stream)?;
+        fs::write(
+            worktree.join("PLAN.md"),
+            "# Plan\n\n## Waiting for you\n- t003: round down?\n- not an entry\n- t004: and this?\n\n## Tasks\n- t009: no\n",
+        )?;
+
+        let before = fs::read_dir(root.join("tasks/autopilot"))?.count();
+        let running = autopilot(&ctx).context("autopilot state")?;
+        assert!(running.running);
+        assert_eq!((running.wave, running.max_waves, running.waiting), (2, 3, 2));
+        assert_eq!(running.stop_reason, None);
+        assert_eq!(running.steps.len(), 5, "the last five of wave 2, not wave 1");
+        assert_eq!(running.step.as_ref().map(|s| s["target"].clone()), Some("step 6".into()));
+        assert_eq!(running.steps[0]["target"], "step 2");
+        assert_eq!(
+            running.line(70),
+            "autopilot  wave 2/3  └ run step 6"
+        );
+        let doc = serde_json::to_value(&running)?;
+        assert_eq!(doc["running"], true);
+        assert!(doc.get("quiet_secs").is_none());
+
+        fs::write(&state_file, state("waiting_for_user".into()).to_string())?;
+        let stopped = autopilot(&ctx).context("autopilot state")?;
+        assert!(!stopped.running);
+        assert_eq!(stopped.stop_reason.as_deref(), Some("waiting_for_user"));
+        assert_eq!(
+            stopped.line(70),
+            "autopilot  wave 2/3  stopped: waiting for user  waiting for you: 2"
+        );
+        fs::write(worktree.join("PLAN.md"), "# Plan\n")?;
+        assert_eq!(
+            autopilot(&ctx).context("autopilot state")?.line(70),
+            "autopilot  wave 2/3  stopped: waiting for user"
+        );
+        assert_eq!(fs::read_dir(root.join("tasks/autopilot"))?.count(), before);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_dead_driver_without_a_reason_shows_how_it_ended() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-ap-{}", uuid::Uuid::new_v4()));
+        let ctx = Ctx {
+            root: root.join("project"),
+            dhome: root.join("tasks"),
+            gitdir: root.join("project/.git"),
+        };
+        let log = root.join("tasks/autopilot/log");
+        fs::create_dir_all(&log)?;
+        let state = serde_json::json!({"driver": {"pid": 1, "start": "0", "boot": "none"},
+            "wave": 1, "max_waves": 5, "stop_reason": null, "log": log});
+        fs::write(root.join("tasks/autopilot/state.json"), state.to_string())?;
+        let dead = autopilot(&ctx).context("autopilot state")?;
+        assert!(!dead.running);
+        assert_eq!(dead.stop_reason.as_deref(), Some("driver_died"));
+        assert_eq!(dead.line(70), "autopilot  wave 1/5  stopped: driver died");
+        fs::write(log.join("stop"), "stopped\n")?;
+        assert_eq!(
+            autopilot(&ctx).context("autopilot state")?.stop_reason.as_deref(),
+            Some("stopped")
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]

@@ -1475,6 +1475,9 @@ fn failed_checks_problem(t: &Task) -> String {
     message
 }
 
+/// Width of the lead's latest step in the autopilot line of `list`.
+const AUTOPILOT_STEP_WIDTH: usize = 70;
+
 /// `vault_notes`: say what the vault holds that isn't on its remote (off inside the sandbox).
 pub fn list(ctx: &Ctx, vault_notes: bool) -> Result<()> {
     let mut ids: Vec<String> = fs::read_dir(&ctx.dhome)
@@ -1486,6 +1489,9 @@ pub fn list(ctx: &Ctx, vault_notes: bool) -> Result<()> {
         })
         .unwrap_or_default();
     ids.sort();
+    if let Some(autopilot) = status::autopilot(ctx) {
+        println!("{}", autopilot.line(AUTOPILOT_STEP_WIDTH));
+    }
     if ids.is_empty() {
         println!("no tasks");
     }

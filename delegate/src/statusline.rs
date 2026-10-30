@@ -77,8 +77,19 @@ fn parse_input(input: &str) -> Input {
 fn render(ctx: &Ctx, session: Option<&str>) -> Option<String> {
     let views = status::collect(ctx, None, Depth::Phase).ok()?;
     // No vault note here: the status line stays off the vault, local or not.
-    render_views(&views, session)
+    let tasks = render_views(&views, session);
+    match status::autopilot(ctx) {
+        // The autopilot run is the project's, not one session's: it comes first.
+        Some(autopilot) => {
+            let line = autopilot.line(AUTOPILOT_STEP_WIDTH);
+            Some(tasks.map_or(line.clone(), |tasks| format!("{line} │ {tasks}")))
+        }
+        None => tasks,
+    }
 }
+
+/// Width of the lead's latest step in the status line.
+const AUTOPILOT_STEP_WIDTH: usize = 50;
 
 /// Own unfinished tasks and ready count, followed by dimmed counts for other sessions.
 ///

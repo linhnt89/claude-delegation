@@ -876,3 +876,70 @@ for (const { surface, viewport, name, normal } of [
     }
   })
 }
+
+const AUTOPILOT = {
+  running: true, wave: 2, max_waves: 3, stop_reason: null, waiting: 0,
+  step: { kind: 'run', target: 'delegate merge t003', result: null },
+  steps: [
+    { kind: 'read', target: 'PLAN.md', result: null },
+    { kind: 'message', target: 'reviewing t003', result: null },
+    { kind: 'run', target: 'delegate merge t003', result: null },
+  ],
+}
+
+test('the pane shows an autopilot card with the wave and the lead\'s last steps', async ($, on) => {
+  engine(on, JSON.stringify({ ...STATUS, autopilot: AUTOPILOT }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Autopilot · wave 2\/3 · running/ })).toBeTruthy()
+  for (const step of ['read PLAN.md', 'message reviewing t003', 'run delegate merge t003'])
+    expect(await ui.find({ type: 'Text', text: new RegExp(step) })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^✓ ready to merge$/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('a stopped autopilot card names the reason and the tasks waiting for the user', async ($, on) => {
+  engine(on, JSON.stringify({
+    tasks: [],
+    autopilot: { ...AUTOPILOT, running: false, stop_reason: 'waiting_for_user', waiting: 1 },
+  }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Autopilot · wave 2\/3 · stopped: waiting for user/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^waiting for you: 1$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /No delegate tasks yet/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('without autopilot there is no card and no autopilot in the row', async ($, on) => {
+  mock.clock(on)
+  const e = summaryEngine($, on, JSON.stringify(STATUS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await e.change('person')
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await pane.find({ type: 'Text', text: /Autopilot/i })).toBeUndefined()
+  await pane.unmount()
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await band.findAll({ type: 'Text' })).map(t => t.text).join('')).not.toMatch(/autopilot/i)
+  await band.unmount()
+})
+
+test('the row leads with the autopilot wave and its latest step, then the tasks; a stop shows the reason', async ($, on) => {
+  const clock = mock.clock(on)
+  const e = summaryEngine($, on, JSON.stringify({ ...STATUS, autopilot: AUTOPILOT }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await e.change('person')
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const text = (await band.findAll({ type: 'Text' })).map(t => t.text).join('')
+  expect(text).toMatch(/^autopilot {2}wave 2\/3 {2}└ run delegate merge t003 {2}delegate {2}/)
+  await band.unmount()
+  e.stdout(JSON.stringify({
+    tasks: [],
+    autopilot: { ...AUTOPILOT, running: false, stop_reason: 'waiting_for_user', waiting: 1 },
+  }))
+  await clock.advance(3000)
+  const stoppedBand = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const stoppedText = (await stoppedBand.findAll({ type: 'Text' })).map(t => t.text).join('')
+  expect(stoppedText).toContain('autopilot  wave 2/3  stopped: waiting for user  waiting for you: 1')
+  await stoppedBand.unmount()
+})

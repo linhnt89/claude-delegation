@@ -21,8 +21,21 @@ export type Task = {
   next: string | null
 }
 
-/** What the pane last read: the tasks, or why there are none. */
-export type View = { tasks: Task[]; error: string | null; readAt: number }
+/** The autopilot lead, as `delegate status --json` gives it; absent when autopilot never ran. */
+export type Autopilot = {
+  running: boolean
+  wave: number
+  max_waves: number
+  step: Step | null
+  /** The lead's last five steps, oldest first. */
+  steps: Step[]
+  stop_reason: string | null
+  /** Tasks parked under "Waiting for you". */
+  waiting: number
+}
+
+/** What the pane last read: the tasks and the autopilot lead, or why there are none. */
+export type View = { tasks: Task[]; error: string | null; readAt: number; autopilot: Autopilot | null }
 
 declare module 'claude-code' {
   interface PluginState {

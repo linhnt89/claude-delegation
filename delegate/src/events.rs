@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -725,6 +725,54 @@ pub(crate) fn collect(path: &Path) -> Vec<Value> {
     let Ok(bytes) = std::fs::read(path) else {
         return vec![];
     };
+    fold(&bytes)
+}
+
+/// How much of a stream's end `claude_stream_steps` reads: a long lead's whole stream is
+/// megabytes, and a view only needs the steps at its end.
+const TAIL: u64 = 256 * 1024;
+
+/// Steps of a Claude `stream-json` file (a headless lead's wave), through the same adapter a
+/// Claude worker's stream goes through. Read only: a missing or half-written file gives fewer
+/// steps, never an error.
+pub(crate) fn claude_stream_steps(path: &Path, cwd: &Path) -> Vec<Value> {
+    let Ok(mut file) = File::open(path) else {
+        return vec![];
+    };
+    let length = file.metadata().map_or(0, |meta| meta.len());
+    let start = length.saturating_sub(TAIL);
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut bytes).is_err() {
+        return vec![];
+    }
+    let mut text = bytes.as_slice();
+    if start > 0 {
+        // The window starts mid-record; drop the partial first line.
+        text = text
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(&[][..], |at| &text[at + 1..]);
+    }
+    let mut adapter = Adapter::new(Harness::Claude, cwd);
+    let mut events = Vec::new();
+    for line in text.split_inclusive(|b| *b == b'\n') {
+        // An unterminated last line may be mid-write.
+        if line.last() != Some(&b'\n') {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_slice::<Value>(line)
+            && value.is_object()
+        {
+            for event in adapter.feed(&value) {
+                events.extend(event.to_string().into_bytes());
+                events.push(b'\n');
+            }
+        }
+    }
+    fold(&events)
+}
+
+fn fold(bytes: &[u8]) -> Vec<Value> {
     let mut steps = Vec::<Value>::new();
     let mut indices = HashMap::<u64, usize>::new();
     for line in bytes.split_inclusive(|b| *b == b'\n') {

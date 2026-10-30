@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ThemeKey } from 'claude-code'
 
-import type { Task, View } from '../types'
+import type { Autopilot, Step, Task, View } from '../types'
 
 // Shows `delegate status --json` in a pane beside the chat, read again every few seconds.
 const PANE = 'delegate'
@@ -11,6 +11,7 @@ const view = atom({ plugin: 'delegate-pane', key: 'view' } as const, {
   tasks: [],
   error: null,
   readAt: 0,
+  autopilot: null,
 } as View)
 
 const reading = new Set<string | null>()
@@ -33,12 +34,18 @@ async function readStatus($: EngineInterface): Promise<void> {
     const out = await $.process.run(['delegate', 'status', '--json'], { timeoutMs: 20000 })
     if (out.exitCode !== 0) {
       const why = out.stderr.trim().split('\n').pop() ?? ''
-      next = { tasks: [], error: why || 'delegate status failed', readAt: Date.now() }
+      next = { tasks: [], error: why || 'delegate status failed', readAt: Date.now(), autopilot: null }
     } else {
-      next = { tasks: (JSON.parse(out.stdout).tasks ?? []) as Task[], error: null, readAt: Date.now() }
+      const status = JSON.parse(out.stdout)
+      next = {
+        tasks: (status.tasks ?? []) as Task[],
+        error: null,
+        readAt: Date.now(),
+        autopilot: (status.autopilot ?? null) as Autopilot | null,
+      }
     }
   } catch (err) {
-    next = { tasks: [], error: `delegate isn't available here (${String(err)})`, readAt: Date.now() }
+    next = { tasks: [], error: `delegate isn't available here (${String(err)})`, readAt: Date.now(), autopilot: null }
   }
   await update($, view, () => next)
 }
@@ -167,6 +174,22 @@ function summary(tasks: Task[]): SummaryPart[] {
   return parts
 }
 
+function stepText(s: Step): string {
+  return [s.kind, s.target, s.result].filter(Boolean).join(' ')
+}
+
+function stopped(a: Autopilot): string {
+  return `stopped: ${(a.stop_reason ?? 'driver_died').replace(/_/g, ' ')}`
+}
+
+/** The autopilot lead in one line: the wave and its latest step, or why it stopped. */
+function autopilotLine(a: Autopilot, stepColumns: number): SummaryPart {
+  const wave = `autopilot  wave ${a.wave}/${a.max_waves}`
+  if (!a.running)
+    return { text: `${wave}  ${stopped(a)}${a.waiting > 0 ? `  waiting for you: ${a.waiting}` : ''}`, color: a.waiting > 0 ? 'warning' : 'inactive' }
+  return { text: `${wave}  ${a.step ? `└ ${clip(stepText(a.step), stepColumns)}` : 'starting'}`, color: 'suggestion' }
+}
+
 function rowSummary(tasks: Task[], id: string | null): SummaryPart[] {
   const parts = summary(id === null ? tasks : tasks.filter(t => t.session === id))
   if (id === null) return parts
@@ -253,7 +276,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const v = await read($, view)
     if (e.props.hasSurvey || (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
-      || (!v.error && !v.tasks.some(t => t.phase !== 'not_started')))
+      || (!v.error && !v.autopilot && !v.tasks.some(t => t.phase !== 'not_started')))
       return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     const normal = e.surface === 'terminal' && e.viewport?.isFullscreen !== true
@@ -262,8 +285,13 @@ export const register: Register = on => {
     const controlWidth = label.length + (e.surface === 'terminal' ? 4 : 0)
     const buttonWidth = columns >= controlWidth ? controlWidth : 0
     const id = await sessionId($)
-    const source: SummaryPart[] = v.error ? [{ text: 'delegate: status unavailable' }]
+    const tasks: SummaryPart[] = v.error ? [{ text: 'delegate: status unavailable' }]
       : rowSummary(v.tasks, id)
+    // The autopilot run is the project's, not one session's: it leads the row.
+    const source: SummaryPart[] = !v.error && v.autopilot
+      ? [autopilotLine(v.autopilot, 40),
+        ...(v.tasks.some(t => t.phase !== 'not_started') ? [{ text: '  ' }, ...tasks] : [])]
+      : tasks
     const button = <Button key="delegate-open" label={label} autoFocus onPress={async () => {
       await $.ui.open({ id: PANE, title: 'Delegate tasks' })
     }} />
@@ -311,6 +339,23 @@ export const register: Register = on => {
     const width = Math.max(0, e.props.bodyColumns)
     const columns = Math.max(0, width - 2)
     if (v.error) return <Box flexDirection="column"><Text dimColor>{clip(v.error, width)}</Text></Box>
+    const a = v.autopilot
+    const card = a ? (
+      <Box key="autopilot" flexDirection="column" marginBottom={1}>
+        <Text bold={a.running} dimColor={!a.running} wrap="truncate-end">
+          {clip(`── Autopilot · wave ${a.wave}/${a.max_waves} · ${a.running ? 'running' : stopped(a)} ──`, width)}
+        </Text>
+        {a.waiting > 0 && !a.running
+          ? <Text color="warning">{clip(`waiting for you: ${a.waiting}`, columns)}</Text> : null}
+        {a.steps.length === 0
+          ? <Text dimColor>{clip(a.running ? 'starting' : 'no steps recorded', columns)}</Text> : null}
+        {a.steps.map((s, i) => (
+          <Text key={`step:${i}`} dimColor wrap="truncate-end">{clip(`  ${stepText(s)}`, columns)}</Text>
+        ))}
+      </Box>
+    ) : null
+    if (v.tasks.length === 0 && card)
+      return <Box flexDirection="column" width={width} overflow="hidden">{card}</Box>
     if (v.tasks.length === 0)
       return (
         <Box flexDirection="column">
@@ -321,6 +366,7 @@ export const register: Register = on => {
     const groups = sessions(v.tasks, await sessionId($))
     return (
       <Box flexDirection="column" width={width} overflow="hidden">
+        {card}
         {groups.map(g => (
           <Box key={`session:${g.session ?? 'unowned'}`} flexDirection="column">
             <Text bold={g.mine} dimColor={!g.mine} wrap="truncate-end">{divider(g, width)}</Text>
