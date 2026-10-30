@@ -141,11 +141,24 @@ grep -qi 's083' "$report" || fail "the run report does not name the proposed dec
 
 d autopilot land
 [ "$RC" -eq 0 ] || fail "delegate autopilot land: $OUT"
+main_log="$(cd "$PROJ" && git log --format=%s main)"
 for id in t001 t002 t003 t004; do
-  (cd "$PROJ" && git log --format=%s main | grep -q "^$id: ") ||
+  grep -q "^$id: " <<<"$main_log" ||
     fail "after land, the base branch has no $id merge"
 done
 d list
-printf '%s' "$OUT" | grep -Eq '^t[0-9]{3}[[:space:]]' &&
-  fail "delegate list still shows task state after land: $OUT"
+main_plan="$(cd "$PROJ" && git show main:PLAN.md)"
+parked="$(awk '
+  /^## Waiting for you[[:space:]]*$/ { waiting = 1; next }
+  /^## / { waiting = 0 }
+  waiting { print }
+' <<<"$main_plan" | grep -oE 't[0-9][0-9][0-9]' | sort -u | tr '\n' ' ')"
+printf '%s' "$OUT" | awk -v parked="$parked" '
+  BEGIN {
+    count = split(parked, ids, /[[:space:]]+/)
+    for (i = 1; i <= count; i++) if (ids[i] != "") allowed[ids[i]] = 1
+  }
+  /^t[0-9][0-9][0-9][[:space:]]/ && !allowed[$1] { unexpected = 1 }
+  END { exit !unexpected }
+' && fail "delegate list still shows unparked task state after land: $OUT"
 pass "two waves, four merges, a refused bad mandate, a refused third round of t005, a proposed decision in the report, and one-command land"
