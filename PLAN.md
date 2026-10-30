@@ -82,15 +82,12 @@
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
+| t081 | Builds go through sccache (`delegate/mise.toml`) | 1 | running | – | fast | `scripts/check`, cache hits on a second build | decision 021 |
+| t082 | One read-only function decides whether autopilot is running | 1 | running | – | fast | `scripts/check`, autopilot scenarios | removes the copy in `status.rs` |
 
 ## Known, not fixed
-- `status.rs` repeats `autopilot.rs`'s driver-alive test (t072 couldn't touch `autopilot.rs`);
-  move it to one place when `autopilot.rs` is next changed.
 - P018 (hidden) failed again under a full parallel `evals/run fast` (2026-10-31: "t101 belongs to
   <session>, created by None"), passing on rerun: flakiness under load, not tied to a change.
-- Warm `share` of a build output dir (e.g. `delegate/target`) is unsafe for parallel tasks: they
-  overwrite one another's binaries, so evals can test another task's build. Use it only for
-  caches keyed by content; a safe cargo setup (sccache, per-task target) is a follow-up.
 - Accepted at t056's merge (review, medium): a shell edit by the lead from the main checkout
   into a task worktree isn't caught at `Stop` (it watches only the lead's own worktree, so a
   running worker's edits are never blamed). Edit/Write there are still refused.
