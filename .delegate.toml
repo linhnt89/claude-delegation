@@ -24,5 +24,8 @@
 # [guard]
 # lead_files = ["notes/**"]
 
+[warm]
+copy = ["delegate/target"]
+
 [guard]
 lead_files = ["evals/lib/streams/*.steps"]
