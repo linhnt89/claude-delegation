@@ -51,6 +51,8 @@
 - t064 (2026-10-30): checks for autopilot and warm worktrees (decisions 018–020, J10): S083–S094,
   P022–P024, all failing until built; a stand-in headless lead in `evals/lib/autopilot_lead.sh`.
   Checks by DeepSeek, three rounds (questions, then the plan-review additions).
+- t075 (2026-10-31): `delegate autopilot land`: fast-forward or a clean merge into the base
+  branch; on a conflict it changes nothing and names the files (S083, S090, hidden P022). By Sol.
 - t072, t079 (2026-10-31): `list`, `watch`, `status --json`, the row above the prompt and the pane
   show an autopilot line: wave, the lead's latest step, a "quiet" hint, stop reason, waiting
   count (S095). By Claude Sonnet. t079 fixed S083's post-land check; S083 now allows parked
@@ -76,7 +78,6 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t075 | `delegate autopilot land`: fast-forward or clean merge into the base branch, refuse on conflict changing nothing | 2 | running | t070 | standard | S083, S090 (hidden: P022) | split from t070 at plan review |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
