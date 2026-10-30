@@ -51,6 +51,10 @@
 - t064 (2026-10-30): checks for autopilot and warm worktrees (decisions 018–020, J10): S083–S094,
   P022–P024, all failing until built; a stand-in headless lead in `evals/lib/autopilot_lead.sh`.
   Checks by DeepSeek, three rounds (questions, then the plan-review additions).
+- t082, t083 (2026-10-31): one read-only function decides whether autopilot is running
+  (`autopilot::effective_status`), used by the views too. This repo copies `delegate/target`
+  into each task as a block clone (decision 022, superseding 021's sccache, whose server could
+  act outside the sandbox); it saves about 2 s of a 10 s build. By Luna.
 - t080 (2026-10-31): S040's check works out which owned templates changed since the first kit
   (t071 changed PLAN.md and .delegate.toml). By Luna. `evals/run fast` on main: 102 pass, P018
   flaked once (passes alone).
@@ -82,8 +86,6 @@
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
-| t083 | Each task starts from a reflinked copy of `delegate/target` | 1 | running | – | fast | `scripts/check`, S092, S093; timings in the report | decision 022 (supersedes 021: sccache's server can act outside the sandbox) |
-| t082 | One read-only function decides whether autopilot is running | 1 | running | – | fast | `scripts/check`, autopilot scenarios | removes the copy in `status.rs` |
 
 ## Known, not fixed
 - P018 (hidden) failed again under a full parallel `evals/run fast` (2026-10-31: "t101 belongs to

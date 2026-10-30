@@ -22,6 +22,7 @@ owns its copy: no shared output, no server, nothing crossing the sandbox.
 - `[warm] share` of `delegate/target` — parallel tasks overwrite each other's binaries.
 
 ## Consequences
-A task's first build only recompiles what changed since the main checkout's last build, so
-the lead's own builds keep the copy useful. On a filesystem without cloning, each task pays a
+Measured at t083 (btrfs): the copy is a block clone, 0.08 s and no extra space; a task's
+first build took 7.7 s against 9.9 s cold, because cargo still recompiles some dependencies
+in a new location. Builds here are short, so the gain is small; the copy costs nothing. On a filesystem without cloning, each task pays a
 plain copy of `target/` (1.3 GB here).
