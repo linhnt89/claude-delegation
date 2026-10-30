@@ -274,9 +274,76 @@ struct Run {
     task_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EffectiveStatus {
+    running: bool,
+    stop_reason: Option<String>,
+}
+
+fn effective_status(
+    driver_alive: bool,
+    recorded_reason: Option<&str>,
+    stop_requested: bool,
+) -> EffectiveStatus {
+    let running = recorded_reason.is_none() && driver_alive;
+    let stop_reason = (!running).then(|| {
+        recorded_reason
+            .unwrap_or(if stop_requested {
+                "stopped"
+            } else {
+                "driver_died"
+            })
+            .to_owned()
+    });
+    EffectiveStatus {
+        running,
+        stop_reason,
+    }
+}
+
+/// Read-only state-file snapshot used by the live status views.
+#[derive(Debug)]
+pub struct SavedStatus {
+    pub state: serde_json::Value,
+    pub running: bool,
+    pub stop_reason: Option<String>,
+}
+
+/// Read saved autopilot state without retiring a dead driver's lead or changing files.
+pub fn read_saved_status(ctx: &Ctx) -> Option<SavedStatus> {
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(home(ctx).join("state.json")).ok()?).ok()?;
+    let driver = &state["driver"];
+    let driver_alive = driver["pid"].as_u64().is_some_and(|pid| {
+        u32::try_from(pid).is_ok_and(|pid| {
+            status::is_alive(
+                pid,
+                driver["start"].as_str().unwrap_or_default(),
+                driver["boot"].as_str().unwrap_or_default(),
+            )
+        })
+    });
+    let stop_requested = state["log"]
+        .as_str()
+        .is_some_and(|log| Path::new(log).join("stop").exists());
+    let effective = effective_status(driver_alive, state["stop_reason"].as_str(), stop_requested);
+    Some(SavedStatus {
+        state,
+        running: effective.running,
+        stop_reason: effective.stop_reason,
+    })
+}
+
 impl Run {
+    fn status(&self) -> EffectiveStatus {
+        effective_status(
+            self.driver.alive(),
+            self.stop_reason.as_deref(),
+            self.stop_requested(),
+        )
+    }
     fn running(&self) -> bool {
-        self.stop_reason.is_none() && self.driver.alive()
+        self.status().running
     }
     fn stop_requested(&self) -> bool {
         self.log.join("stop").exists()
@@ -541,13 +608,10 @@ fn start(ctx: &Ctx, max_waves: u32, floor: Option<&str>) -> Result<()> {
         if previous.stop_reason.is_none()
             || (previous.notify.is_some() && !previous.log.join("notify.attempted").exists())
         {
-            let reason = previous.stop_reason.clone().unwrap_or_else(|| {
-                if previous.stop_requested() {
-                    "stopped".into()
-                } else {
-                    "driver_died".into()
-                }
-            });
+            let reason = previous
+                .status()
+                .stop_reason
+                .unwrap_or_else(|| "driver_died".into());
             // Recovery notification must not retain the startup/lead lock.
             drop(control);
             drop(directory);
@@ -1329,24 +1393,22 @@ fn show(ctx: &Ctx, json: bool) -> Result<()> {
     if let Some(previous) = run.as_mut()
         && !previous.driver.alive()
     {
-        let reason = previous.stop_reason.clone().unwrap_or_else(|| {
-            if previous.stop_requested() {
-                "stopped".into()
-            } else {
-                "driver_died".into()
-            }
-        });
+        let reason = previous
+            .status()
+            .stop_reason
+            .unwrap_or_else(|| "driver_died".into());
         finish(ctx, previous, &reason)?;
         run = load(ctx)?;
     }
     let value = if let Some(run) = &run {
-        let running = run.running();
+        let effective = run.status();
         serde_json::json!({
-            "running": running, "wave": run.wave, "max_waves": run.max_waves,
-            "stop_reason": if running { None } else { Some(run.stop_reason.as_deref().unwrap_or("driver_died")) },
+            "running": effective.running, "wave": run.wave, "max_waves": run.max_waves,
+            "stop_reason": effective.stop_reason,
             "report": run.report, "branch": run.branch, "base": run.base,
             "landed": landed(ctx, run)?,
-            "worktree": run.worktree, "log": run.log, "pid": running.then_some(run.driver.pid),
+            "worktree": run.worktree, "log": run.log,
+            "pid": effective.running.then_some(run.driver.pid),
         })
     } else {
         serde_json::json!({"running": false, "wave": 0, "max_waves": 5, "stop_reason": null,
@@ -1356,12 +1418,13 @@ fn show(ctx: &Ctx, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(&value)?);
     } else if let Some(run) = run {
+        let effective = run.status();
         println!(
             "autopilot: {} (wave {}/{})\nbranch: {}{} (base {})\nworktree: {}\nlog: {}\nreport: {}",
-            if run.running() {
+            if effective.running {
                 "running"
             } else {
-                run.stop_reason.as_deref().unwrap_or("driver_died")
+                effective.stop_reason.as_deref().unwrap_or("driver_died")
             },
             run.wave,
             run.max_waves,
@@ -1420,6 +1483,27 @@ mod tests {
         for bad in ["", "0h", "-1h", "1", "1.5h", "18446744073709551615d"] {
             assert!(duration(bad).is_err(), "accepted {bad}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn effective_status_distinguishes_running_stop_and_driver_death() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut run = fixture.run.clone();
+        let running = run.status();
+        assert!(running.running);
+        assert_eq!(running.stop_reason, None);
+
+        run.driver.start.push('0');
+        fs::write(run.log.join("stop"), "stopped\n")?;
+        let stopped = run.status();
+        assert!(!stopped.running);
+        assert_eq!(stopped.stop_reason.as_deref(), Some("stopped"));
+
+        fs::remove_file(run.log.join("stop"))?;
+        let dead = run.status();
+        assert!(!dead.running);
+        assert_eq!(dead.stop_reason.as_deref(), Some("driver_died"));
         Ok(())
     }
 

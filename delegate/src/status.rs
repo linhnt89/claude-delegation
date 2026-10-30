@@ -419,33 +419,14 @@ pub struct Autopilot {
 
 /// The autopilot snapshot for `delegate list`, `status`, `watch` and the status line.
 pub fn autopilot(ctx: &Ctx) -> Option<Autopilot> {
-    let home = ctx.dhome.join("autopilot");
-    let state: serde_json::Value =
-        serde_json::from_slice(&fs::read(home.join("state.json")).ok()?).ok()?;
-    let driver = &state["driver"];
-    let driver_alive = driver["pid"].as_u64().is_some_and(|pid| {
-        u32::try_from(pid).is_ok_and(|pid| {
-            is_alive(
-                pid,
-                driver["start"].as_str().unwrap_or_default(),
-                driver["boot"].as_str().unwrap_or_default(),
-            )
-        })
-    });
-    let recorded = state["stop_reason"].as_str().map(str::to_owned);
-    let running = recorded.is_none() && driver_alive;
+    let saved = crate::autopilot::read_saved_status(ctx)?;
+    let state = &saved.state;
+    let running = saved.running;
     let log = state["log"].as_str().map(Path::new);
-    let stop_reason = if running {
-        None
-    } else {
-        Some(recorded.unwrap_or_else(|| {
-            let asked = log.is_some_and(|log| log.join("stop").exists());
-            if asked { "stopped" } else { "driver_died" }.into()
-        }))
-    };
+    let stop_reason = saved.stop_reason.clone();
     let wave = u32::try_from(state["wave"].as_u64().unwrap_or(0)).unwrap_or(u32::MAX);
     let max_waves = u32::try_from(state["max_waves"].as_u64().unwrap_or(0)).unwrap_or(u32::MAX);
-    let (mut steps, quiet_secs) = log.map_or((vec![], 0), |log| lead_steps(ctx, &state, log));
+    let (mut steps, quiet_secs) = log.map_or((vec![], 0), |log| lead_steps(ctx, state, log));
     if steps.len() > 5 {
         steps.drain(..steps.len() - 5);
     }
