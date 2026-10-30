@@ -20,3 +20,5 @@ main checkout. Worktree lifecycle and the sandbox stay as they are.
 
 ## Consequences
 Shared caches must stay writable inside bwrap without opening the main checkout to workers.
+`[warm]` paths must be ignored by git (refused otherwise, saying so): the runner commits with
+`git add -A`, so a shared or copied path git doesn't ignore would land in the worker's commit.

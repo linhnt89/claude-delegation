@@ -51,6 +51,9 @@
 - t064 (2026-10-30): checks for autopilot and warm worktrees (decisions 018–020, J10): S083–S094,
   P022–P024, all failing until built; a stand-in headless lead in `evals/lib/autopilot_lead.sh`.
   Checks by DeepSeek, three rounds (questions, then the plan-review additions).
+- t071, t076 (2026-10-30): the kit teaches one session per phase with a `PLAN.md` handoff, and the
+  autopilot prep pass, mandate, parking and lock (decisions 018, 019; S091). t076 fixed S091's
+  check. By Sol.
 - t060–t063 (2026-10-29): decisions 016, 017. The lead works in waves: the delegate skill and
   templates teach the batch loop (one id-less `wait`, work while workers run, one merge ask per
   batch); `run` warns when `Scope In` overlaps a running task; parallel tasks share an
@@ -61,7 +64,6 @@
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t070 | `delegate autopilot` start/stop/status: headless lead per wave, `autopilot` worktree and branch, lead lock, stop conditions, log, run report, `notify` | 1 | running | t064 | deep | S084–S087, S089, P023, P024 (hidden: S088, P022) | decision 019; plan review 2026-10-30: per-run lead auth, mandate validated in the worktree, gate after every merge, round limit |
-| t071 | Skills and templates: prep pass and `## Mandate`, parking in "Waiting for you", per-wave handoff, session per phase, catch-up brief, respecting the lock | 1 | running | t064 | standard | S091 | decisions 018, 019; mirror `templates/project/`, run `scripts/kit-history` |
 | t074 | Warm task worktrees: per-project shared build cache or copied ignored paths | 1 | running | t064 | standard | S092, S093 (hidden: S094) | decision 020 |
 | t075 | `delegate autopilot land`: fast-forward or clean merge into the base branch, refuse on conflict changing nothing | 2 | ready | t070 | standard | S083, S090 (hidden: P022) | split from t070 at plan review |
 | t072 | Live lead row in `watch` and the pane, read from the autopilot log | 2 | todo | t070 | standard | scenario to add with the user before its spec | decision 019 |
