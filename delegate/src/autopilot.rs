@@ -5,6 +5,7 @@
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -30,6 +31,8 @@ pub enum Cmd {
     },
     /// Stop the lead and driver, leaving worker tasks intact
     Stop,
+    /// Bring the stopped run's work onto its base branch without overwriting local work
+    Land,
     /// Show the current or last run
     Status {
         #[arg(long)]
@@ -53,6 +56,7 @@ pub fn dispatch(ctx: &Ctx, cmd: Cmd) -> Result<()> {
             quota_floor,
         } => start(ctx, max_waves, quota_floor.as_deref()),
         Cmd::Stop => stop(ctx),
+        Cmd::Land => land(ctx),
         Cmd::Status { json } => show(ctx, json),
         Cmd::Drive { id } => drive(ctx, &id),
     }
@@ -499,7 +503,7 @@ fn prepare_worktree(ctx: &Ctx, base: &str) -> Result<PathBuf> {
                     path.display()
                 );
             }
-            git(&path, &["reset", "-q", "--hard", base])?;
+            fast_forward(&path, base)?;
         }
     } else {
         if exists && reset {
@@ -1137,6 +1141,188 @@ fn stop(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+/// Use Git's transactional two-tree checkout, preserving unrelated index/worktree edits.
+/// Disable hooks and autostash: landing must never run user hooks or stash local files.
+fn fast_forward(root: &Path, target: &str) -> Result<()> {
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "merge",
+            "--ff-only",
+            "--no-edit",
+            "--no-autostash",
+            "--no-overwrite-ignore",
+            "--no-verify",
+            target,
+        ],
+    )
+    .context(
+        "could not land autopilot; preserve your local changes, inspect git status and retry",
+    )?;
+    Ok(())
+}
+
+fn landed(ctx: &Ctx, run: &Run) -> Result<bool> {
+    Ok(!run.running() && ancestor(ctx, &run.branch, &run.base)?)
+}
+
+fn path_list(root: &Path, args: &[&str]) -> Result<Vec<Vec<u8>>> {
+    let output = Command::new("git").args(args).current_dir(root).output()?;
+    if !output.status.success() {
+        bail!(
+            "could not inspect local files; check git status and retry: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect())
+}
+
+fn paths_overlap(a: &[u8], b: &[u8]) -> bool {
+    a == b
+        || a.strip_prefix(b).is_some_and(|tail| tail.starts_with(b"/"))
+        || b.strip_prefix(a).is_some_and(|tail| tail.starts_with(b"/"))
+}
+
+fn land(ctx: &Ctx) -> Result<()> {
+    // Same order as start: exclude both startup and interactive task mutations.
+    let _directory = Lock::directory(&ctx.dhome, false)?;
+    let _control = control(ctx)?;
+    let Some(run) = load(ctx)? else {
+        println!("nothing to land; autopilot has not run");
+        return Ok(());
+    };
+    if run.running() {
+        bail!("autopilot is running; run delegate autopilot stop before landing");
+    }
+    let _work = Lock::exclusive_now(&home(ctx).join("work.guard"))?;
+    let worktrees = path_list(&ctx.root, &["worktree", "list", "--porcelain", "-z"])?;
+    let main = worktrees
+        .first()
+        .and_then(|line| line.strip_prefix(b"worktree "))
+        .context("cannot find the main checkout; inspect git worktree list before landing")?;
+    let main = Path::new(std::ffi::OsStr::from_bytes(main));
+    if main.canonicalize()? != ctx.root.canonicalize()? {
+        bail!(
+            "run delegate autopilot land in the main checkout: {}",
+            main.display()
+        );
+    }
+    let current = git(&ctx.root, &["symbolic-ref", "--short", "HEAD"])
+        .context("check out autopilot's base branch in the main checkout before landing")?;
+    if current != run.base {
+        bail!(
+            "autopilot's base is {}; check out that branch in the main checkout before landing",
+            run.base
+        );
+    }
+    let base = git(&ctx.root, &["rev-parse", "HEAD"])?;
+    let tip = git(
+        &ctx.root,
+        &["rev-parse", &format!("refs/heads/{}", run.branch)],
+    )?;
+    if ancestor(ctx, &tip, &base)? {
+        println!("nothing to land; autopilot is already landed");
+        return Ok(());
+    }
+    let common = git(&ctx.root, &["merge-base", &base, &tip])?;
+    let changed = path_list(
+        &ctx.root,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            &common,
+            &tip,
+            "--",
+        ],
+    )?;
+    let mut dirty = path_list(
+        &ctx.root,
+        &["diff", "--name-only", "--no-renames", "-z", "--"],
+    )?;
+    dirty.extend(path_list(
+        &ctx.root,
+        &[
+            "diff",
+            "--cached",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "--",
+        ],
+    )?);
+    dirty.extend(path_list(
+        &ctx.root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?);
+    let mut overlaps = dirty
+        .iter()
+        .filter(|path| changed.iter().any(|other| paths_overlap(path, other)))
+        .map(|path| format!("{:?}", String::from_utf8_lossy(path)))
+        .collect::<Vec<_>>();
+    overlaps.sort();
+    overlaps.dedup();
+    if !overlaps.is_empty() {
+        bail!(
+            "uncommitted changes overlap autopilot: {}; commit or stash these files, then retry delegate autopilot land",
+            overlaps.join(", ")
+        );
+    }
+    let target = if ancestor(ctx, &base, &tip)? {
+        tip
+    } else {
+        // Merge only objects, never the user's index/worktree. Conflicts cannot leave
+        // MERGE_HEAD, conflict markers or a partially updated checkout behind.
+        let output = Command::new("git")
+            .args(["merge-tree", "--write-tree", "--name-only", &base, &tip])
+            .current_dir(&ctx.root)
+            .output()
+            .context(
+                "preflighting autopilot land; install Git with merge-tree --write-tree support",
+            )?;
+        if !output.status.success() {
+            bail!(
+                "cannot land autopilot; no checkout files were changed. Resolve the conflicting files by merging {} into autopilot in {}, then retry delegate autopilot land:\n{}{}",
+                run.base,
+                run.worktree.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let text = String::from_utf8(output.stdout)?;
+        let tree = text
+            .lines()
+            .next()
+            .context("merge-tree returned no tree; inspect git status and retry")?;
+        git(
+            &ctx.root,
+            &[
+                "commit-tree",
+                tree,
+                "-p",
+                &base,
+                "-p",
+                &tip,
+                "-m",
+                "Merge autopilot",
+            ],
+        )?
+    };
+    // A synthetic merge commit descends directly from HEAD, so even a divergent
+    // history lands through Git's safe fast-forward checkout machinery.
+    fast_forward(&ctx.root, &target)?;
+    println!("autopilot landed on {}", run.base);
+    Ok(())
+}
+
 fn show(ctx: &Ctx, json: bool) -> Result<()> {
     // Loading retires orphaned leads; finalization also recovers their report/notify.
     let mut run = load(ctx)?;
@@ -1159,18 +1345,19 @@ fn show(ctx: &Ctx, json: bool) -> Result<()> {
             "running": running, "wave": run.wave, "max_waves": run.max_waves,
             "stop_reason": if running { None } else { Some(run.stop_reason.as_deref().unwrap_or("driver_died")) },
             "report": run.report, "branch": run.branch, "base": run.base,
+            "landed": landed(ctx, run)?,
             "worktree": run.worktree, "log": run.log, "pid": running.then_some(run.driver.pid),
         })
     } else {
         serde_json::json!({"running": false, "wave": 0, "max_waves": 5, "stop_reason": null,
-            "report": null, "branch": "autopilot", "base": null,
+            "report": null, "branch": "autopilot", "base": null, "landed": false,
             "worktree": home(ctx).join("worktree"), "log": null, "pid": null})
     };
     if json {
         println!("{}", serde_json::to_string(&value)?);
     } else if let Some(run) = run {
         println!(
-            "autopilot: {} (wave {}/{})\nbranch: {} (base {})\nworktree: {}\nlog: {}\nreport: {}",
+            "autopilot: {} (wave {}/{})\nbranch: {}{} (base {})\nworktree: {}\nlog: {}\nreport: {}",
             if run.running() {
                 "running"
             } else {
@@ -1179,6 +1366,7 @@ fn show(ctx: &Ctx, json: bool) -> Result<()> {
             run.wave,
             run.max_waves,
             run.branch,
+            if landed(ctx, &run)? { " (landed)" } else { "" },
             run.base,
             run.worktree.display(),
             run.log.display(),
@@ -1595,6 +1783,217 @@ mod tests {
             git(&worktree, &["rev-parse", "HEAD"])?,
             git(&fixture.ctx.root, &["rev-parse", "main"])?
         );
+        Ok(())
+    }
+
+    fn commit_file(root: &Path, path: &str, text: &str) -> Result<()> {
+        fs::write(root.join(path), text)?;
+        git(root, &["add", "--", path])?;
+        git(
+            root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-qm",
+                path,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn landing_fixture() -> Result<Fixture> {
+        let mut fixture = Fixture::new()?;
+        git(&fixture.ctx.root, &["config", "user.name", "Test"])?;
+        git(
+            &fixture.ctx.root,
+            &["config", "user.email", "test@example.invalid"],
+        )?;
+        commit_file(&fixture.ctx.root, "shared.txt", "base\n")?;
+        commit_file(&fixture.ctx.root, "unrelated.txt", "base\n")?;
+        fixture.run.worktree = prepare_worktree(&fixture.ctx, "main")?;
+        commit_file(&fixture.run.worktree, "shared.txt", "autopilot\n")?;
+        fixture.run.stop_reason = Some("goal_met".into());
+        save(&fixture.ctx, &fixture.run)?;
+        Ok(fixture)
+    }
+
+    fn checkout_snapshot(ctx: &Ctx) -> Result<(String, Vec<u8>, Vec<Vec<u8>>)> {
+        let mut files = path_list(&ctx.root, &["ls-files", "-z"])?;
+        files.extend(path_list(
+            &ctx.root,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+        )?);
+        files.sort();
+        let contents = files
+            .iter()
+            .map(|path| fs::read(ctx.root.join(std::ffi::OsStr::from_bytes(path))))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        Ok((
+            git(&ctx.root, &["rev-parse", "HEAD"])?,
+            fs::read(ctx.root.join(".git/index"))?,
+            contents,
+        ))
+    }
+
+    #[test]
+    fn land_fast_forwards_preserving_unrelated_staged_and_unstaged_work() -> Result<()> {
+        let fixture = landing_fixture()?;
+        fs::write(fixture.ctx.root.join("unrelated.txt"), "staged\n")?;
+        git(&fixture.ctx.root, &["add", "unrelated.txt"])?;
+        fs::write(fixture.ctx.root.join("unrelated.txt"), "unstaged\n")?;
+        fs::write(fixture.ctx.root.join("notes.txt"), "untracked\n")?;
+        let staged = git(&fixture.ctx.root, &["show", ":unrelated.txt"])?;
+        let tip = git(&fixture.ctx.root, &["rev-parse", "autopilot"])?;
+        land(&fixture.ctx)?;
+        assert_eq!(git(&fixture.ctx.root, &["rev-parse", "HEAD"])?, tip);
+        assert_eq!(git(&fixture.ctx.root, &["show", ":unrelated.txt"])?, staged);
+        assert_eq!(
+            fs::read_to_string(fixture.ctx.root.join("unrelated.txt"))?,
+            "unstaged\n"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.ctx.root.join("notes.txt"))?,
+            "untracked\n"
+        );
+        assert!(landed(&fixture.ctx, &fixture.run)?);
+        let before = checkout_snapshot(&fixture.ctx)?;
+        land(&fixture.ctx)?;
+        assert_eq!(checkout_snapshot(&fixture.ctx)?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn land_merges_divergence_and_next_worktree_starts_at_base_head() -> Result<()> {
+        let fixture = landing_fixture()?;
+        commit_file(&fixture.ctx.root, "user.txt", "user commit\n")?;
+        let base = git(&fixture.ctx.root, &["rev-parse", "HEAD"])?;
+        let tip = git(&fixture.ctx.root, &["rev-parse", "autopilot"])?;
+        fs::write(fixture.ctx.root.join("unrelated.txt"), "local\n")?;
+        git(&fixture.ctx.root, &["add", "unrelated.txt"])?;
+        land(&fixture.ctx)?;
+        assert_eq!(
+            git(&fixture.ctx.root, &["show", "-s", "--format=%P", "HEAD"])?,
+            format!("{base} {tip}")
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.ctx.root.join("shared.txt"))?,
+            "autopilot\n"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.ctx.root.join("user.txt"))?,
+            "user commit\n"
+        );
+        assert_eq!(
+            git(&fixture.ctx.root, &["show", ":unrelated.txt"])?,
+            "local"
+        );
+        assert!(landed(&fixture.ctx, &fixture.run)?);
+        commit_file(&fixture.ctx.root, "later.txt", "after land\n")?;
+        let head = git(&fixture.ctx.root, &["rev-parse", "HEAD"])?;
+        prepare_worktree(&fixture.ctx, "main")?;
+        assert_eq!(git(&fixture.run.worktree, &["rev-parse", "HEAD"])?, head);
+        assert_eq!(git(&fixture.ctx.root, &["rev-parse", "HEAD"])?, head);
+        Ok(())
+    }
+
+    #[test]
+    fn land_conflicts_leave_ref_index_and_files_untouched() -> Result<()> {
+        let fixture = landing_fixture()?;
+        commit_file(&fixture.ctx.root, "shared.txt", "user conflict\n")?;
+        fs::write(fixture.ctx.root.join("unrelated.txt"), "local\n")?;
+        git(&fixture.ctx.root, &["add", "unrelated.txt"])?;
+        let before = checkout_snapshot(&fixture.ctx)?;
+        let error = land(&fixture.ctx).unwrap_err().to_string();
+        assert!(error.contains("shared.txt"), "{error}");
+        assert!(error.contains("Resolve"), "{error}");
+        assert_eq!(checkout_snapshot(&fixture.ctx)?, before);
+        assert!(!fixture.ctx.root.join(".git/MERGE_HEAD").exists());
+        assert!(!landed(&fixture.ctx, &fixture.run)?);
+        Ok(())
+    }
+
+    #[test]
+    fn land_refuses_dirty_overlaps_in_both_index_and_worktree() -> Result<()> {
+        for staged in [false, true] {
+            let fixture = landing_fixture()?;
+            fs::write(fixture.ctx.root.join("shared.txt"), "local\n")?;
+            if staged {
+                git(&fixture.ctx.root, &["add", "shared.txt"])?;
+                // Even when the worktree matches HEAD, staged changes are still local work.
+                fs::write(fixture.ctx.root.join("shared.txt"), "base\n")?;
+            }
+            let before = checkout_snapshot(&fixture.ctx)?;
+            let error = land(&fixture.ctx).unwrap_err().to_string();
+            assert!(error.contains("shared.txt"), "{error}");
+            assert!(error.contains("commit or stash"), "{error}");
+            assert_eq!(checkout_snapshot(&fixture.ctx)?, before);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn land_never_overwrites_untracked_or_ignored_files() -> Result<()> {
+        for ignored in [false, true] {
+            let fixture = landing_fixture()?;
+            commit_file(&fixture.run.worktree, "new.txt", "autopilot\n")?;
+            if ignored {
+                fs::write(fixture.ctx.root.join(".git/info/exclude"), "new.txt\n")?;
+            }
+            fs::write(fixture.ctx.root.join("new.txt"), "user\n")?;
+            let before = checkout_snapshot(&fixture.ctx)?;
+            assert!(land(&fixture.ctx).is_err());
+            assert_eq!(checkout_snapshot(&fixture.ctx)?, before);
+            assert_eq!(
+                fs::read_to_string(fixture.ctx.root.join("new.txt"))?,
+                "user\n"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn land_refuses_running_wrong_branch_and_non_main_checkout() -> Result<()> {
+        let mut fixture = landing_fixture()?;
+        fixture.run.stop_reason = None;
+        save(&fixture.ctx, &fixture.run)?;
+        let before = checkout_snapshot(&fixture.ctx)?;
+        assert!(land(&fixture.ctx).unwrap_err().to_string().contains("stop"));
+        assert_eq!(checkout_snapshot(&fixture.ctx)?, before);
+        fixture.run.stop_reason = Some("stopped".into());
+        save(&fixture.ctx, &fixture.run)?;
+        git(&fixture.ctx.root, &["checkout", "-qb", "other"])?;
+        let before = checkout_snapshot(&fixture.ctx)?;
+        assert!(
+            land(&fixture.ctx)
+                .unwrap_err()
+                .to_string()
+                .contains("base is main")
+        );
+        assert_eq!(checkout_snapshot(&fixture.ctx)?, before);
+        let ctx = Ctx {
+            root: fixture.run.worktree.clone(),
+            dhome: fixture.ctx.dhome.clone(),
+            gitdir: fixture.ctx.gitdir.clone(),
+        };
+        assert!(
+            land(&ctx)
+                .unwrap_err()
+                .to_string()
+                .contains("main checkout")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn land_without_a_run_is_a_noop() -> Result<()> {
+        let fixture = Fixture::new()?;
+        fs::remove_file(home(&fixture.ctx).join("state.json"))?;
+        let before = checkout_snapshot(&fixture.ctx)?;
+        land(&fixture.ctx)?;
+        assert_eq!(checkout_snapshot(&fixture.ctx)?, before);
         Ok(())
     }
 
