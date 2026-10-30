@@ -52,6 +52,13 @@ Change no files except .task/REPORT.md. The report is the deliverable: findings 
 references, what you are unsure of, and what you did not check. Keep it under 80 lines.
 Code is the source of truth; if a doc disagrees with the code, say so.";
 
+/// A fresh lead gets only the repository handoff, not an earlier session's context.
+pub fn autopilot(wave: u32) -> String {
+    format!(
+        "You are the autopilot lead for wave {wave}. Follow the ## Mandate in PLAN.md and the delegate skill's Autopilot section. Never wait for the user: park anything needing them under ## Waiting for you. End this wave with the handoff in PLAN.md and exit."
+    )
+}
+
 /// Prompt for a single-phase run (no question phase, or a harness that can't resume).
 pub fn full(id: &str) -> String {
     let work_body = WORK.split_once('\n').map_or(WORK, |(_, rest)| rest);

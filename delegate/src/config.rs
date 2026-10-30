@@ -487,6 +487,13 @@ fn deserialize_step_up_after<'de, D: serde::Deserializer<'de>>(
     Ok(value)
 }
 
+/// Machine-local settings for the unattended lead driver.
+#[derive(Debug, Default, Deserialize)]
+pub struct AutopilotConfig {
+    pub quota_floor: Option<String>,
+    pub notify: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct WorkersConfig {
     pub planner_family: Option<String>,
@@ -504,6 +511,8 @@ pub struct WorkersConfig {
     pub accounts: BTreeMap<String, String>,
     #[serde(default)]
     pub quota: QuotaConfig,
+    #[serde(default)]
+    pub autopilot: AutopilotConfig,
 }
 
 impl WorkersConfig {

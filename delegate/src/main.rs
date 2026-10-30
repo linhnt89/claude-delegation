@@ -1,5 +1,6 @@
 //! Delegate task specs to worker models by role and tier. Task state never lives in the repo.
 
+mod autopilot;
 mod checkout;
 mod commands;
 mod config;
@@ -160,6 +161,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Run the plan's waves unattended in a separate checkout
+    Autopilot {
+        #[command(subcommand)]
+        cmd: autopilot::Cmd,
+    },
     /// Show every task's round, tier, checks and review
     List,
     /// Squash-merge once checks, project rules and review pass; delete the task state
@@ -273,6 +279,7 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
         Cmd::Hidden {
             cmd: HiddenCmd::Add { folder },
         } => vault::add(&ctx, &folder),
+        Cmd::Autopilot { cmd } => autopilot::dispatch(&ctx, cmd),
         Cmd::New { id, prune } => commands::new(&ctx, &id, prune),
         Cmd::Run {
             id,

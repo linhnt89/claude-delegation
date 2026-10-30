@@ -560,7 +560,9 @@ fn scope_overlap_warnings(ctx: &Ctx, id: &str, spec_text: &str) -> Vec<String> {
 }
 
 pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
+    let _lead = crate::autopilot::authorize(ctx)?;
     let mut t = Task::load(ctx, &a.id)?;
+    crate::autopilot::before_run(ctx, &t)?;
     status::ensure_idle(&t)?;
     let mut operation = None;
     // The parent already preflighted this detached run. Publish the child's own
@@ -1707,6 +1709,7 @@ pub(crate) fn merge_readiness(
 
 #[allow(clippy::too_many_lines)] // Keep the merge transaction and its rollback together.
 pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
+    let _lead = crate::autopilot::authorize(ctx)?;
     let t = Task::load(ctx, id)?;
     let operation = if t.dir.is_dir() {
         Some(Operation::acquire(&t, "merge")?)
@@ -1787,11 +1790,13 @@ pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
         );
     }
     println!("squash-merged {} into {base}: {title}", t.branch);
+    let gate = crate::autopilot::after_merge(ctx, id);
     remove(ctx, &t).map_err(|error| {
         anyhow::anyhow!(
             "merged, but cleaning up {id} failed: {error:#}; run: delegate discard {id}"
         )
-    })
+    })?;
+    gate
 }
 
 fn remove(ctx: &Ctx, t: &Task) -> Result<()> {
@@ -1811,6 +1816,7 @@ fn remove(ctx: &Ctx, t: &Task) -> Result<()> {
 }
 
 pub fn discard(ctx: &Ctx, id: &str) -> Result<()> {
+    let _lead = crate::autopilot::authorize(ctx)?;
     let t = Task::load(ctx, id)?;
     status::ensure_idle(&t)?;
     let _operation = if t.dir.is_dir() {
