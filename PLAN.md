@@ -48,6 +48,9 @@
   lead's product edits and hold its turn after a shell edit; workers are told apart by the
   runner's `DELEGATE_WORKER`; `init`/`upgrade` install it, `DELEGATE_GUARD=off` turns it off.
   S050–S054, P017 pass. Checks from t026, fix by Claude Opus (Copilot) and Sol, review by DeepSeek.
+- t064 (2026-10-30): checks for autopilot and warm worktrees (decisions 018–020, J10): S083–S094,
+  P022–P024, all failing until built; a stand-in headless lead in `evals/lib/autopilot_lead.sh`.
+  Checks by DeepSeek, three rounds (questions, then the plan-review additions).
 - t060–t063 (2026-10-29): decisions 016, 017. The lead works in waves: the delegate skill and
   templates teach the batch loop (one id-less `wait`, work while workers run, one merge ask per
   batch); `run` warns when `Scope In` overlaps a running task; parallel tasks share an
@@ -57,11 +60,10 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t064 | Checks for S083–S094 and P022–P024 (agreed 2026-10-30): stand-in headless `claude`, all fast; they fail until built | 0 | running | – | standard | each `evals/run <id>` gives a product verdict, not a check error | then hide P022, S088 (J10) and S094 (J3); t070, t071, t074 set `checks_by: t064` |
-| t070 | `delegate autopilot` start/stop/status: headless lead per wave, `autopilot` worktree and branch, lead lock, stop conditions, log, run report, `notify` | 1 | ready | t064 | deep | S084–S089, P023, P024 | decision 019; plan review 2026-10-30: per-run lead auth, mandate validated in the worktree, gate after every merge, round limit |
-| t071 | Skills and templates: prep pass and `## Mandate`, parking in "Waiting for you", per-wave handoff, session per phase, catch-up brief, respecting the lock | 1 | ready | t064 | standard | S091 | decisions 018, 019; mirror `templates/project/`, run `scripts/kit-history` |
-| t074 | Warm task worktrees: per-project shared build cache or copied ignored paths | 1 | ready | t064 | standard | S092–S094 | decision 020 |
-| t075 | `delegate autopilot land`: fast-forward or clean merge into the base branch, refuse on conflict changing nothing | 2 | ready | t070 | standard | S083, S090, P022 | split from t070 at plan review |
+| t070 | `delegate autopilot` start/stop/status: headless lead per wave, `autopilot` worktree and branch, lead lock, stop conditions, log, run report, `notify` | 1 | running | t064 | deep | S084–S087, S089, P023, P024 (hidden: S088, P022) | decision 019; plan review 2026-10-30: per-run lead auth, mandate validated in the worktree, gate after every merge, round limit |
+| t071 | Skills and templates: prep pass and `## Mandate`, parking in "Waiting for you", per-wave handoff, session per phase, catch-up brief, respecting the lock | 1 | running | t064 | standard | S091 | decisions 018, 019; mirror `templates/project/`, run `scripts/kit-history` |
+| t074 | Warm task worktrees: per-project shared build cache or copied ignored paths | 1 | running | t064 | standard | S092, S093 (hidden: S094) | decision 020 |
+| t075 | `delegate autopilot land`: fast-forward or clean merge into the base branch, refuse on conflict changing nothing | 2 | ready | t070 | standard | S083, S090 (hidden: P022) | split from t070 at plan review |
 | t072 | Live lead row in `watch` and the pane, read from the autopilot log | 2 | todo | t070 | standard | scenario to add with the user before its spec | decision 019 |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
