@@ -95,12 +95,15 @@
   lock"; with `DELEGATE_AUTOPILOT` and `DELEGATE_AUTOPILOT_WAVE` unset, 303 pass). Fix: t090.
 - Decided since: decision 025 (pinned contracts, small check tasks, implementers review their
   checks first, `delegate fix-check`, fixes reach running tasks, clean child environment).
-- Next: discuss autopilot's design (see Open questions), then rewrite the Mandate. Until then
-  no autopilot run; t086 and t087 can run interactively.
+- Decided since: decision 026 (autopilot is how the lead works on a mandate, present or away:
+  the lead starts it at "go", presence is what the user says, green waves land while present,
+  answers through `delegate autopilot answer`, a red gate is rerun, then the merge reverted).
+- Next: t088 and t093 with the user (scenarios for 025 and 026, one session can do both), then a
+  new Mandate. t086 and t087 can run interactively meanwhile.
 - `delegate list`: no open tasks.
 
 ## Mandate
-<!-- On hold until the autopilot discussion; t085 is done. -->
+<!-- On hold: rewrite after t088 and t093 (decisions 025, 026); t085 is done. -->
 - Goal: t085, t086, t087
 - Gate: `scripts/check`
 - Merge without asking when: checks, the task's and hidden scenarios, and required reviews pass.
@@ -125,11 +128,13 @@
 | t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 4 | todo | t089 | standard | its t088 scenarios, `scripts/check` | needed before the next autopilot run |
 | t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 4 | todo | t086, t089 | standard | its t088 scenarios, `scripts/check` | touches `commands.rs` after t086 |
 | t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 4 | todo | t087, t089 | fast | its t088 scenario, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t093 | Scenarios for decision 026, with the user: the lead starts autopilot at "go"; `autopilot away`/`here`; present: a parked question reaches the lead session through `delegate wait`, a green wave lands with a summary, a conflict lands nothing; `autopilot answer` unparks a task in the next wave; red gate: rerun, revert, fix task, stop if still red; complete report; kit text | – | todo | – | lead | `Status: agreed`, each with its pinned contract | `/evaluate feature`; the cut-off report via `/evaluate bug` |
+| t094 | Checks for t093's scenarios | 3 | todo | t093 | standard | each fails for the reason its `scenario.md` states | at most 5 scenarios per check task: split if more |
+| t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 5 | todo | t090, t094 | deep | its t093 scenarios, `scripts/check` | `autopilot.rs`, `wait.rs`; after t090 |
+| t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 5 | todo | t092, t094 | fast | its t093 scenario, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
-- Autopilot's `report.md` keeps only the first line of each "Waiting for you" item, and its
-  "Proposed decisions" section comes out empty; the full text is only in `PLAN.md`.
 - P018 (hidden) failed again under a full parallel `evals/run fast` (2026-10-31: "t101 belongs to
   <session>, created by None"), passing on rerun: flakiness under load, not tied to a change.
 - Accepted at t056's merge (review, medium): a shell edit by the lead from the main checkout
@@ -166,8 +171,4 @@
   hidden checks in the vault.
 
 ## Open questions
-- Autopilot's design (blocks the next Mandate): one autopilot posture whether the user is present
-  or away, which changes only where it merges and how it reports (agreed direction). Open: how
-  it starts without a separate command, how the lead hands over to the headless driver,
-  triage instead of stopping on a gate failure, the report.
-
+- None.
