@@ -48,3 +48,4 @@ Added for decisions 016, 017 (new feature: fails until built): J5 P021.
 Added for decisions 019, 020 (new feature: fails until built): J10 P022 S088 · J3 S094.
 Added for decisions 023, 024 (new feature: fails until built): J3 P025.
 Added for decision 026 (new feature: fails until built): J10 S116.
+Added for decision 025 (new feature: fails until built): J3 P026.
