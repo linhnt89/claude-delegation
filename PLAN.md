@@ -4,6 +4,9 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- t084 (2026-10-31): scenarios S096–S100, P025 agreed for decisions 023, 024 (check writers'
+  families from history, merge refuses an implementer's check edits, check fixes by the writers'
+  family with `fixes_checks:`, the kit's check review step). No checks yet.
 - t001–t007 (2026-10-25): the 12 scenarios failing at baseline now pass; see git history.
   Every spec's Acceptance gets the project gate `scripts/check`; at review, `evals/run` adds
   the hidden scenarios for the same jobs.
@@ -83,17 +86,16 @@
   Luna (t062). S079–S082 pass, P021 hidden.
 
 ## Handoff (2026-10-31)
-- Next: t084 with the user (`/evaluate feature` on decision 023), then t085; t086 and t087 together
-  once t085's checks are reviewed. No tasks open (`delegate list`).
-- Waits for the user: the open question on who fixes a broken check (blocks t086's spec).
+- Next: t085 (spec and run), review why each check fails, hide P025, then t086 and t087
+  together. No tasks open (`delegate list`).
+- Waits for the user: nothing.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t084 | Scenarios for decision 023: family from a check's whole history, merge refuses an implementer's check edit, check-task REPORT lists today's failures | 1 | todo | – | lead | agreed scenarios (`/evaluate feature`) | lead with the user, not delegated |
-| t085 | Checks for t084's scenarios | 1 | todo | t084 | standard | t084's scenarios run and fail for the stated reason | review the failure reasons before t086 starts |
-| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses an implementation task that changes its own Acceptance checks, warns on `evals/lib/` | 2 | todo | t085 | standard | t084's scenarios, `scripts/check` | `checks_by: t085`; check-fix part waits on the open question |
-| t087 | Kit text for decision 023: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step and "report check bugs, don't fix them"; REPORT template lists a check task's failures | 2 | todo | t084 | fast | t084's kit scenario, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t085 | Checks for S096–S100, P025 (decisions 023, 024) | 1 | todo | – | standard | each runs and fails for the reason its `scenario.md` states | review the failure reasons before t086, t087 start; then hide P025 |
+| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 2 | todo | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
+| t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 2 | todo | t085 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
@@ -133,6 +135,5 @@
   hidden checks in the vault.
 
 ## Open questions
-- Who fixes a broken check (decision 023): any family but the implementers it judges, or only
-  the family that wrote it? Blocks the check-fix part of t086's spec.
+- None.
 
