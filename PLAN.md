@@ -4,6 +4,12 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- t088 (2026-10-31): scenarios S101–S108, P026 agreed for decision 025, each with a pinned
+  contract: `fix-check` (S101, S102), "the check is right" closes the fix task at merge and sends
+  the reason to the implementer (S103), fixes reach a running task (S104), question-phase check
+  flags stop the run (S105), allowlisted child environment: basics, toolchain homes,
+  `DELEGATE_HOME`, `.delegate.toml` extras (S106, P026), autopilot fixes checks (S107), kit text
+  (S108). Unit tests ignoring ambient `DELEGATE_*` stays in t090's Acceptance. No checks yet.
 - t085 (2026-10-31): checks for S096–S100 and P025 (decisions 023, 024), by DeepSeek. Each fails
   on the current product for the reason its `scenario.md` states (checked in the task worktree;
   the product matches main). P025 is hidden (J3). Merged as 386a041; the gate after it failed
@@ -98,7 +104,7 @@
 - Decided since: decision 026 (autopilot is how the lead works on a mandate, present or away:
   the lead starts it at "go", presence is what the user says, green waves land while present,
   answers through `delegate autopilot answer`, a red gate is rerun, then the merge reverted).
-- Next: t088 and t093 with the user (scenarios for 025 and 026, one session can do both), then a
+- t088 done (S101–S108, P026 agreed). Next: t093 with the user (scenarios for 026), then a
   new Mandate. t086 and t087 can run interactively meanwhile.
 - `delegate list`: no open tasks.
 
@@ -123,11 +129,11 @@
 |----|------|------|--------|------------|------|------------|-------|
 | t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 2 | todo | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
 | t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 2 | todo | t085 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
-| t088 | Scenarios for decision 025, with the user: `fix-check` builds the spec and starts the writer family, "the check is right" outcome, fixes reach a running task's next round, question-phase check flags, clean child environment (gate under autopilot passes), kit text | – | todo | – | lead | `Status: agreed`, each with its pinned contract | `/evaluate feature`; the env leak via `/evaluate bug` |
-| t089 | Checks for t088's scenarios | 3 | todo | t088 | standard | each fails for the reason its `scenario.md` states | at most 5 scenarios per check task: split if more |
-| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 4 | todo | t089 | standard | its t088 scenarios, `scripts/check` | needed before the next autopilot run |
-| t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 4 | todo | t086, t089 | standard | its t088 scenarios, `scripts/check` | touches `commands.rs` after t086 |
-| t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 4 | todo | t087, t089 | fast | its t088 scenario, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t089 | Checks for S101–S105 (decision 025: `fix-check`, check is right, fixes reach running tasks, question-phase flags) | 3 | todo | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
+| t097 | Checks for S106, P026, S107, S108 (decision 025: clean child environment, autopilot fixes checks, kit text) | 3 | todo | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
+| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 4 | todo | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
+| t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 4 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
+| t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 4 | todo | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t093 | Scenarios for decision 026, with the user: the lead starts autopilot at "go"; `autopilot away`/`here`; present: a parked question reaches the lead session through `delegate wait`, a green wave lands with a summary, a conflict lands nothing; `autopilot answer` unparks a task in the next wave; red gate: rerun, revert, fix task, stop if still red; complete report; kit text | – | todo | – | lead | `Status: agreed`, each with its pinned contract | `/evaluate feature`; the cut-off report via `/evaluate bug` |
 | t094 | Checks for t093's scenarios | 3 | todo | t093 | standard | each fails for the reason its `scenario.md` states | at most 5 scenarios per check task: split if more |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 5 | todo | t090, t094 | deep | its t093 scenarios, `scripts/check` | `autopilot.rs`, `wait.rs`; after t090 |
