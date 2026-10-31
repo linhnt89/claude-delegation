@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# S106: a gate, an Acceptance command and a scenario check don't inherit the caller's stray
+# environment (DELEGATE_AUTOPILOT, DELEGATE_AUTOPILOT_WAVE, UNLISTED_SECRET), and still get the
+# allowlisted variables (PATH, HOME, LANG, toolchain homes, EXTRA_ALLOWED from
+# .delegate.toml's [env] allow). Decision 025.
+#
+# Observes: the `env` each of the three commands writes to a file, under
+#   `delegate run`, `delegate check`, and (the gate) `delegate merge` run by an autopilot lead.
+# The Acceptance command and the scenario check write into the task's git admin folder (the
+# only place the sandbox lets them write that `delegate check` keeps); the gate writes outside.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+# The run may itself be inside an autopilot run; nothing of that reaches the commands under test.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE _DELEGATE_AUTOPILOT_GROUP _DELEGATE_BACKGROUND_RUN DELEGATE_WORKER
+
+STRAY="DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE UNLISTED_SECRET"
+KEPT="PATH HOME LANG CARGO_HOME RUSTUP_HOME MISE_DATA_DIR EXTRA_ALLOWED"
+
+# What the caller's environment looks like, set only around a command (so a check helper that
+# calls `delegate` for its own reasons doesn't carry it).
+caller_env() {
+  # DELEGATE_AUTOPILOT / _WAVE are not set here: `delegate run`/`check` refuse a caller that
+  # claims an autopilot run that doesn't exist (that lock is not this scenario's subject). They
+  # reach the children the way they do in life: the driver gives them to its lead, which runs
+  # `delegate run` and `delegate merge` (part b).
+  export UNLISTED_SECRET="s3cret-$$"
+  export EXTRA_ALLOWED="extra-$$" LANG="C.UTF-8"
+  export CARGO_HOME="$EVALS_WORK/cargo-home" RUSTUP_HOME="$EVALS_WORK/rustup-home"
+  export MISE_DATA_DIR="$EVALS_WORK/mise-data"
+}
+no_caller_env() { unset $STRAY EXTRA_ALLOWED; }
+
+# admin_of <task>: the git admin folder of the task's worktree.
+admin_of() {
+  local w
+  w="$(git -C "$PROJ" worktree list --porcelain |
+    awk -v b="branch refs/heads/task/$1" '/^worktree /{p=substr($0,10)} $0==b{print p}' | head -1)"
+  [ -n "$w" ] && git -C "$w" rev-parse --absolute-git-dir
+}
+
+# verdict <file> <what>: fail unless the file shows no stray variable and every kept one.
+verdict() {
+  local f="$1" what="$2" v want
+  [ -s "$f" ] || fail "$what wrote no environment ($f): it did not run, or could not write there"
+  for v in $STRAY; do
+    if grep -q "^$v=" "$f"; then
+      fail "$what sees $v=$(sed -n "s/^$v=//p" "$f" | head -1): the child environment is not allowlisted"
+    fi
+  done
+  for v in $KEPT; do
+    want="${!v-}"
+    [ -n "$want" ] || continue
+    grep -qxF "$v=$want" "$f" || fail "$what lost $v (want $v=$want, got '$(sed -n "s/^$v=//p" "$f" | head -1)')"
+  done
+}
+
+# --- the project: two tasks whose Acceptance and scenario check record their environment -------
+setup() {
+  ap_setup
+  printf '\n[env]\nallow = ["EXTRA_ALLOWED"]\n' >>"$PROJ/.delegate.toml"
+  mkdir -p "$PROJ/evals/scenarios/S901-records-env"
+  printf '# S901 records env\n- Job: J1\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' \
+    >"$PROJ/evals/scenarios/S901-records-env/scenario.md"
+  cat >"$PROJ/evals/scenarios/S901-records-env/check" <<'C'
+#!/usr/bin/env bash
+env | sort >"$(git -C "$EVALS_ROOT" rev-parse --absolute-git-dir)/scenario.env"
+echo "S901 recorded"
+C
+  chmod +x "$PROJ/evals/scenarios/S901-records-env/check"
+  (cd "$PROJ" && git add -A && git commit -qm "Scenario that records its environment") ||
+    { echo "CHECK ERROR: could not commit the scratch scenario"; exit 3; }
+  local id
+  for id in "$@"; do
+    write_spec "$id" "Do $id" "Make $id exist." \
+      'env | sort > "$(git rev-parse --absolute-git-dir)/accept.env"' \
+      "evals/run S901"
+  done
+}
+
+# (a) `delegate run` and `delegate check` (the gate is covered in (b)).
+setup t001
+caller_env
+d run t001
+[ "$RC" -eq 0 ] || fail "delegate run t001 failed with the caller's stray variables set: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"
+admin="$(admin_of t001)"
+[ -n "$admin" ] || { echo "CHECK ERROR: no worktree for t001 after delegate run"; exit 3; }
+verdict "$admin/accept.env" "an Acceptance command under delegate run"
+verdict "$admin/scenario.env" "a scenario check under delegate run"
+rm -f "$admin/accept.env" "$admin/scenario.env"
+d check t001
+[ "$RC" -eq 0 ] || fail "delegate check t001 failed with the caller's stray variables set: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"
+verdict "$admin/accept.env" "an Acceptance command under delegate check"
+verdict "$admin/scenario.env" "a scenario check under delegate check"
+no_caller_env
+
+# (b) the gate, and the commands again, under an autopilot lead's `delegate run` and `delegate merge`.
+rm -rf "$PROJ" "$DHOME" "$EVALS_WORK/flags" "$HOME/.cache/stub/calls"
+setup t001 t002
+# The gate runs after each of the lead's merges (in the lead's environment) and once more after
+# the wave (in the driver's): one file per run of it, named by the shell's pid.
+mkdir -p "$EVALS_WORK/gate"
+ap_setup_lead 1 "t001 t002"
+# t001 is run and merged (the gate runs); t002 is only run, so its worktree is left to read.
+cat >>"$AP_WORK/lead.sh" <<'W'
+wave() {
+  lead_run t001
+  lead_merge t001
+  lead_is_merged t001 && lead_run t002
+  return 0
+}
+W
+ap_write_plan "env | sort > $EVALS_WORK/gate/env.\$\$" t001 t002
+caller_env
+ap_start
+ap_wait_stopped 90 || ap_status_fail "did not stop"
+grep -q 'lead merge t001 (exit 0)' "$AP_WORK/lead.log" 2>/dev/null ||
+  fail "the lead's delegate merge t001 did not succeed: $(grep -A3 'lead merge t001' "$AP_WORK/lead.log" 2>/dev/null | tr '\n' ' ')"
+gates=("$EVALS_WORK"/gate/env.*)
+[ "${#gates[@]}" -ge 2 ] ||
+  fail "the mandate's gate ran ${#gates[@]} time(s), want once after delegate merge t001 and once after the wave"
+for gate in "${gates[@]}"; do
+  verdict "$gate" "the mandate's gate (after delegate merge, or after the wave)"
+done
+admin="$(admin_of t002)"
+[ -n "$admin" ] || { echo "CHECK ERROR: no worktree for t002 after the lead ran it"; exit 3; }
+verdict "$admin/accept.env" "an Acceptance command under an autopilot lead's delegate run"
+verdict "$admin/scenario.env" "a scenario check under an autopilot lead's delegate run"
+no_caller_env
+
+pass "the gate, the Acceptance command and the scenario check saw none of DELEGATE_AUTOPILOT, DELEGATE_AUTOPILOT_WAVE and UNLISTED_SECRET, and kept PATH, HOME, LANG, the toolchain homes and EXTRA_ALLOWED"

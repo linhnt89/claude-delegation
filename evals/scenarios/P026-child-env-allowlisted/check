@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# P026: no variable outside the allowlist reaches the gate, an Acceptance command or a scenario
+# check; every allowlisted variable that was set reaches them unchanged. Decision 025.
+#
+# Observes: the `env` each of the three commands writes to a file. The Acceptance command and the
+# scenario check run under `delegate check` and write into the task's git admin folder (the only
+# place the sandbox lets them write that survives); the gate runs under an autopilot lead's
+# `delegate merge` and writes outside. A seeded loop generates the names: P026_SEED=<n> replays one.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+# The run may itself be inside an autopilot run; nothing of that reaches the commands under test.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE _DELEGATE_AUTOPILOT_GROUP _DELEGATE_BACKGROUND_RUN DELEGATE_WORKER
+
+SEED="${P026_SEED:-$((RANDOM * 32768 + RANDOM))}"
+echo "-- seed $SEED (replay with P026_SEED=$SEED)"
+KEPT="PATH HOME LANG CARGO_HOME RUSTUP_HOME MISE_DATA_DIR EXTRA_ALLOWED"
+
+# Names are random letters in different shapes: plain, DELEGATE_*, and secret-looking.
+RANDOM=$SEED
+rletters() { local n="$1" s="" i; for ((i = 0; i < n; i++)); do s+="$(printf "\\x$(printf %x $((65 + RANDOM % 26)))")"; done; printf '%s' "$s"; }
+NAMES=()
+for ((i = 0; i < 30; i++)); do
+  case $((i % 5)) in
+    0) n="$(rletters $((3 + RANDOM % 8)))" ;;
+    1) n="DELEGATE_$(rletters $((2 + RANDOM % 8)))" ;;
+    2) n="$(rletters $((2 + RANDOM % 6)))_TOKEN" ;;
+    3) n="SECRET_$(rletters $((2 + RANDOM % 6)))_$((RANDOM % 100))" ;;
+    4) n="$(rletters $((2 + RANDOM % 5)))_API_KEY" ;;
+  esac
+  case " ${NAMES[*]} $KEPT " in *" $n "*) continue ;; esac
+  NAMES+=("$n")
+done
+value_of() { printf 'v-%s-%s' "$SEED" "$1"; }
+
+stray_env() {
+  local n
+  for n in "${NAMES[@]}"; do export "$n=$(value_of "$n")"; done
+  export EXTRA_ALLOWED="extra-$SEED" LANG="C.UTF-8"
+  export CARGO_HOME="$EVALS_WORK/cargo-home" RUSTUP_HOME="$EVALS_WORK/rustup-home"
+  export MISE_DATA_DIR="$EVALS_WORK/mise-data"
+}
+no_stray_env() { local n; for n in "${NAMES[@]}"; do unset "$n"; done; }
+
+admin_of() { # task: the git admin folder of the task's worktree
+  local w
+  w="$(git -C "$PROJ" worktree list --porcelain |
+    awk -v b="branch refs/heads/task/$1" '/^worktree /{p=substr($0,10)} $0==b{print p}' | head -1)"
+  [ -n "$w" ] && git -C "$w" rev-parse --absolute-git-dir
+}
+
+# verdict <file> <what>: fail on the smallest leaked name, or on an allowlisted variable lost.
+verdict() {
+  local f="$1" what="$2" n v want leaked=""
+  [ -s "$f" ] || fail "$what wrote no environment ($f): it did not run, or could not write there"
+  for n in "${NAMES[@]}"; do
+    grep -q "^$n=" "$f" && leaked+="${#n} $n"$'\n'
+  done
+  if [ -n "$leaked" ]; then
+    n="$(printf '%s' "$leaked" | sort -k1,1n -k2,2 | head -1 | cut -d' ' -f2)"
+    fail "seed $SEED: $what sees $n=$(sed -n "s/^$n=//p" "$f" | head -1); $(printf '%s' "$leaked" | wc -l) of ${#NAMES[@]} stray names leaked"
+  fi
+  for v in $KEPT; do
+    want="${!v-}"
+    [ -n "$want" ] || continue
+    grep -qxF "$v=$want" "$f" || fail "seed $SEED: $what lost $v (want $v=$want, got '$(sed -n "s/^$v=//p" "$f" | head -1)')"
+  done
+}
+
+ap_setup
+printf '\n[env]\nallow = ["EXTRA_ALLOWED"]\n' >>"$PROJ/.delegate.toml"
+mkdir -p "$PROJ/evals/scenarios/S901-records-env"
+printf '# S901 records env\n- Job: J1\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' \
+  >"$PROJ/evals/scenarios/S901-records-env/scenario.md"
+cat >"$PROJ/evals/scenarios/S901-records-env/check" <<'C'
+#!/usr/bin/env bash
+env | sort >"$(git -C "$EVALS_ROOT" rev-parse --absolute-git-dir)/scenario.env"
+echo "S901 recorded"
+C
+chmod +x "$PROJ/evals/scenarios/S901-records-env/check"
+(cd "$PROJ" && git add -A && git commit -qm "Scenario that records its environment") ||
+  { echo "CHECK ERROR: could not commit the scratch scenario"; exit 3; }
+for id in t001 t002; do
+  write_spec "$id" "Do $id" "Make $id exist." \
+    'env | sort > "$(git rev-parse --absolute-git-dir)/accept.env"' \
+    "evals/run S901"
+done
+
+# (a) the Acceptance command and the scenario check under `delegate check`.
+d run t001
+[ "$RC" -eq 0 ] || { echo "CHECK ERROR: setup: delegate run t001 failed: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"; exit 3; }
+admin="$(admin_of t001)"
+[ -n "$admin" ] || { echo "CHECK ERROR: no worktree for t001 after delegate run"; exit 3; }
+rm -f "$admin/accept.env" "$admin/scenario.env"
+stray_env
+d check t001
+no_stray_env
+[ "$RC" -eq 0 ] || fail "seed $SEED: delegate check t001 failed with stray variables set: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"
+verdict "$admin/accept.env" "an Acceptance command under delegate check"
+verdict "$admin/scenario.env" "a scenario check under delegate check"
+d discard t001   # autopilot starts only with no open tasks
+[ "$RC" -eq 0 ] || { echo "CHECK ERROR: setup: delegate discard t001 failed: $OUT"; exit 3; }
+
+# (b) the gate, under an autopilot lead's `delegate merge`. It runs after each merge (in the
+# lead's environment) and once more after the wave (in the driver's): one file per run.
+mkdir -p "$EVALS_WORK/gate"
+ap_setup_lead 1 "t002"
+ap_write_plan "env | sort > $EVALS_WORK/gate/env.\$\$" t002
+stray_env
+ap_start
+ap_wait_stopped 90 || ap_status_fail "did not stop"
+no_stray_env
+grep -q 'lead merge t002 (exit 0)' "$AP_WORK/lead.log" 2>/dev/null ||
+  fail "the lead's delegate merge t002 did not succeed: $(grep -A3 'lead merge t002' "$AP_WORK/lead.log" 2>/dev/null | tr '\n' ' ')"
+gates=("$EVALS_WORK"/gate/env.*)
+[ "${#gates[@]}" -ge 2 ] ||
+  fail "the mandate's gate ran ${#gates[@]} time(s), want once after delegate merge t002 and once after the wave"
+stray_env
+for gate in "${gates[@]}"; do
+  verdict "$gate" "the mandate's gate (after delegate merge, or after the wave)"
+done
+
+pass "seed $SEED: none of ${#NAMES[@]} generated names reached the gate, the Acceptance command or the scenario check, and ${KEPT// /, } did"
