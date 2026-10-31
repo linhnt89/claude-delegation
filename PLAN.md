@@ -82,9 +82,18 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
+## Handoff (2026-10-31)
+- Next: t084 with the user (`/evaluate feature` on decision 023), then t085; t086 and t087 together
+  once t085's checks are reviewed. No tasks open (`delegate list`).
+- Waits for the user: the open question on who fixes a broken check (blocks t086's spec).
+
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
+| t084 | Scenarios for decision 023: family from a check's whole history, merge refuses an implementer's check edit, check-task REPORT lists today's failures | 1 | todo | – | lead | agreed scenarios (`/evaluate feature`) | lead with the user, not delegated |
+| t085 | Checks for t084's scenarios | 1 | todo | t084 | standard | t084's scenarios run and fail for the stated reason | review the failure reasons before t086 starts |
+| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses an implementation task that changes its own Acceptance checks, warns on `evals/lib/` | 2 | todo | t085 | standard | t084's scenarios, `scripts/check` | `checks_by: t085`; check-fix part waits on the open question |
+| t087 | Kit text for decision 023: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step and "report check bugs, don't fix them"; REPORT template lists a check task's failures | 2 | todo | t084 | fast | t084's kit scenario, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
@@ -120,7 +129,10 @@
 - `delegate list` says "vault: N commit(s) not pushed" when the vault has no remote at all.
 - A card beside the desktop app's Environment/Context cards isn't possible: the mod API
   (`claude-code.d.ts`, Claude Code 2.1.308) has no side-card component. Revisit when it does.
+- Unverified: the guard lets through paths outside the repo, so the lead may be able to edit
+  hidden checks in the vault.
 
 ## Open questions
-- None.
+- Who fixes a broken check (decision 023): any family but the implementers it judges, or only
+  the family that wrote it? Blocks the check-fix part of t086's spec.
 
