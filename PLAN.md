@@ -105,16 +105,16 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
-## Handoff (2026-11-01, end of wave 1)
-- Merged: t089, t094, t097, t098 (their checks; S101–S118 minus S096–S100 are now written).
-- Parked: t086 (S097's check bug), t087 (S100's check bug). Their branches stay open; `delegate
-  list` shows t087. Both wait on the same user answer (see Waiting for you).
-- Not run: t090 and t092 (wave 2). t090 is unblocked (its dependency t097 is merged). t092
-  waits on t087, so it stays until t087 merges.
-- Gate: passed after each merge in this wave. Gate command is in the Mandate.
+## Handoff (2026-11-01, end of wave 2)
+- Wave 2 ran nothing: no task was ready. t090 waits on the `DELEGATE_AUTOPILOT` question under
+  Waiting for you (its spec can't be written before that). t092 waits on t087, which is parked.
+- Merged in this run: none. Gate not run (no merges).
+- Parked: t086 (S097's check bug) and t087 (S100's check bug). Both wait on the user; t087's
+  branch stays open and `delegate list` shows it. t086 was never run in this run, so it has no
+  branch of its own to review.
 - Decision 027 is `proposed`; the user confirms it on return.
-- On return: answer "Waiting for you", then `delegate autopilot land` if the run is still
-  waiting, and rerun `evals/run fast`.
+- On return: answer "Waiting for you" (t097's question first, it unblocks t090), then start
+  wave 2 again with `delegate autopilot start`, and rerun `evals/run fast`.
 
 ## Waiting for you
 - t086: `evals/scenarios/S097-hidden-check-writers-count/check` (lines 106–107) fails when
@@ -141,6 +141,11 @@
   `DELEGATE_AUTOPILOT` in the caller, which the product refuses today ("autopilot owns the lead
   lock"). The scenario only says the child must not see it. Should a stray `DELEGATE_AUTOPILOT`
   be refused or ignored? t090 needs the answer before its spec is written.
+  Lead's recommendation: refuse, as today. `authorize` (commands.rs `run`/`merge`/`discard`)
+  stops an orphaned lead's token from driving those commands. `check` never calls it, and the
+  allowlist already keeps the variable out of gates and checks. That means S106's contract line
+  for `delegate run` and `merge` would expect the refusal instead of a verdict. Changing S106
+  needs the user's OK.
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01 before they went away. -->
