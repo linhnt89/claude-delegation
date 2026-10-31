@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# S116: a gate that is still red after the last merge is reverted means the merge isn't the
+# cause: the run stops with gate_failed instead of reverting its way through. Decision 026.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/autopilot.sh"
+trap ap_cleanup EXIT
+ap_setup
+ap_specs t001 t002 t003
+ap_setup_lead 1 "t001 t002 t003"
+
+# The gate always fails; every run is logged with the autopilot checkout's last commit.
+{ printf 'PROJ=%q\nAP=%q\n' "$PROJ" "$AP_WORK"
+  cat <<'G'
+wt=$(git -C "$PROJ" worktree list --porcelain | awk '/^worktree /{p=$2} /^branch refs\/heads\/autopilot$/{print p}')
+echo "$(git -C "$wt" log -1 --format=%s 2>/dev/null)" >>"$AP/gate.log"
+echo "GATE-REASON: the toolchain is missing"
+exit 1
+G
+} >"$AP_WORK/gate.sh"
+ap_write_plan "sh $AP_WORK/gate.sh" t001 t002 t003
+
+ap_start
+ap_wait_stopped 90 || ap_status_fail "did not stop"
+[ "$(ap_get stop_reason)" = gate_failed ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want gate_failed"
+cd "$PROJ" || { echo "CHECK ERROR: no project"; exit 3; }
+reverts="$(git log --format=%s autopilot | grep -c '^Revert "t001: ')"
+[ "$reverts" -eq 1 ] ||
+  fail "autopilot has $reverts 'Revert \"t001: …\"' commits, want 1: the last merge is reverted once to test whether it caused the red gate"
+runs="$(wc -l <"$AP_WORK/gate.log" | tr -d ' ')"
+[ "$runs" -eq 3 ] ||
+  fail "the gate ran $runs times, want 3 (the failure, one rerun, one run after the revert): $(tr '\n' ';' <"$AP_WORK/gate.log")"
+[ "$(tail -1 "$AP_WORK/gate.log" | cut -c1-8)" = 'Revert "' ] ||
+  fail "the last gate run was not on the reverted branch: $(tr '\n' ';' <"$AP_WORK/gate.log")"
+merged=" $(ap_merged | tr '\n' ' ') "
+case "$merged" in *" t002 "* | *" t003 "*) fail "work went on after the gate stayed red (merged:$merged)" ;; esac
+for call in "$HOME"/.cache/stub/calls/*/spec; do
+  [ -f "$call" ] || continue
+  grep -Eq '^# Task t00[23]:' "$call" && fail "a task started after the gate stayed red"
+done
+
+report="$(ap_wait_report 10)" || fail "delegate autopilot status: no run report"
+grep -qi 'revert' "$report" && grep -qiE '(still|stayed|remain)[^.]*(red|fail)' "$report" ||
+  fail "the run report does not say the gate stayed red after the revert: $(tr '\n' ' ' <"$report" | cut -c1-300)"
+grep -qiE "(not|isn.t|n.t) (the )?(merge|cause)|cause" "$report" ||
+  fail "the run report does not say the merge isn't the cause"
+grep -qF 'GATE-REASON: the toolchain is missing' "$report" || fail "the run report does not show the gate output"
+ap_wait_notify 10 || fail "autopilot did not notify that the gate failed"
+sleep 1
+n="$(grep -c '^MESSAGE=' "$EVALS_WORK/notify.log")"
+[ "$n" -eq 1 ] || fail "$n notifications were sent, want 1"
+pass "the gate was rerun, t001 reverted once, the gate still failed: the run stopped with gate_failed, the report says why and shows the output, one notification"

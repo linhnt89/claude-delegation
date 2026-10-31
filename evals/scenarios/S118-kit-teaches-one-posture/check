@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# S118: the delegate skill, in this repo's root kit, in the templates and as installed by
+# `delegate init`, teaches starting autopilot at "go", the present/away words, and how to work
+# while present. Decision 026.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+setup_project
+skill=".claude/skills/delegate/SKILL.md"
+
+missing="$(python3 -I - "$EVALS_ROOT/$skill" "$EVALS_ROOT/delegate/templates/project/$skill" "$PROJ/$skill" <<'PY'
+import re, sys
+from pathlib import Path
+
+def flat(text):
+    return re.sub(r"\s+", " ", text.replace("’", "'").lower())
+
+def near(text, first, second, window=300):
+    spans = [m.span() for m in re.finditer(first, text)]
+    return any(
+        re.search(second, text[max(0, a - window):b + window]) for a, b in spans
+    )
+
+def missing(text):
+    low = flat(text)
+    out = []
+    if not near(low, r"autopilot start", r"\bgo\b") or not near(low, r"autopilot start", r"mandate"):
+        out.append("does not say the lead runs `delegate autopilot start` itself once PLAN.md has a mandate and the user says go")
+    if not near(low, r"autopilot away", r"i'm off|i am off"):
+        out.append("does not map \"I'm off\" to `delegate autopilot away`")
+    if not near(low, r"autopilot here", r"\bback\b"):
+        out.append("does not map \"back\" to `delegate autopilot here`")
+    if not near(low, r"delegate wait", r"\bpresent\b"):
+        out.append("does not say to wait with `delegate wait` while the user is present")
+    if not near(low, r"delegate wait", r"parked|question"):
+        out.append("does not say to ask parked questions as they come")
+    if "autopilot answer" not in low:
+        out.append("does not pass answers with `delegate autopilot answer`")
+    if not (near(low, r"summar", r"\bwave\b", 200) and near(low, r"summar", r"after each|every wave|each (landed )?wave|landed", 200)):
+        out.append("does not say to post a short summary after each landed wave")
+    return out
+
+bad = []
+for label, path in zip(("root skill", "templates/project skill", "installed skill"), sys.argv[1:]):
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"CHECK ERROR: cannot read {path}: {e}")
+        sys.exit(3)
+    bad += [f"the {label} {m}" for m in missing(text)]
+print("; ".join(bad))
+sys.exit(1 if bad else 0)
+PY
+)"; rc=$?
+[ "$rc" -ne 3 ] || { echo "$missing"; exit 3; }
+[ "$rc" -eq 0 ] || fail "$missing"
+pass "the root, template and installed delegate skills teach autopilot at go, away/here, waiting while present, answers and wave summaries"
