@@ -101,11 +101,29 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
-## Handoff (2026-11-01)
-- t088 and t093 done: S101–S118, P026 agreed. The user went away; autopilot runs the Mandate
-  below (all of decisions 025, 026 except t025). On return: read the run report, then
-  `delegate autopilot land`, then install the new `delegate` and rerun `evals/run fast`.
-- `delegate list`: no open tasks before the run.
+## Handoff (2026-11-01, wave 1)
+- Wave 1 started: t087, t089, t094, t097, t098 running. Plan review (gpt-6.1-sol, 3 high) found
+  the S097 check bug below, so t086 is parked and wave 3 (t091) waits on it.
+- Decision 027 is `proposed` (fix tasks take their checks' families; `[env] allow` table). The
+  user confirms it on return.
+- Plan review also flagged t091 and t095 as too big for one diff; split them before their waves.
+- On return: read the run report, answer "Waiting for you", then `delegate autopilot land`.
+
+## Waiting for you
+- t086: `evals/scenarios/S097-hidden-check-writers-count/check` (lines 106–107) fails when
+  `seen-hidden.txt` is empty. A worker that can read nothing hidden writes an empty file, so a
+  correct runner fails the check. t086 is parked; its dependents (t091) wait. The fix is a
+  check fix by DeepSeek (t085's family), but `fix-check` doesn't exist until t091, and the lead
+  doesn't hand-edit checks (023, 025). Options: (a) the user approves a hand-written fix task
+  now, (b) wait for `fix-check` (t091 needs t086 first, so this stalls the chain), or (c) the
+  user fixes the check. Which?
+- t095: decision 026 supersedes two checks of decision 019's behaviour: S083 and S085 start
+  autopilot without `away` and expect `main` unchanged, and S086 expects an immediate stop on a
+  recoverable gate failure. Approve the changed contracts and the writer-family migration of
+  those checks before t095 (wave 4) starts.
+- S115 (decision 026): its Contract doesn't require that a reverted task stop counting as merged
+  for the goal and for dependents (`autopilot::merged()` counts task subjects in history).
+  Plan review found it. Add that to S115's agreed contract, or leave S115 as agreed?
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01 before they went away. -->
@@ -145,15 +163,15 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 1 | todo | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
-| t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 1 | todo | t085 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
-| t089 | Checks for S101–S105 (decision 025: `fix-check`, check is right, fixes reach running tasks, question-phase flags) | 1 | todo | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
-| t097 | Checks for S106, P026, S107, S108 (decision 025: clean child environment, autopilot fixes checks, kit text) | 1 | todo | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
+| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 1 | parked (Waiting for you) | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
+| t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 1 | running | t085 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t089 | Checks for S101–S105 (decision 025: `fix-check`, check is right, fixes reach running tasks, question-phase flags) | 1 | running | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
+| t097 | Checks for S106, P026, S107, S108 (decision 025: clean child environment, autopilot fixes checks, kit text) | 1 | running | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
 | t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 2 | todo | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
 | t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 3 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
 | t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | todo | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
-| t094 | Checks for S109–S113 (decision 026: presence, `wait`, landing while present, landing conflict, answers) | 1 | todo | t093 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
-| t098 | Checks for S114–S118 (decision 026: gate rerun, revert and fix task, still red stops, complete report, kit text) | 1 | todo | t093 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
+| t094 | Checks for S109–S113 (decision 026: presence, `wait`, landing while present, landing conflict, answers) | 1 | running | t093 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
+| t098 | Checks for S114–S118 (decision 026: gate rerun, revert and fix task, still red stops, complete report, kit text) | 1 | running | t093 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
 | t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 4 | todo | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
