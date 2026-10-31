@@ -117,6 +117,12 @@
   doesn't hand-edit checks (023, 025). Options: (a) the user approves a hand-written fix task
   now, (b) wait for `fix-check` (t091 needs t086 first, so this stalls the chain), or (c) the
   user fixes the check. Which?
+- t087: round 1 finished with `checks FAIL` on S100, and the failure is a check bug. S100 looks
+  for `$DHOME/t001/REPORT.template.md` right after `delegate new`, but the runner writes
+  `REPORT.template.md` into the task worktree's `.task/` at run time (`commands.rs:748`); the
+  kit text itself is done (t087's REPORT.md). The branch `task/t087` stays open. Same options
+  as t086: a hand-written fix task by DeepSeek (t085's family), wait for `fix-check` (t091), or
+  the user fixes S100. Which?
 - t095: decision 026 supersedes two checks of decision 019's behaviour: S083 and S085 start
   autopilot without `away` and expect `main` unchanged, and S086 expects an immediate stop on a
   recoverable gate failure. Approve the changed contracts and the writer-family migration of
@@ -164,7 +170,7 @@
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 1 | parked (Waiting for you) | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
-| t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 1 | running | t085 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 1 | parked (Waiting for you: S100 check bug) | t085 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t089 | Checks for S101–S105 (decision 025: `fix-check`, check is right, fixes reach running tasks, question-phase flags) | 1 | running | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
 | t097 | Checks for S106, P026, S107, S108 (decision 025: clean child environment, autopilot fixes checks, kit text) | 1 | running | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
 | t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 2 | todo | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
