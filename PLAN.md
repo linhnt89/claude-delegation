@@ -90,23 +90,17 @@
   Luna (t062). S079–S082 pass, P021 hidden.
 
 ## Handoff (2026-10-31)
-- Wave 1 ran t085 only. It merged (386a041), P025 was hidden (0822826, jobs.md updated), and the
-  gate then failed, so the run stopped with t086 and t087 not started.
-- Next: once the gate passes again (see Waiting for you), run wave 2: t086 and t087 together.
-  On return: read the run report, then `delegate autopilot land`.
+- Wave 1 ran t085 only: merged, P025 hidden, landed on main. The gate after it failed because
+  the autopilot token leaks into `cargo test` (16 unit tests fail with "autopilot owns the lead
+  lock"; with `DELEGATE_AUTOPILOT` and `DELEGATE_AUTOPILOT_WAVE` unset, 303 pass). Fix: t090.
+- Decided since: decision 025 (pinned contracts, small check tasks, implementers review their
+  checks first, `delegate fix-check`, fixes reach running tasks, clean child environment).
+- Next: discuss autopilot's design (see Open questions), then rewrite the Mandate. Until then
+  no autopilot run; t086 and t087 can run interactively.
 - `delegate list`: no open tasks.
 
-## Waiting for you
-- Gate: `scripts/check` fails whenever `DELEGATE_AUTOPILOT` is set in its environment. The
-  lead's token is inherited by `cargo test`, so 16 unit tests in `delegate/src/commands.rs` fail
-  with "autopilot owns the lead lock". The gate after every autopilot merge
-  (`delegate/src/autopilot.rs`, `after_merge`) runs with the token too, so every autopilot run
-  stops after its first merge. With `DELEGATE_AUTOPILOT` and `DELEGATE_AUTOPILOT_WAVE` unset,
-  `scripts/check` passes 303 tests. Proposed fix: `after_merge` and the unit-test harness drop
-  both variables. This is a product change outside the mandate, so it needs your go-ahead.
-  Until then, t086 and t087 don't run.
-
 ## Mandate
+<!-- On hold until the autopilot discussion; t085 is done. -->
 - Goal: t085, t086, t087
 - Gate: `scripts/check`
 - Merge without asking when: checks, the task's and hidden scenarios, and required reviews pass.
@@ -126,9 +120,16 @@
 |----|------|------|--------|------------|------|------------|-------|
 | t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 2 | todo | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
 | t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 2 | todo | t085 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t088 | Scenarios for decision 025, with the user: `fix-check` builds the spec and starts the writer family, "the check is right" outcome, fixes reach a running task's next round, question-phase check flags, clean child environment (gate under autopilot passes), kit text | – | todo | – | lead | `Status: agreed`, each with its pinned contract | `/evaluate feature`; the env leak via `/evaluate bug` |
+| t089 | Checks for t088's scenarios | 3 | todo | t088 | standard | each fails for the reason its `scenario.md` states | at most 5 scenarios per check task: split if more |
+| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 4 | todo | t089 | standard | its t088 scenarios, `scripts/check` | needed before the next autopilot run |
+| t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 4 | todo | t086, t089 | standard | its t088 scenarios, `scripts/check` | touches `commands.rs` after t086 |
+| t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 4 | todo | t087, t089 | fast | its t088 scenario, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
+- Autopilot's `report.md` keeps only the first line of each "Waiting for you" item, and its
+  "Proposed decisions" section comes out empty; the full text is only in `PLAN.md`.
 - P018 (hidden) failed again under a full parallel `evals/run fast` (2026-10-31: "t101 belongs to
   <session>, created by None"), passing on rerun: flakiness under load, not tied to a change.
 - Accepted at t056's merge (review, medium): a shell edit by the lead from the main checkout
@@ -165,5 +166,8 @@
   hidden checks in the vault.
 
 ## Open questions
-- None.
+- Autopilot's design (blocks the next Mandate): one autopilot posture whether the user is present
+  or away, which changes only where it merges and how it reports (agreed direction). Open: how
+  it starts without a separate command, how the lead hands over to the headless driver,
+  triage instead of stopping on a gate failure, the report.
 
