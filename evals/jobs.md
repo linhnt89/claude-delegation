@@ -46,3 +46,4 @@ Added for session-scoped views (new feature: fails until built): J8 P018.
 Added for the lead guard (new feature: fails until built): J9 P017.
 Added for decisions 016, 017 (new feature: fails until built): J5 P021.
 Added for decisions 019, 020 (new feature: fails until built): J10 P022 S088 · J3 S094.
+Added for decisions 023, 024 (new feature: fails until built): J3 P025.
