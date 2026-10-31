@@ -4,6 +4,10 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- t085 (2026-10-31): checks for S096–S100 and P025 (decisions 023, 024), by DeepSeek. Each fails
+  on the current product for the reason its `scenario.md` states (checked in the task worktree;
+  the product matches main). P025 is hidden (J3). Merged as 386a041; the gate after it failed
+  (see Waiting for you).
 - t084 (2026-10-31): scenarios S096–S100, P025 agreed for decisions 023, 024 (check writers'
   families from history, merge refuses an implementer's check edits, check fixes by the writers'
   family with `fixes_checks:`, the kit's check review step). No checks yet.
@@ -86,9 +90,21 @@
   Luna (t062). S079–S082 pass, P021 hidden.
 
 ## Handoff (2026-10-31)
-- Next: autopilot runs t085, then t086 and t087 together (see Mandate). On return: read the
-  run report, then `delegate autopilot land`.
-- Waits for the user: nothing until the run stops.
+- Wave 1 ran t085 only. It merged (386a041), P025 was hidden (0822826, jobs.md updated), and the
+  gate then failed, so the run stopped with t086 and t087 not started.
+- Next: once the gate passes again (see Waiting for you), run wave 2: t086 and t087 together.
+  On return: read the run report, then `delegate autopilot land`.
+- `delegate list`: no open tasks.
+
+## Waiting for you
+- Gate: `scripts/check` fails whenever `DELEGATE_AUTOPILOT` is set in its environment. The
+  lead's token is inherited by `cargo test`, so 16 unit tests in `delegate/src/commands.rs` fail
+  with "autopilot owns the lead lock". The gate after every autopilot merge
+  (`delegate/src/autopilot.rs`, `after_merge`) runs with the token too, so every autopilot run
+  stops after its first merge. With `DELEGATE_AUTOPILOT` and `DELEGATE_AUTOPILOT_WAVE` unset,
+  `scripts/check` passes 303 tests. Proposed fix: `after_merge` and the unit-test harness drop
+  both variables. This is a product change outside the mandate, so it needs your go-ahead.
+  Until then, t086 and t087 don't run.
 
 ## Mandate
 - Goal: t085, t086, t087
@@ -108,7 +124,6 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t085 | Checks for S096–S100, P025 (decisions 023, 024) | 1 | todo | – | standard | each runs and fails for the reason its `scenario.md` states | review the failure reasons before t086, t087 start; then hide P025 |
 | t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 2 | todo | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
 | t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 2 | todo | t085 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
