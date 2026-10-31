@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# S112: the user, present, commits to main a change that conflicts with wave 1's merge. The
+# landing changes nothing, the summary, status and report name the conflicting file, and the
+# run goes on to wave 2. Decision 026.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+trap ap_cleanup EXIT
+ap_setup
+printf 'base\n' >"$PROJ/conflict.txt"
+(cd "$PROJ" && git add conflict.txt && git commit -qm "Add conflict file")
+
+# t001 rewrites conflict.txt, as in S090; every other task writes its own file.
+stub_worker gpt-good <<'B'
+task_id() { sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md 2>/dev/null; }
+ask() { printf 'READY\n' >.task/QUESTIONS.md; }
+work() {
+  id="$(task_id)"
+  case "$id" in
+    t001) printf 'autopilot\n' >conflict.txt ;;
+    *) printf '# %s ok\n' "$id" >"shop/${id}.py" ;;
+  esac
+}
+B
+write_spec t001 "Change conflict file" "Change conflict.txt." "true"
+ap_specs t002
+ap_setup_lead 1 "t001 t002" "t002=t001"
+ap_write_plan "true" t001 t002
+
+# Wave 1 holds until the user has committed on main; wave 2 holds so status can be read
+# while the run goes on.
+cat >>"$AP_WORK/lead.sh" <<'LEAD'
+wave() {
+  case "${DELEGATE_AUTOPILOT_WAVE:-1}" in
+    1)
+      lead_flag wave1-started
+      lead_wait user-committed || true
+      lead_run t001
+      lead_merge t001
+      ;;
+    2)
+      lead_flag wave2-started
+      lead_wait release-2 || true
+      lead_run t002
+      lead_merge t002
+      ;;
+  esac
+}
+LEAD
+
+ap_start
+wait_until 30 test -f "$EVALS_WORK/flags/wave1-started" || ap_status_fail "wave 1 never started"
+(cd "$PROJ" && printf 'user\n' >conflict.txt && git add conflict.txt &&
+  git commit -qm "User change to conflict file")
+user_main="$(cd "$PROJ" && git rev-parse main)"
+flag user-committed
+
+wait_until 90 test -f "$EVALS_WORK/flags/wave2-started" ||
+  ap_status_fail "wave 2 never ran after wave 1's landing conflict; a conflict must not stop the run"
+
+# Nothing landed: main is the user's commit, the file is theirs, no half-merge.
+[ "$(cd "$PROJ" && git rev-parse main)" = "$user_main" ] ||
+  fail "main moved after the landing conflict; it must stay at the user's commit"
+[ "$(cat "$PROJ/conflict.txt")" = user ] ||
+  fail "conflict.txt in the user's checkout is '$(head -c 80 "$PROJ/conflict.txt" | tr '\n' ' ')', want the user's text"
+[ -z "$(cd "$PROJ" && git status --porcelain)" ] ||
+  fail "the user's checkout is not clean after the landing conflict: $(cd "$PROJ" && git status --porcelain | tr '\n' ' ')"
+[ ! -f "$PROJ/.git/MERGE_HEAD" ] || fail "a landing conflict left main half-merged (MERGE_HEAD exists)"
+case " $(ap_merged | tr '\n' ' ')" in *" t001 "*) ;; *)
+  fail "autopilot lost wave 1's t001 merge (merged: $(ap_merged | tr '\n' ' '))" ;; esac
+
+# The conflicting file is named in the wave summary, in status and, later, in the report.
+d wait --timeout 10s
+summary="$OUT $(cat "$(ap_get log)/autopilot.log" 2>/dev/null)"
+grep -q 'conflict.txt' <<<"$summary" ||
+  fail "neither delegate wait nor autopilot.log names conflict.txt after the landing conflict: $(echo "$summary" | tr '\n' ' ' | cut -c1-300)"
+d autopilot status
+status_text="$OUT $(ap_json)"
+grep -q 'conflict.txt' <<<"$status_text" ||
+  fail "delegate autopilot status does not name conflict.txt: $(echo "$status_text" | tr '\n' ' ' | cut -c1-300)"
+
+flag release-2
+ap_wait_stopped 90 || ap_status_fail "did not stop after wave 2"
+[ "$(ap_get stop_reason)" = goal_met ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want goal_met"
+case " $(ap_merged | tr '\n' ' ')" in *" t002 "*) ;; *)
+  fail "wave 2's t002 was not merged on autopilot (merged: $(ap_merged | tr '\n' ' '))" ;; esac
+[ "$(cd "$PROJ" && git rev-parse main)" = "$user_main" ] ||
+  fail "main moved by the end of the run although its landing conflicts"
+report="$(ap_wait_report 10)" || fail "delegate autopilot status: no run report was written"
+grep -q 'conflict.txt' "$report" ||
+  fail "the run report does not name the conflicting file conflict.txt"
+pass "wave 1's landing conflict left main at the user's commit, named conflict.txt in the summary, status and report, and wave 2 ran"

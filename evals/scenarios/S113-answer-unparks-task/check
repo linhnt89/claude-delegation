@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# S113: `delegate autopilot answer t002 "..."` queues the user's answer without touching the
+# autopilot branch; the next wave's lead is told it, the queue empties, t002 runs, and the
+# report lists it under "Answers received". Decision 026.
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/autopilot.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+trap ap_cleanup EXIT
+ap_setup
+ap_specs t001 t002 t003
+ap_setup_lead 3 "t001 t002 t003" "t003=t001"
+ap_write_plan "true" t001 t002 t003
+flag t002 questions
+ANSWER="use the second option"
+
+# Wave 1 merges t001 and parks t002, then holds for the answer. The stand-in wave 2 lead, like
+# the real one, unparks t002 only when its prompt carries the answer; it records the prompt.
+cat >>"$AP_WORK/lead.sh" <<'LEAD'
+printf '%s\n' "$@" >"$EVALS_WORK/autopilot/prompt-${DELEGATE_AUTOPILOT_WAVE:-0}"
+wave() {
+  case "${DELEGATE_AUTOPILOT_WAVE:-1}" in
+    1)
+      lead_run t001
+      lead_merge t001
+      lead_run t002
+      lead_asked && lead_park t002 "$(lead_questions_text t002)"
+      lead_flag parked
+      lead_wait release-1 || true
+      ;;
+    2)
+      lead_flag wave2-started
+      lead_wait release-2 || true
+      if grep -q 'use the second option' "$EVALS_WORK/autopilot/prompt-2" &&
+         grep -q 't002' "$EVALS_WORK/autopilot/prompt-2"; then
+        sed -i '/^- t002:/d' PLAN.md
+        git add PLAN.md
+        git commit -qm "Plan: unpark t002, answered" >/dev/null 2>&1
+        printf 'pass\n' >"$EVALS_WORK/flags/t002"
+        lead_run t002
+        lead_merge t002
+      fi
+      lead_run t003
+      lead_merge t003
+      ;;
+  esac
+}
+LEAD
+
+ap_start
+wait_until 60 test -f "$EVALS_WORK/flags/parked" || ap_status_fail "wave 1 never parked t002"
+
+autopilot_head="$(cd "$PROJ" && git rev-parse autopilot)"
+d autopilot answer t002 "$ANSWER"
+[ "$RC" -eq 0 ] || fail "delegate autopilot answer t002 exited $RC: $OUT"
+[ "$(cd "$PROJ" && git rev-parse autopilot)" = "$autopilot_head" ] ||
+  fail "delegate autopilot answer moved the autopilot branch; the answer belongs in a queue"
+grep -qF "$ANSWER" <<<"$(ap_json)" ||
+  fail "delegate autopilot status --json does not list the queued answer"
+
+# Asking about an id that isn't parked is refused and names what is.
+d autopilot answer t009 "whatever"
+[ "$RC" -eq 1 ] ||
+  fail "delegate autopilot answer for an id that isn't parked exited $RC, want 1: $OUT"
+grep -q 't002' <<<"$OUT" ||
+  fail "the refused answer does not name the parked task t002: $OUT"
+
+flag release-1
+wait_until 60 test -f "$EVALS_WORK/flags/wave2-started" || ap_status_fail "wave 2 never started"
+prompt="$AP_WORK/prompt-2"
+grep -qF "$ANSWER" "$prompt" ||
+  fail "the wave 2 lead's prompt does not contain the answer: $(head -c 300 "$prompt" | tr '\n' ' ')"
+grep -q 't002' "$prompt" || fail "the wave 2 lead's prompt does not name t002"
+grep -qF "$ANSWER" <<<"$(ap_json)" &&
+  fail "the answer is still queued after wave 2 started; delegate autopilot status --json lists it"
+
+flag release-2
+ap_wait_stopped 90 || ap_status_fail "did not stop after wave 2"
+[ "$(ap_get stop_reason)" = goal_met ] ||
+  fail "delegate autopilot status: stop_reason is '$(ap_get stop_reason)', want goal_met (t002 not unparked?)"
+for id in t001 t002 t003; do
+  case " $(ap_merged | tr '\n' ' ')" in *" $id "*) ;; *)
+    fail "$id was not merged on autopilot (merged: $(ap_merged | tr '\n' ' '))" ;; esac
+done
+report="$(ap_wait_report 10)" || fail "delegate autopilot status: no run report was written"
+section="$(awk '/^## Answers received/ {on = 1; next} /^## / {on = 0} on' "$report")"
+grep -qF "$ANSWER" <<<"$section" && grep -q 't002' <<<"$section" ||
+  fail "the run report has no 'Answers received' section listing t002's answer"
+pass "answer t002 queued without moving autopilot, the wave 2 prompt carried it, the queue emptied, t002 ran, the report lists it, and an unparked id was refused naming t002"
