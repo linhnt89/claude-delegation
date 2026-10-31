@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+# P025: over generated merge histories and tiers, the implementer is never from a family that
+# wrote or changed the checks it is judged by; a check fix runs only in the family that wrote
+# the check. The seed is printed so a failure can be replayed. Decisions 023, 024.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/check_writers.sh"
+trap kill_runs EXIT
+setup_machine "$(bare_remote vault)"
+setup_project
+
+# A base history: S001 is visible (J1); S002 is hidden (J1) and was written by Gemini and
+# fixed by Claude; S003 is hidden but judges J2, so its Kimi writer must not count.
+scenario_with_check S001 pricing J1 "S001 ok"
+scenario_with_check S002 pricing J1 "Hidden check S002-marker"
+scenario_with_check S003 reports J2 "Hidden check S003-marker"
+worker_commit t001 pi:deepseek-writer@high "Write the J1 checks" \
+  evals/scenarios/S001-pricing/check evals/scenarios/S001-pricing/scenario.md \
+  evals/scenarios/S002-pricing/check evals/scenarios/S002-pricing/scenario.md
+append_check "$PROJ/evals/scenarios/S001-pricing/check" "fixed by t002"
+worker_commit t002 pi:gpt-writer@high "Fix S001's check" evals/scenarios/S001-pricing/check
+append_check "$PROJ/evals/scenarios/S002-pricing/check" "fixed by t003"
+worker_commit t003 pi:claude-writer@high "Fix hidden S002's check" evals/scenarios/S002-pricing/check
+append_check "$PROJ/evals/scenarios/S002-pricing/check" "fixed by t004"
+worker_commit t004 pi:gemini-writer@high "Fix hidden S002's check again" evals/scenarios/S002-pricing/check
+printf 'J2 check\n' >"$PROJ/evals/scenarios/S003-reports/check"
+chmod +x "$PROJ/evals/scenarios/S003-reports/check"
+worker_commit t005 pi:kimi-writer@high "Write the J2 check" \
+  evals/scenarios/S003-reports/check evals/scenarios/S003-reports/scenario.md
+printf 'checks written by qwen\n' >"$PROJ/qwen-notes.txt"
+worker_commit t903 pi:qwen-writer@high "Write notes" qwen-notes.txt
+
+d hidden add evals/scenarios/S002-pricing
+[ "$RC" -eq 0 ] || fail "setup: could not hide S002: $OUT"
+git -C "$PROJ" add -A
+git -C "$PROJ" commit -qm "Hide S002" -m "Worker: pi:gemini-writer@high"
+d hidden add evals/scenarios/S003-reports
+[ "$RC" -eq 0 ] || fail "setup: could not hide S003: $OUT"
+git -C "$PROJ" add -A
+git -C "$PROJ" commit -qm "Hide S003" -m "Worker: pi:kimi-writer@high"
+
+# A config the property overwrites per tier; six families so a tier can be varied.
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-impl@high"]
+standard = ["pi:gpt-impl@high", "pi:deepseek-impl@high", "pi:claude-impl@high", "pi:gemini-impl@high", "pi:qwen-impl@high", "pi:kimi-impl@high"]
+deep = ["pi:gpt-impl@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+cat >"$EVALS_WORK/p025.py" <<'PY'
+"""P025's property: generate merge histories and tiers, then ask the real runner who may implement."""
+
+from __future__ import annotations
+
+import os
+import random
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+SEED = 20261031
+RNG = random.Random(SEED)
+PROJ = Path(os.environ["PROJ"])
+DELEGATE = os.environ["DELEGATE"]
+HOME = Path(os.environ["HOME"])
+DHOME = Path(sys.argv[1])
+S001 = "evals/scenarios/S001-pricing/check"
+S002 = "evals/scenarios/S002-pricing/check"
+FAMILIES = ["gpt", "deepseek", "claude", "gemini", "qwen", "kimi"]
+WRITER_POOL = ["gpt", "deepseek", "claude", "gemini"]
+CHECKBY = "qwen"
+NON_WRITER = "kimi"
+
+
+def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, cwd=PROJ, capture_output=True, text=True, env=os.environ)
+
+
+def git(*args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(PROJ), *args], capture_output=True, text=True, check=True
+    ).stdout
+
+
+def family(worker: str) -> str:
+    model = worker.split(":", 1)[1].split("@", 1)[0].lower()
+    for key in ("deepseek", "gemini", "gpt", "claude", "opus", "sonnet", "haiku", "fable", "glm", "qwen", "kimi", "grok"):
+        if key in model:
+            return {"opus": "claude", "sonnet": "claude", "haiku": "claude", "fable": "claude"}.get(key, key)
+    return model
+
+
+def history_families(path: str) -> set[str]:
+    found: set[str] = set()
+    for sha in git("log", "--first-parent", "--format=%H", "main", "--", path).split():
+        trailers = git("show", "-s", "--format=%(trailers:key=Worker,valueonly)", sha)
+        for line in trailers.splitlines():
+            if line.strip():
+                found.add(family(line.strip()))
+    return found
+
+
+def add_history(family_name: str, n: int) -> None:
+    path = PROJ / S001
+    path.write_text(path.read_text() + f"\n# history {n} by {family_name}\n")
+    path.chmod(0o755)
+    git("add", "--", S001)
+    git("commit", "-qm", f"t{910 + n}: history {n}", "-m", f"Worker: pi:{family_name}-history@high")
+
+
+def write_config(cands: list[str]) -> None:
+    models = ", ".join(f'"pi:{f}-impl@high"' for f in cands)
+    (HOME / ".config/delegate/workers.toml").write_text(
+        "planner_family = \"claude\"\n[defaults]\nimplement = \"standard\"\n"
+        "research = \"fast\"\nreview = \"standard\"\nplan_review = \"standard\"\n"
+        f"[implement]\nfast = [{models}]\nstandard = [{models}]\ndeep = [{models}]\n"
+        "[research]\nfast = [\"pi:deepseek-research@medium\"]\n"
+        "[review]\nstandard = [\"pi:gpt-review@high\", \"pi:deepseek-review@high\"]\n"
+        "[plan_review]\nstandard = [\"pi:claude-plan@high\", \"pi:deepseek-plan@high\"]\n"
+    )
+
+
+def write_spec(task_id: str, fix: bool, checks_by: bool) -> None:
+    p = run([DELEGATE, "new", task_id])
+    if p.returncode != 0:
+        raise SystemExit(f"FAIL: P025 seed {SEED}: setup: delegate new {task_id} failed: {p.stdout}{p.stderr}")
+    lines = [line for line in p.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise SystemExit(f"FAIL: P025 seed {SEED}: setup: delegate new printed no spec path")
+    spec = Path(lines[-1])
+    body = (
+        f"# Task {task_id}: Add a helper\n\n## Goal\nAdd a helper.\n\n"
+        "## Context (read these, nothing more)\n- `AGENTS.md`\n- `shop/pricing.py`\n\n"
+        "## Scope\n- In: `shop/pricing.py`, `tests/**`\n- Out: everything else\n\n"
+        "## Acceptance\n- [ ] `evals/run S001`\n\n"
+        "## If unsure\nSTOP. Don't guess. Write the question in .task/REPORT.md and finish.\n"
+    )
+    marker = "fixes_checks: S001" if fix else ("checks_by: t903" if checks_by else "")
+    if marker:
+        first, rest = body.split("\n", 1)
+        body = f"{first}\n{marker}\n{rest}"
+    spec.write_text(body)
+
+
+def dry(task_id: str) -> tuple[int, str]:
+    p = run([DELEGATE, "run", task_id, "--dry-run"])
+    return p.returncode, p.stdout + p.stderr
+
+
+def candidates(out: str) -> list[str]:
+    return [family(m) for m in re.findall(r"candidate:\s+(\S+)", out)]
+
+
+def fail(message: str) -> None:
+    message = re.sub(r"\s+", " ", message).strip()
+    raise SystemExit(f"FAIL: P025 seed {SEED}: {message}")
+
+
+def check_case(iteration: int, fix: bool, checks_by: bool, cands: list[str], writers: set[str]) -> None:
+    task_id = f"t{800 + iteration}"
+    write_config(cands)
+    write_spec(task_id, fix, checks_by)
+    rc, out = dry(task_id)
+    got = candidates(out)
+    if fix:
+        allowed = [f for f in cands if f in writers]
+        if allowed:
+            if rc != 0:
+                fail(f"iteration {iteration}: the check fix was refused although {allowed} wrote S001's check: {out.strip()}")
+            if got != allowed:
+                fail(f"iteration {iteration}: the check fix offered {got} but only {allowed} wrote S001's check: {out.strip()}")
+        else:
+            if rc == 0:
+                fail(f"iteration {iteration}: the check fix ran on {got} although only {sorted(writers)} wrote S001's check: {out.strip()}")
+            if got:
+                fail(f"iteration {iteration}: the check fix offered {got} although none wrote S001's check: {out.strip()}")
+            if not any(f in out.lower() for f in writers):
+                fail(f"iteration {iteration}: the refusal did not name the family that wrote S001's check ({sorted(writers)}): {out.strip()}")
+    else:
+        allowed = [f for f in cands if f not in writers]
+        if allowed:
+            if rc != 0:
+                fail(f"iteration {iteration}: the run stopped although {allowed} is outside the check writers {sorted(writers)}: {out.strip()}")
+            if got != allowed:
+                fail(f"iteration {iteration}: the run offered {got} but only {allowed} is outside the check writers {sorted(writers)}: {out.strip()}")
+        else:
+            if rc == 0:
+                fail(f"iteration {iteration}: the run chose {got} although every family wrote or changed the checks {sorted(writers)}: {out.strip()}")
+            if got:
+                fail(f"iteration {iteration}: the run offered {got} although every family wrote or changed the checks: {out.strip()}")
+            for f in cands:
+                if f not in out.lower():
+                    fail(f"iteration {iteration}: the refusal did not name the {f} family it skipped: {out.strip()}")
+
+
+def main() -> None:
+    print(f"P025 seed {SEED}", flush=True)
+    for i in range(12):
+        add_history(WRITER_POOL[i % len(WRITER_POOL)], i)
+        visible = history_families(S001)
+        hidden = history_families(S002)
+        checks_by = (i % 3 == 0)
+        writers = visible | hidden | ({CHECKBY} if checks_by else set())
+        fix_writers = visible
+        fix = (i % 4 == 3)
+        if i == 0:
+            cands = ["deepseek", "gpt", NON_WRITER]
+        elif i % 5 == 1:
+            pool = sorted(fix_writers if fix else writers)
+            cands = RNG.sample(pool, RNG.randint(1, len(pool)))
+        elif i % 5 == 2:
+            cands = [NON_WRITER]
+        elif i % 5 == 3:
+            pool = sorted(fix_writers if fix else writers)
+            cands = [NON_WRITER, RNG.choice(pool)]
+            RNG.shuffle(cands)
+        else:
+            cands = RNG.sample(FAMILIES, RNG.randint(1, len(FAMILIES)))
+        check_case(i, fix, checks_by, cands, fix_writers if fix else writers)
+
+    # Adding a merge to the history never makes a skipped family allowed again.
+    write_config(FAMILIES)
+    write_spec("t899", False, False)
+    before = history_families(S001) | history_families(S002)
+    rc, out = dry("t899")
+    if rc != 0:
+        fail(f"the monotonicity starting point stopped unexpectedly: {out.strip()}")
+    allowed_before = set(candidates(out))
+    add_history("qwen", 99)
+    after_writers = history_families(S001) | history_families(S002)
+    rc, out = dry("t899")
+    if rc != 0:
+        if "qwen" not in out.lower():
+            fail(f"with qwen now a check writer, the run stopped without naming it: {out.strip()}")
+        allowed_after: set[str] = set()
+    else:
+        allowed_after = set(candidates(out))
+    if not allowed_after <= allowed_before:
+        fail(f"adding a qwen merge to the history allowed {sorted(allowed_after - allowed_before)}, which was skipped before")
+    if "qwen" in allowed_after:
+        fail("the run still offered qwen after a qwen merge touched S001's check")
+    print(
+        f"P025 seed {SEED}: 12 generated histories and tiers kept implementers out of the checking families, check fixes to their writers, and adding a merge only removed allowed families"
+    )
+
+
+if __name__ == "__main__":
+    main()
+PY
+
+python3 "$EVALS_WORK/p025.py" "$DHOME" || exit 1

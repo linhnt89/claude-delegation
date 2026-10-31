@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# S100: the installed kit tells the lead to have a worker write the checks, to confirm why each
+# new check fails before dependent work starts, to report check bugs instead of changing them,
+# and to fix a check in its own task with fixes_checks:. Decision 023, 024.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+setup_project
+
+cat >"$EVALS_WORK/check_text.py" <<'PY'
+"""Read the installed kit text for S100.
+
+Matches the instructions the scenario names, loosely enough that rewording passes. A missing
+line is printed and exits 1; an unusable previous kit is a check error (exit 3).
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+SKILL = ".claude/skills/delegate/SKILL.md"
+EVALUATE = ".claude/skills/evaluate/SKILL.md"
+
+
+def flat(text: str) -> str:
+    return re.sub(r"\s+", " ", text.lower())
+
+
+def read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def evaluate_missing(text: str) -> list[str]:
+    low = flat(text)
+    missing: list[str] = []
+    written_by_worker = (
+        re.search(r"(worker|workers|delegatee).{0,140}(writ|author|make|create|own)", low)
+        and "check" in low
+    ) or re.search(r"check.{0,100}(written|authored|made|owned).{0,100}(worker|workers)", low) \
+        or re.search(r"check.{0,100}(writ|author).{0,100}(worker|delegatee)", low)
+    if not written_by_worker:
+        missing.append("evaluate skill: worker writes the checks")
+    not_lead = (
+        re.search(r"(not the lead|lead.{0,80}(doesn't|does not|never|won't|will not) (write|writes|author|own))", low)
+        or re.search(r"(you|the lead).{0,100}(don't|do not|never) (write|writes|author|own).{0,60}check", low)
+        or re.search(r"(lead|you).{0,80}writes? no check", low)
+    )
+    if not not_lead:
+        missing.append("evaluate skill: lead writes no checks")
+    return missing
+
+
+def delegate_missing(text: str) -> list[str]:
+    low = flat(text)
+    missing: list[str] = []
+    if not (
+        "report" in low
+        and "check" in low
+        and re.search(r"(fail|failure|reason)", low)
+        and re.search(r"(current product|today|on main|as it is now|fails now)", low)
+    ):
+        missing.append("delegate skill: REPORT lists each check's failure")
+    if not (
+        re.search(r"(lead|you).{0,200}confirm", low)
+        and ("scenario.md" in low or "scenario" in low)
+        and "reason" in low
+        and re.search(r"before.{0,140}(depend|implement|start|work)", low)
+    ):
+        missing.append("delegate skill: lead confirms why each check fails")
+    if not (
+        (
+            re.search(r"(report|reports|reporting).{0,80}(check (bug|bugs|failure|failures)|broken check|check.{0,10}(bug|broken))", low)
+            or re.search(r"(check (bug|bugs|failure|failures)|broken check).{0,80}(report|reports|reporting)", low)
+        )
+        and re.search(r"(don't|do not|never|must not|should not|instead of|rather than|not).{0,100}(chang|fix|edit|repair)", low)
+    ):
+        missing.append("delegate skill: report check bugs, don't change checks")
+    if not (
+        "fixes_checks" in low
+        and re.search(r"(own|separate|another|its own) task", low)
+    ):
+        missing.append("delegate skill: fixes_checks, own task")
+    return missing
+
+
+def report_missing(text: str) -> list[str]:
+    low = flat(text)
+    if "check" not in low:
+        return ["the REPORT template has no place for a check task's list of checks and their failures"]
+    if not (
+        re.search(r"check.{0,240}(fail|failure|reason|current product)", low)
+        or re.search(r"(fail|failure|reason|current product).{0,240}check", low)
+    ):
+        return ["the REPORT template mentions checks but not the failure each gives on the current product"]
+    return []
+
+
+def previous_kit() -> str:
+    """The newest kit whose skills do not yet teach the check review."""
+    sys.path.insert(0, os.environ["EVALS_LIB"])
+    import kits  # noqa: E402
+
+    for commit in reversed(kits.commits()):
+        files = kits.kit(commit)
+        evaluate = files.get(EVALUATE, b"").decode("utf-8", errors="replace")
+        skill = files.get(SKILL, b"").decode("utf-8", errors="replace")
+        if evaluate and skill and (evaluate_missing(evaluate) or delegate_missing(skill)):
+            print(commit)
+            return
+    raise SystemExit("CHECK ERROR: no earlier kit without the check-review text was found")
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if args and args[0] == "--previous-kit":
+        previous_kit()
+        return
+    if args and args[0] == "--report-template":
+        missing = report_missing(read(Path(args[1])))
+        if missing:
+            print("; ".join(missing), flush=True)
+            raise SystemExit(1)
+        print("the REPORT template lists a check task's checks and their failures", flush=True)
+        return
+    root = Path(args[0])
+    missing = evaluate_missing(read(root / EVALUATE)) + delegate_missing(read(root / SKILL))
+    if missing:
+        print("; ".join(missing), flush=True)
+        raise SystemExit(1)
+    print("the installed skills teach a worker-written check review", flush=True)
+
+
+if __name__ == "__main__":
+    main()
+PY
+
+missing="$(python3 "$EVALS_WORK/check_text.py" "$PROJ" 2>&1)" || \
+  fail "the freshly installed kit does not teach the check review: $missing"
+
+prev="$(python3 "$EVALS_WORK/check_text.py" --previous-kit 2>&1)" || {
+  echo "CHECK ERROR: $prev"; exit 3
+}
+rm -rf "$PROJ"
+old_kit_project "$prev"
+OUT="$(cd "$PROJ" && timeout 60 "$DELEGATE" upgrade </dev/null 2>&1)"; RC=$?
+printf '\n$ delegate upgrade  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+[ "$RC" -ne 124 ] || fail "delegate upgrade waited for input on a project set up by the previous kit"
+[ "$RC" -eq 0 ] || fail "delegate upgrade failed on a project set up by the previous kit: $(printf '%s' "$OUT" | tr '\n' ' ')"
+missing="$(python3 "$EVALS_WORK/check_text.py" "$PROJ" 2>&1)" || \
+  fail "delegate upgrade did not bring the check review to the previous kit's project: $missing"
+
+d new t001
+[ "$RC" -eq 0 ] || fail "setup: delegate new failed: $(echo "$OUT" | tr '\n' ' ')"
+template="$DHOME/t001/REPORT.template.md"
+[ -f "$template" ] || fail "delegate new did not install .task/REPORT.template.md"
+missing="$(python3 "$EVALS_WORK/check_text.py" --report-template "$template" 2>&1)" || \
+  fail "the REPORT template has no place for a check task's list of checks and their failures: $missing"
+
+pass "the evaluate skill says a worker writes the checks, the delegate skill teaches the REPORT check list, the reason review, reporting check bugs and fixes_checks:, and the REPORT template has a place for the list"

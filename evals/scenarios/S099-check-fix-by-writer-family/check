@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# S099: a check-fix task runs only in the family that wrote the check; with no such candidate
+# it does not start a worker. Its own change to the check it names is allowed. Decision 024.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-fixer@high", "pi:deepseek-fixer@high"]
+standard = ["pi:gpt-fixer@high", "pi:deepseek-fixer@high"]
+deep = ["pi:gpt-fixer@high", "pi:deepseek-fixer@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+for model in gpt-fixer deepseek-fixer; do
+  stub_worker "$model" <<B
+work() {
+  printf '\\n\\ndef ${model//-/_}():\\n    return 1\\n' >>shop/pricing.py
+  printf '\\n# fixed %s\\n' '$model' >>evals/scenarios/S001-pricing/check
+}
+B
+done
+
+# t001 wrote S001's check as a DeepSeek worker.
+scenario_with_check S001 pricing J1 "S001 ok"
+check="evals/scenarios/S001-pricing/check"
+worker_commit t001 pi:deepseek-writer@high "Write S001's check" "$check" \
+  evals/scenarios/S001-pricing/scenario.md
+
+write_spec t005 "Fix S001's check" "Fix S001's check." "evals/run S001"
+spec="${OUT##*$'\n'}"
+sed -i '1a fixes_checks: S001' "$spec"
+
+d run t005 --dry-run
+out="$OUT"
+first="$(echo "$out" | sed -n 's/.*candidate: \([^ ]*\).*/\1/p' | head -1)"
+[ "$first" = "pi:deepseek-fixer@high" ] \
+  || fail "the check fix did not pick the deepseek family that wrote S001's check (first candidate: ${first:-none}): $(echo "$out" | tr '\n' ' ')"
+echo "$out" | grep -q "candidate: pi:gpt-fixer@high" \
+  && fail "the check fix still offered the gpt family although deepseek wrote S001's check: $(echo "$out" | grep candidate | tr '\n' ' ')"
+
+d run t005
+[ "$RC" -eq 0 ] || fail "t005's run failed: $(echo "$OUT" | tail -3)"
+[ -n "$(calls_where work deepseek-fixer)" ] \
+  || fail "t005 did not run on the deepseek family that wrote S001's check: $(calls_where work | tr '\n' ' ')"
+[ -z "$(calls_where work gpt-fixer)" ] \
+  || fail "t005 ran on the gpt family although deepseek wrote S001's check: $(calls_where work | tr '\n' ' ')"
+d merge t005
+[ "$RC" -eq 0 ] || fail "t005's merge was refused for changing the S001 check its fixes_checks names: $(echo "$OUT" | tr '\n' ' ')"
+
+# With no DeepSeek-family candidate, no worker starts and the message names the family, check,
+# tier and workers.toml.
+workers_toml <<'T2'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-fixer@high"]
+standard = ["pi:gpt-fixer@high"]
+deep = ["pi:gpt-fixer@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T2
+write_spec t006 "Fix S001's check again" "Fix S001's check." "evals/run S001"
+spec="${OUT##*$'\n'}"
+sed -i '1a fixes_checks: S001' "$spec"
+before="$(calls | wc -l)"
+d run t006
+[ "$RC" -ne 0 ] || fail "the check fix ran although no deepseek-family candidate was left (exit $RC): $(echo "$OUT" | tr '\n' ' ')"
+[ "$(calls | wc -l)" = "$before" ] || fail "a worker was started although no candidate from the writing family was left: $(calls_where work | tr '\n' ' ')"
+for want in deepseek S001 standard workers.toml; do
+  echo "$OUT" | grep -qi -- "$want" || fail "the message doesn't name '$want': $(echo "$OUT" | tr '\n' ' ')"
+done
+
+# fixes_checks naming a scenario with no check is refused, naming the scenario.
+write_spec t007 "Fix a missing check" "Fix a missing check." "true"
+spec="${OUT##*$'\n'}"
+sed -i '1a fixes_checks: S999' "$spec"
+before="$(calls | wc -l)"
+d run t007
+[ "$RC" -ne 0 ] || fail "fixes_checks: S999 was accepted although no S999 check exists (exit $RC): $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qF "S999" || fail "the refusal for fixes_checks: S999 didn't name S999: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(calls | wc -l)" = "$before" ] || fail "a worker was started for a missing check: $(calls_where work | tr '\n' ' ')"
+
+pass "the check fix ran only on the deepseek family that wrote S001's check, its merge was allowed, and with no deepseek candidate or a missing check no worker started and the message named the family, check, tier and workers.toml"

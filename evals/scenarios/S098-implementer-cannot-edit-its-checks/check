@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# S098: `delegate merge` refuses an implementer's change to a check named in its own
+# Acceptance; the check must be fixed by its own task. evals/lib only warns. Decision 023.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-impl@high"]
+standard = ["pi:gpt-impl@high"]
+deep = ["pi:gpt-impl@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+scenario_with_check S001 pricing J1 "S001 ok"
+scenario_with_check S002 reports J2 "S002 ok"
+mkdir -p evals/lib
+printf '#!/usr/bin/env bash\n# shared helper\n' >evals/lib/helper.sh
+git -C "$PROJ" add -A
+git -C "$PROJ" commit -qm "Add acceptance scenarios and a helper"
+cp "$PROJ/evals/scenarios/S001-pricing/check" "$EVALS_WORK/S001.check"
+cp "$PROJ/evals/scenarios/S002-reports/check" "$EVALS_WORK/S002.check"
+
+stub_worker gpt-impl <<'B'
+task_id() { sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md 2>/dev/null; }
+mode() { cat "$EVALS_WORK/flags/$1-mode" 2>/dev/null || echo tamper; }
+work() {
+  id="$(task_id)"
+  printf '\n\ndef %s_feature():\n    return 1\n' "$id" >>shop/pricing.py
+  case "$(mode "$id")" in
+    tamper)
+      printf '#!/usr/bin/env bash\n# the worker "fixed" its own check\necho S001 ok\n' \
+        >evals/scenarios/S001-pricing/check
+      ;;
+    undo)
+      cp "$EVALS_WORK/S001.check" evals/scenarios/S001-pricing/check
+      ;;
+    lib)
+      printf '\n# adjusted by %s\n' "$id" >>evals/lib/helper.sh
+      ;;
+    other-check)
+      printf '#!/usr/bin/env bash\n# changed another task'"'"'s check\necho S002 ok\n' \
+        >evals/scenarios/S002-reports/check
+      ;;
+  esac
+}
+B
+
+# 1. The implementer changed its own Acceptance check: merge is refused, nothing lands.
+write_spec t003 "Add the feature" "Add the feature." "evals/run S001"
+d run t003
+[ "$RC" -eq 0 ] || fail "setup: t003's run failed: $(echo "$OUT" | tail -3)"
+base_before="$(git -C "$PROJ" rev-parse HEAD)"
+d merge t003
+[ "$RC" -ne 0 ] || fail "the merge accepted an implementer's change to evals/scenarios/S001-pricing/check, so a worker can make its own work pass by changing the test"
+echo "$OUT" | grep -qF "evals/scenarios/S001-pricing/check" \
+  || fail "the refusal did not name the changed check file: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qF "REPORT.md" \
+  || fail "the refusal did not say to report the check bug in REPORT.md: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -Eqi "own task|separate task|another task|its own round|not (in )?this" \
+  || fail "the refusal did not say the check must be fixed by its own task, not in this one: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(git -C "$PROJ" rev-parse HEAD)" = "$base_before" ] \
+  || fail "the refused merge still changed the base branch"
+
+# 2. A later round undoes the check change; the merge then goes through.
+flag t003-mode undo
+d run t003
+[ "$RC" -eq 0 ] || fail "the undo round failed: $(echo "$OUT" | tail -3)"
+d merge t003
+[ "$RC" -eq 0 ] || fail "after the check change was undone, the merge was still refused: $(echo "$OUT" | tr '\n' ' ')"
+cmp -s "$PROJ/evals/scenarios/S001-pricing/check" "$EVALS_WORK/S001.check" \
+  || fail "after the undo merge, S001's check no longer matches the base version"
+
+# 3. evals/lib changes warn only, naming the files.
+flag t004-mode lib
+write_spec t004 "Adjust a helper" "Adjust a helper." "evals/run S001"
+d run t004
+[ "$RC" -eq 0 ] || fail "setup: t004's run failed: $(echo "$OUT" | tail -3)"
+d merge t004
+[ "$RC" -eq 0 ] || fail "a task changing only evals/lib/ helpers was refused: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qi "warning" || fail "changing evals/lib/ did not warn: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qF "evals/lib/helper.sh" \
+  || fail "the evals/lib warning did not name the changed file: $(echo "$OUT" | tr '\n' ' ')"
+
+# 4. A check for a scenario not in the task's Acceptance merges without a refusal.
+flag t005-mode other-check
+write_spec t005 "Change another check" "Change another check." "evals/run S001"
+d run t005
+[ "$RC" -eq 0 ] || fail "setup: t005's run failed: $(echo "$OUT" | tail -3)"
+d merge t005
+[ "$RC" -eq 0 ] || fail "a change to S002's check, which t005's Acceptance does not name, was refused: $(echo "$OUT" | tr '\n' ' ')"
+
+pass "the merge refused the implementer's own S001 check change and named the file and REPORT.md, accepted it after the undo, warned only for evals/lib, and accepted another scenario's check"
