@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# S104: refresh a waiting task from its base before starting its next worker.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+trap kill_runs EXIT
+simple_workers standard gpt-impl gpt-impl gpt-impl
+stub_worker gpt-impl <<'B'
+work() {
+  cp evals/scenarios/S001-pricing/check "$HOME/.cache/seen-check"
+  printf '\n# implementation round\n' >>shop/pricing.py
+  if [ -f check-fixture.txt ]; then
+    printf 'implementation version\n' >check-fixture.txt
+  fi
+  printf '# Report t003\n\n## Status\npartial\n' >.task/REPORT.md
+}
+B
+
+waiting_task() { # fresh scratch project, optionally with a conflicting shared fixture
+  setup_project
+  scenario_with_check S001 pricing J1
+  check="evals/scenarios/S001-pricing/check"
+  printf '#!/usr/bin/env bash\necho "S001 stale-check failure"\nexit 1\n' >"$PROJ/$check"
+  if [ "$1" = conflict ]; then
+    printf 'original fixture\n' >"$PROJ/check-fixture.txt"
+    worker_commit t001 pi:deepseek-writer@high "Write S001's check and fixture" evals/scenarios check-fixture.txt
+  else
+    worker_commit t001 pi:deepseek-writer@high "Write S001's check" evals/scenarios
+  fi
+  SCOPE='`shop/pricing.py`, `check-fixture.txt`' write_spec t003 "Implement pricing" "Implement pricing." "evals/run S001"
+  d run t003
+  [ "$RC" -eq 0 ] || fail "setup: t003 could not complete its failed round: $OUT"
+  grep -qF 'S001 stale-check failure' "$DHOME/t003/CHECKS.txt" || fail "setup: the old check did not fail"
+  # A merge-shaped writer commit on main is the starting state, independent of fix-check.
+  write_check "$PROJ/$check" "S001 corrected by t004"
+  if [ "$1" = conflict ]; then
+    printf 'corrected check fixture\n' >"$PROJ/check-fixture.txt"
+    worker_commit t004 pi:deepseek-fixer@high "Fix S001's check and fixture" "$check" check-fixture.txt
+  else
+    worker_commit t004 pi:deepseek-fixer@high "Fix S001's check" "$check"
+  fi
+  fix_sha="$(commit_sha HEAD)"
+  git -C "$PROJ" merge-base --is-ancestor "$fix_sha" task/t003 \
+    && fail "setup: t003 already contains t004 before its next round"
+  return 0
+}
+
+problems=()
+product_problem() { note "$*"; problems+=("$*"); }
+waiting_task clean
+d run t003
+[ "$RC" -eq 0 ] || product_problem "the implementer's next round could not run after a check fix: $OUT"
+run_out="$OUT"
+cmp -s "$HOME/.cache/seen-check" "$PROJ/$check" \
+  || product_problem "t003's next worker still sees the old S001 check instead of t004's merged fix"
+printf '%s\n' "$run_out" | grep -Eq "t004|$fix_sha" \
+  || product_problem "the run does not name t004 or its merge commit as brought in from the base"
+
+# Independently rebuild the conflicting starting state; no dependence on the first run's
+# branch history, filesystem enumeration order or worker-call numbering.
+PROJ="$EVALS_WORK/conflict-shop"
+waiting_task conflict
+before_head="$(git -C "$PROJ" rev-parse task/t003)"
+before_calls="$(calls_where work)"
+d run t003
+[ "$RC" -eq 1 ] || product_problem "a conflicting base-branch fix must exit 1 before starting a worker, got $RC"
+printf '%s\n' "$OUT" | grep -qF check-fixture.txt || product_problem "the conflict refusal does not name check-fixture.txt"
+[ "$(calls_where work)" = "$before_calls" ] || product_problem "a worker started despite the conflicting base-branch fix"
+[ "$(git -C "$PROJ" rev-parse task/t003)" = "$before_head" ] || product_problem "the conflicting refresh changed t003's branch"
+[ "${#problems[@]}" -eq 0 ] || fail "${problems[*]}"
+pass "pass: a merged check fix reaches the next worker; a conflicting refresh names its file and leaves the branch unchanged"

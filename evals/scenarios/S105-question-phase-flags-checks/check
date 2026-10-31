@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# S105: READY plus a Check problems section is a lead decision, not permission to work.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+trap kill_runs EXIT
+setup_project
+simple_workers standard gpt-impl gpt-impl gpt-impl
+stub_worker gpt-impl <<'B'
+ask() {
+  printf 'READY\n\n## Check problems\nS001: the check requires stdout but scenario.md requires stderr.\n' >.task/QUESTIONS.md
+}
+work() {
+  printf '\n# this work round must never start\n' >>shop/pricing.py
+  printf '# Report t003\n\n## Status\npartial\n' >.task/REPORT.md
+}
+B
+scenario_with_check S001 pricing J1
+check="evals/scenarios/S001-pricing/check"
+printf '\nContract: diagnostics must be written to stderr.\n' >>"$PROJ/evals/scenarios/S001-pricing/scenario.md"
+printf '#!/usr/bin/env bash\necho "S001 incorrectly expects stdout"\nexit 1\n' >"$PROJ/$check"
+worker_commit t001 pi:deepseek-writer@high "Write S001's check" evals/scenarios
+write_spec t003 "Implement pricing" "Implement pricing without changing the check." "evals/run S001"
+d run t003
+[ "$RC" -eq 0 ] || fail "the question-phase run failed instead of waiting on the lead: $OUT"
+[ -n "$(calls_where ask gpt-impl)" ] || fail "setup: t003 never reached the question phase"
+[ -z "$(calls_where work)" ] \
+  || fail "READY with Check problems started a work round instead of stopping for the lead (S001: stdout versus stderr)"
+[ -z "$(git -C "$PROJ" diff main...task/t003 --name-only)" ] || fail "the question-phase flag changed the task's code"
+reason='the check requires stdout but scenario.md requires stderr.'
+d status t003
+[ "$RC" -eq 0 ] || fail "delegate status t003 failed: $OUT"
+status_text="$OUT"
+printf '%s\n' "$status_text" | grep -qF S001 || fail "status omits the flagged check S001: $status_text"
+printf '%s\n' "$status_text" | grep -qF "$reason" || fail "status omits the worker's check-problem reason: $status_text"
+printf '%s\n' "$status_text" | grep -Eqi '(waiting|questions|lead|blocked)' \
+  || fail "status does not show that t003 is waiting on the lead: $status_text"
+d status t003 --json
+[ "$RC" -eq 0 ] || fail "delegate status t003 --json failed: $OUT"
+printf '%s\n' "$OUT" >"$EVALS_WORK/status.json"
+python3 - "$EVALS_WORK/status.json" "$reason" <<'PY' || fail "JSON status does not expose the waiting state, S001 and its reason"
+import json, pathlib, sys
+status = json.loads(pathlib.Path(sys.argv[1]).read_text())
+task, = status['tasks']
+text = json.dumps(task).lower()
+assert task['id'] == 't003'
+assert task['phase'] not in ('implement', 'checks', 'review', 'interrupted', 'not_started')
+assert 's001' in text and sys.argv[2].lower() in text
+assert any(word in text for word in ('waiting', 'questions', 'lead', 'blocked'))
+PY
+ask_call="$(calls_where ask gpt-impl | head -n1)"
+prompt="$(call_field "$ask_call" prompt)"
+for word in Acceptance scenario.md; do
+  printf '%s\n' "$prompt" | grep -qiF "$word" || fail "the question prompt does not ask the worker to read $word"
+done
+printf '%s\n' "$prompt" | grep -Eqi '(report|flag).*(check|pass)|(check|pass).*(report|flag)' \
+  || fail "the question prompt does not ask the worker to report checks it cannot pass"
+printf '%s\n' "$prompt" | grep -Eqi '(not|never|don.t).*(fix|edit|change)|report.*only|only.*report' \
+  || fail "the question prompt does not prohibit fixing the checks"
+pass "pass: a question-phase check problem stops work, reaches text/JSON status and is requested by the prompt"

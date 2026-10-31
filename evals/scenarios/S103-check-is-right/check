@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# S103: a writer-family task may return a no-change verdict instead of bending its check.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+trap kill_runs EXIT
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+standard = ["pi:gpt-impl@high", "pi:deepseek-fixer@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+stub_worker gpt-impl <<'B'
+work() {
+  printf '\n# implementation round\n' >>shop/pricing.py
+  printf '# Report t003\n\n## Status\npartial\n\n## Check problems\nS001 rejects the current implementation.\n' >.task/REPORT.md
+}
+B
+reason='The scenario requires rounding before tax; the implementation rounds after tax.'
+stub_worker deepseek-fixer <<'B'
+work() {
+  printf '# Report t004\n\nStatus: check is right\n\nThe scenario requires rounding before tax; the implementation rounds after tax.\n' >.task/REPORT.md
+}
+B
+scenario_with_check S001 pricing J1
+check="evals/scenarios/S001-pricing/check"
+printf '\nContract: round before applying tax.\n' >>"$PROJ/evals/scenarios/S001-pricing/scenario.md"
+printf '#!/usr/bin/env bash\necho "S001 rounding-order product failure"\nexit 1\n' >"$PROJ/$check"
+worker_commit t001 pi:deepseek-writer@high "Write S001's check" evals/scenarios
+write_spec t003 "Implement pricing" "Implement pricing." "evals/run S001"
+d run t003
+[ "$RC" -eq 0 ] || fail "setup: t003 could not complete its failed round: $OUT"
+grep -qF 'S001 rounding-order product failure' "$DHOME/t003/CHECKS.txt" || fail "setup: missing S001 failure"
+# Use the public command to establish the source-task relationship. Inventing a STATE or
+# SPEC metadata field here would test an implementation detail not pinned by the scenario.
+cp "$DHOME/t003/CHECKS.txt" "$DHOME/t003/worktree/.task/CHECKS.txt"
+d fix-check S001 --from t003 --reason "S001 rejects the implementation; ask its writers whether the check is wrong"
+[ "$RC" -eq 0 ] || fail "cannot start the check-is-right verdict task: $OUT"
+wait_field 30 t004 phase done || fail "the check-is-right verdict worker did not finish"
+[ -n "$(calls_where work deepseek-fixer)" ] || fail "t004 did not use the DeepSeek writer family"
+grep -qF 'Status: check is right' "$DHOME/t004/worktree/.task/REPORT.md" || fail "the fix worker's verdict was not retained"
+[ -z "$(git -C "$PROJ" diff main...task/t004 --name-only)" ] || fail "setup: the verdict worker changed tracked files"
+before="$(git -C "$PROJ" rev-parse main)"
+d merge t004
+[ "$RC" -eq 0 ] || fail "merge does not accept Status: check is right as a normal no-change outcome: $OUT"
+printf '%s\n' "$OUT" | grep -Eqi '(check.*(judged.*right|is right|correct)|judged.*check.*right)' \
+  || fail "merge did not say the check was judged right: $OUT"
+[ "$(git -C "$PROJ" rev-parse main)" = "$before" ] || fail "the no-change verdict added a base-branch commit"
+d list
+[ "$RC" -eq 0 ] || fail "delegate list failed after closing t004: $OUT"
+printf '%s\n' "$OUT" | grep -Eq '^t004[[:space:]]' && fail "the no-change verdict left t004 in delegate list"
+git -C "$PROJ" show-ref --verify --quiet refs/heads/task/t004 && fail "the no-change verdict left task/t004"
+[ ! -e "$DHOME/t004" ] || fail "the no-change verdict left t004's task folder"
+d run t003
+[ "$RC" -eq 0 ] || fail "t003's next round did not run: $OUT"
+checks="$DHOME/t003/worktree/.task/CHECKS.txt"
+[ -f "$checks" ] || fail "the implementer's next round has no CHECKS.txt"
+grep -qF 'S001 rounding-order product failure' "$checks" || fail "the next round lost S001's failing output"
+grep -qF "$reason" "$checks" || fail "the next round did not receive t004's reason"
+grep -Eqi 'product[ -]+(failure|bug)' "$checks" || fail "the writer's verdict is not marked as a product failure"
+pass "pass: a no-change check-is-right verdict closes cleanly and returns the product failure to the implementer"

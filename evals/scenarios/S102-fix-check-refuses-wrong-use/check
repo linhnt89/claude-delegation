@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# S102: invalid fix requests must be actionable, side-effect-free refusals.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+trap kill_runs EXIT
+setup_project
+configure_workers() {
+  workers_toml <<T
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+standard = [$1]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+}
+configure_workers '"pi:gpt-impl@high", "pi:deepseek-fixer@high"'
+stub_worker gpt-impl <<'B'
+work() {
+  printf '\n# implementation with a check problem\n' >>shop/pricing.py
+  printf '# Report t003\n\n## Check problems\nS001 reads the wrong stream.\n' >.task/REPORT.md
+}
+B
+scenario_with_check S001 pricing J1
+scenario_with_check S002 tax J1
+check="evals/scenarios/S001-pricing/check"
+printf '#!/usr/bin/env bash\necho "S001 wrong-stream failure"\nexit 1\n' >"$PROJ/$check"
+worker_commit t001 pi:deepseek-writer@high "Write the checks" evals/scenarios
+write_spec t003 "Implement pricing" "Implement pricing." "evals/run S001" "evals/run S002"
+d run t003
+[ "$RC" -eq 0 ] || fail "setup: t003 could not complete its failed round: $OUT"
+grep -qF 'S001 wrong-stream failure' "$DHOME/t003/CHECKS.txt" || fail "setup: missing S001 failure"
+grep -q '^PASS  evals/run S002$' "$DHOME/t003/CHECKS.txt" || fail "setup: S002 did not pass in the last round"
+cp "$DHOME/t003/CHECKS.txt" "$DHOME/t003/worktree/.task/CHECKS.txt"
+
+task_folders() { find "$DHOME" -mindepth 1 -maxdepth 1 -type d -name 't[0-9]*' -printf '%f\n' | sort; }
+task_branches() { git -C "$PROJ" for-each-ref --format='%(refname) %(objectname)' refs/heads/task/ | sort; }
+d list
+[ "$RC" -eq 0 ] || fail "setup: delegate list failed: $OUT"
+before_list="$(printf '%s\n' "$OUT" | sort)"
+before_folders="$(task_folders)"
+before_branches="$(task_branches)"
+refusal() {
+  d "$@"
+  refused="$OUT"
+  [ "$RC" -eq 1 ] || fail "$*: expected a grounded fix-check refusal (exit 1), got $RC: $refused"
+  d list
+  [ "$RC" -eq 0 ] && [ "$(printf '%s\n' "$OUT" | sort)" = "$before_list" ] || fail "$*: changed delegate list: $OUT"
+  [ "$(task_folders)" = "$before_folders" ] || fail "$*: created a task folder"
+  [ "$(task_branches)" = "$before_branches" ] || fail "$*: created or changed a task branch"
+}
+refusal fix-check S002 --from t003 --reason x
+printf '%s\n' "$refused" | grep -qF S001 || fail "the non-failure refusal does not name S001, which did fail: $refused"
+refusal fix-check S001 --from t003
+printf '%s\n' "$refused" | grep -qF -- '--reason' || fail "the missing-reason refusal does not ask for --reason: $refused"
+configure_workers '"pi:gpt-impl@high"'
+refusal fix-check S001 --from t003 --reason x
+for word in deepseek S001 standard workers.toml; do
+  printf '%s\n' "$refused" | grep -qiF "$word" || fail "the no-writer-candidate refusal omits $word: $refused"
+done
+printf '%s\n' "$refused" | grep -Eqi '(add|configure|put|include|supply)' \
+  || fail "the no-writer-candidate refusal does not say to add a candidate: $refused"
+pass "pass: fix-check refuses a passing check, a missing reason and a missing writer-family candidate without creating tasks"
