@@ -86,9 +86,24 @@
   Luna (t062). S079–S082 pass, P021 hidden.
 
 ## Handoff (2026-10-31)
-- Next: t085 (spec and run), review why each check fails, hide P025, then t086 and t087
-  together. No tasks open (`delegate list`).
-- Waits for the user: nothing.
+- Next: autopilot runs t085, then t086 and t087 together (see Mandate). On return: read the
+  run report, then `delegate autopilot land`.
+- Waits for the user: nothing until the run stops.
+
+## Mandate
+- Goal: t085, t086, t087
+- Gate: `scripts/check`
+- Merge without asking when: checks, the task's and hidden scenarios, and required reviews pass.
+- Needs the user: new decisions, scope changes, accepting findings, discarding a feature.
+- Not in this run: t025 (needs a design with the user).
+- t085: before merging, confirm each check fails on main for the reason its `scenario.md`
+  states (no setup error, no exit 3); a wrong reason is another round. After the merge, hide
+  P025 with `delegate hidden add` and note it in `evals/jobs.md` under "Hidden".
+- t086: merge only after a review on its final commit with no high-severity findings.
+- Answers for likely worker questions: a task's Acceptance scenarios are the ids on its
+  `evals/run` lines; their checks are `evals/scenarios/<id>-*/check`; hidden scenarios count
+  when their `Job:` matches one of those scenarios' jobs; `fixes_checks:` parses like
+  `checks_by:`.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
