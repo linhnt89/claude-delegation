@@ -82,4 +82,27 @@ case "$merged" in *" t003 "*) ;; *) fail "the independent t003 was not merged (m
 report="$(ap_wait_report 10)" || fail "delegate autopilot status: no run report"
 grep -qi 'revert' "$report" && grep -q 't001' "$report" || fail "the run report does not list the revert of t001"
 grep -qF 'shop/t001.py breaks the build' "$report" || fail "the run report does not give the gate output's reason for the revert"
-pass "t001's merge was reverted and the gate passed again; the next wave's prompt named its fix task, the commit and the gate output; t002 waited, t003 merged; the report lists the revert"
+# While reverted, t001 doesn't count as merged: the goal (t001 t002 t003) isn't met, and neither
+# the report's merged list nor the status lists it. (It counts again only when its fix task merges.)
+[ "$(ap_get stop_reason)" != goal_met ] ||
+  fail "delegate autopilot status: stop_reason is goal_met while t001 is reverted and t002 never ran"
+merged_section="$(awk '/^## /{on = (tolower($0) ~ /merged/ && tolower($0) !~ /revert/); next} on' "$report")"
+grep -qE '(^|[^0-9A-Za-z])t001([^0-9]|$)' <<<"$merged_section" &&
+  fail "the run report lists the reverted t001 as merged: $(tr '\n' ' ' <<<"$merged_section" | cut -c1-200)"
+status_text="$(cd "$PROJ" && "$DELEGATE" autopilot status 2>&1)"
+grep -i 'merged' <<<"$status_text" | grep -vi 'revert' | grep -q 't001' &&
+  fail "delegate autopilot status lists the reverted t001 as merged: $(cut -c1-300 <<<"$status_text" | tr '\n' ' ')"
+ap_json | python3 -c 'import json, sys
+def walk(v, key=""):
+    if isinstance(v, dict):
+        for k, x in v.items():
+            yield from walk(x, k)
+    elif isinstance(v, list):
+        for x in v:
+            yield from walk(x, key)
+    elif "merged" in key.lower() and "revert" not in key.lower() and "t001" in str(v):
+        yield key
+sys.exit(1 if any(True for _ in walk(json.load(sys.stdin))) else 0)' ||
+  fail "delegate autopilot status --json lists the reverted t001 as merged"
+
+pass "t001's merge was reverted and the gate passed again; the next wave's prompt named its fix task, the commit and the gate output; t002 waited, t003 merged; t001 did not count as merged; the report lists the revert"
