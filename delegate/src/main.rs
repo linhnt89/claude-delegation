@@ -6,6 +6,7 @@ mod checkout;
 mod commands;
 mod config;
 mod environment;
+mod fix_check;
 mod guard;
 mod harness;
 mod init;
@@ -103,6 +104,25 @@ enum Cmd {
         #[arg(long, conflicts_with_all = ["ask", "no_ask"])]
         research: bool,
         /// Detach the run into its own session and return immediately
+        #[arg(long)]
+        background: bool,
+    },
+    /// Start a writer-family fix task for a failing scenario check
+    FixCheck {
+        /// Scenario ids whose checks failed (e.g. S001)
+        scenarios: Vec<String>,
+        /// Task id whose last round failed the check (e.g. t003)
+        #[arg(long)]
+        from: String,
+        /// One-line reason why the check is wrong rather than the implementation
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long, value_enum)]
+        tier: Option<Tier>,
+        /// One-off worker override from the check's writer family
+        #[arg(long)]
+        worker: Option<String>,
+        /// Detach the fix run into its own session and return immediately
         #[arg(long)]
         background: bool,
     },
@@ -311,6 +331,24 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
                 },
             )
         }
+        Cmd::FixCheck {
+            scenarios,
+            from,
+            reason,
+            tier,
+            worker,
+            background,
+        } => fix_check::fix_check(
+            &ctx,
+            &fix_check::FixCheckArgs {
+                scenarios,
+                from,
+                reason,
+                tier,
+                worker,
+                background,
+            },
+        ),
         Cmd::Check { id } => commands::check(&ctx, &id),
         Cmd::Review {
             id,

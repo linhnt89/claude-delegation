@@ -10,11 +10,11 @@ use crate::config::{Worker, workers_config_path};
 use crate::spec;
 use crate::task::{Ctx, Task, git};
 
-struct Check {
-    id: String,
-    folder: String,
+pub(crate) struct Check {
+    pub(crate) id: String,
+    pub(crate) folder: String,
     jobs: BTreeSet<String>,
-    hidden: bool,
+    pub(crate) hidden: bool,
     hidden_path: Option<PathBuf>,
 }
 
@@ -28,7 +28,7 @@ impl Check {
     }
 }
 
-fn scenarios(root: &Path, hidden: bool) -> Result<Vec<Check>> {
+pub(crate) fn scenarios(root: &Path, hidden: bool) -> Result<Vec<Check>> {
     if !root.exists() {
         return Ok(Vec::new());
     }

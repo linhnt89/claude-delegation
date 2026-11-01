@@ -114,6 +114,11 @@ pub fn fixes_checks(text: &str) -> Vec<String> {
     marker_ids(text, "fixes_checks:")
 }
 
+/// Source task id from a `from_task:` line anywhere in a check-fix spec.
+pub fn from_task(text: &str) -> Option<String> {
+    marker_ids(text, "from_task:").into_iter().next()
+}
+
 fn marker_ids(text: &str, marker: &str) -> Vec<String> {
     let mut ids = Vec::new();
     for line in text.lines() {
@@ -228,6 +233,11 @@ mod tests {
             fixes_checks("fixes_checks: S001, S002\n  fixes_checks: S002, P025, \n"),
             ["S001", "S002", "P025"]
         );
+        assert_eq!(
+            from_task("from_task: t003\n"),
+            Some("t003".to_string())
+        );
+        assert_eq!(from_task("no source\n"), None);
         assert_eq!(
             fixes_checks("prose fixes_checks: S001"),
             Vec::<String>::new()

@@ -1111,12 +1111,7 @@ fn run_checks(ctx: &Ctx, t: &Task, operation: &Operation) -> Result<Checks> {
         };
         lines.push(format!("{label}  {c}"));
         if rc != 0 {
-            let tail: Vec<&str> = out.trim().lines().collect();
-            lines.extend(
-                tail[tail.len().saturating_sub(15)..]
-                    .iter()
-                    .map(|l| format!("      {l}")),
-            );
+            lines.extend(crate::fix_check::format_check_output(c, &out));
         }
     }
     // Leave the worktree exactly at the committed branch.
@@ -1565,14 +1560,18 @@ pub(crate) fn merge_readiness(
             bail!("commit or stash changes in {} first", ctx.root.display());
         }
         let paths = t.changed_paths(ctx)?;
+        let spec_text = t.spec_text()?;
         if paths.is_empty() {
+            if !spec::fixes_checks(&spec_text).is_empty()
+                && crate::fix_check::check_is_right_verdict(t).is_some()
+            {
+                return Ok(());
+            }
             bail!(
                 "{} has no changes to merge (use: delegate discard {id})",
                 t.branch
             );
         }
-
-        let spec_text = t.spec_text()?;
         let helpers: Vec<_> = paths
             .iter()
             .filter(|path| path.starts_with("evals/lib/"))
@@ -1744,6 +1743,21 @@ pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
     }
     let base = t.base(ctx)?;
     let text = t.spec_text()?;
+    if t.changed_paths(ctx)?.is_empty()
+        && let Some(verdict_reason) = crate::fix_check::check_is_right_verdict(&t)
+    {
+        crate::fix_check::record_check_is_right_on_source(ctx, &t, &text, &verdict_reason)?;
+        let checks = spec::fixes_checks(&text).join(", ");
+        println!(
+            "{id}: the check ({checks}) was judged right; no commit added to {base}"
+        );
+        remove(ctx, &t).map_err(|error| {
+            anyhow::anyhow!(
+                "closed {id}, but cleaning up {id} failed: {error:#}; run: delegate discard {id}"
+            )
+        })?;
+        return Ok(());
+    }
     let title = spec::title(&text, id);
     let goal = spec::goal(&text);
     let mut msg = if goal.is_empty() {
