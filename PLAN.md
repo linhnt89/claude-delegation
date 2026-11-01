@@ -4,6 +4,12 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- t104, t092 (2026-11-01, user present): t104 fixed S108's check (with no gaps, its `printf`
+  loop read an empty key under `set -u`), by Claude Haiku, S108's writers' family (`--worker`:
+  the installed `delegate` predates t086). t092, the kit text for decision 025, by Sol, was landed
+  by hand with the user's approval (its branch predates t104, and only t091 brings base fixes
+  into a task); S108, S040 and `scripts/check` pass on `autopilot`. Its `fix-check` text is true
+  once t091 merges.
 - t090 (2026-11-01, user present): one allowlisted child environment for gates, acceptance and
   checks (`environment.rs`, `.delegate.toml` `[env] allow`, unknown keys refused); unit tests
   ignore ambient `DELEGATE_*`. By Sol, one round. The user dropped S085 from its regression line
@@ -125,25 +131,18 @@
   Luna (t062). S079–S082 pass, P021 hidden.
 
 ## Handoff (2026-11-01, autopilot wave 1)
-- Merged on `autopilot` (not landed on main yet): t102, t086, t090. Land with the user's approval
+- Merged on `autopilot` (not landed on main yet): t102, t086, t090, t104, t092. Land with the user's approval
   (`delegate autopilot land`).
-- `delegate list`: t092 (round 2, `scripts/check` passes; S108 fails on its check's
-  empty-array loop; parked).
+- `delegate list`: no open tasks.
 - After landing, on main: `AGENTS.md` Layout and the `.delegate.toml` template miss t090's
   `environment.rs` and `[env]` (its review's doc note).
 - Plan review (gpt-6.1-sol, wave 1) changes applied: t090's spec keeps the autopilot control
   variables for the lead and detached runs and adds the S084–S089 regression line. The t091/t095
   split and the Goal ids are still open (review finding 4): finish the split and list every piece
   id in the Goal before wave 2 and wave 4 start.
-- t092's round 2 added one product line: `delegate new` writes `REPORT.template.md` into the task
-  home, as S108 asks (`commands.rs`, `new` only). It stays on `task/t092`.
-- Next: wave 2 (t091's pieces); then fix S108 through `fix-check` (Claude's family wrote it) and rerun t092.
+- Next: wave 2 (t091's pieces). t096 is unblocked (t092 merged).
 
 ## Waiting for you
-- t092: S108's check is broken, not the kit. Its `gaps` loop (`evals/scenarios/S108-*/check`,
-  line 94) reads `${where_missing[$line]}` with `$line` empty when the kit passes everything, so
-  `set -u` stops the check with "bad array subscript". The writer is Claude (t097), so the fix is
-  `delegate fix-check S108 --from t092` once t091 merges. t096 waits on t092.
 - t103: two medium findings from t086's final review need a decision before a spec:
   1. Only the file named `check` counts as a check. S060–S065 keep their assertions in
      `mod.test.tsx` beside it, so an implementer can edit that and merge, and its fixers aren't
@@ -199,7 +198,7 @@
 |----|------|------|--------|------------|------|------------|-------|
 | t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 | done | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
 | t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 3 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
-| t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | review (parked: S108 check bug) | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | done | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
 | t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 4 | todo | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t103 | Follow-ups to t086: which files in a scenario folder count as its check; a way to fix a check with no known writer; check tasks naming their own new scenarios (decisions 023, 024) | – | todo (Waiting for you) | – | standard | to write after the user decides | `check_writers.rs` |
