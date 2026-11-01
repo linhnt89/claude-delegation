@@ -75,6 +75,9 @@ listed in `Scope In`.
 - Acceptance also names the user scenarios the task must satisfy: ``- [ ] `evals/run S004` ``.
   No agreed scenario for the feature yet → `/evaluate feature` first.
 - Scope In: list paths in backticks; project rules use them to raise the tier up front.
+- A check task covers at most 5 scenarios. Put this checklist in its spec: set up its own
+  data, make no assumptions about repo history, use deterministic order, and take nothing from
+  the ambient environment.
 - Scope Out: name files parallel tasks are touching.
 - When another task wrote the checks, set `checks_by: t001` (comma-separated ids allowed).
   The runner skips those tasks' worker families and every family that changed the Acceptance
@@ -85,6 +88,11 @@ listed in `Scope In`.
   A check fix goes to its own task with `fixes_checks: S001, S002`, naming only the scenarios
   whose checks it may change. The runner picks from the families that wrote those checks;
   if none is available in the tier, add a candidate of a writer family there, not a new family.
+- If a failed check is a check bug, the lead runs `delegate fix-check <S…> --from <task>
+  --reason "…"` (autopilot leads may run it too). The command builds the fix spec from the
+  scenario, failing output in `CHECKS.txt`, the judged implementer's `Check problems` report,
+  and the lead's reason. The check writer may conclude the check is right and change nothing;
+  then return the failure to the implementer as a product bug.
 - Set `size: small | medium | long` (default medium) when the task is unusually short or long.
   Before running, the runner skips an account whose quota runway is shorter than that size
   needs, so a long task is not handed to a subscription that stops halfway.
@@ -131,8 +139,10 @@ review finished tasks. As soon as a merge unblocks a task, start it at once.
 
 What happens:
 - **Question phase** (first round): the worker reads the spec and code and answers `READY` or
-  asks blocking questions, with no edits. If it asks, the run stops and prints them. Answer
-  in the spec under `## Answers` (ask the user when it's their call), then run again.
+  asks blocking questions, with no edits. For Acceptance checks, it compares each check with
+  its `scenario.md` and flags any it thinks can't pass; it reports only and does not edit the
+  checks. If it asks, the run stops and prints the questions. Answer in the spec under
+  `## Answers` (ask the user when it's their call), then run again.
 - **Work phase** continues in the same session, then the runner commits and runs the
   acceptance commands itself (`CHECKS.txt`).
 - **Fallbacks:** candidates that can't start (quota, auth) fall through in tier order. Accounts

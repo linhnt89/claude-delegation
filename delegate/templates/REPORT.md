@@ -8,6 +8,9 @@ done | partial | blocked
 ## Changes
 - `<file>` — <what and why, one line>
 
+## Check problems
+- <check problem found in this work's Acceptance checks, or "none">
+
 ## Acceptance
 - [x] `<command>` — <pass/fail, one-line summary of output>
 

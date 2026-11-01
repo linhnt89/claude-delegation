@@ -91,6 +91,7 @@ pub fn new(ctx: &Ctx, id: &str, prune: bool) -> Result<()> {
     fs::create_dir_all(&t.dir)?;
     let template = if prune { PRUNE_TEMPLATE } else { SPEC_TEMPLATE };
     fs::write(&t.spec, template.replace("<id>", &t.id))?;
+    fs::write(t.dir.join("REPORT.template.md"), REPORT_TEMPLATE)?;
     claim_owner(ctx, &mut t)?;
     println!("{}", t.spec.display());
     Ok(())

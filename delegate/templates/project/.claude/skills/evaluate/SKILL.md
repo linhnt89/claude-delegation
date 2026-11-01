@@ -37,6 +37,9 @@ state, a `Passes when` that a user could observe, and an `If this fails` that sa
 failure would mean for the user in plain words. Number them `S001`... in a new folder
 `evals/scenarios/S001-<slug>/`, `Status: draft`.
 
+For each agreed scenario, name what its check observes: the command, the output or file it
+reads, and the exit codes.
+
 Show them as a short list (id, one line each) and let the user cut, add and reword. Approved
 ones become `Status: agreed`. Don't write checks for unapproved scenarios.
 
