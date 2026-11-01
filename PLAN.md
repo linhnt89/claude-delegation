@@ -122,7 +122,8 @@
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01; renewed the same day after their answers. -->
-- Goal: t086, t090, t091, t092, t095, t096 (and the pieces t091, t095 are split into)
+- Goal: t086, t090, t091, t092, t095, t096
+- The goal includes the pieces t091 and t095 are split into.
 - Gate: `env -u DELEGATE_AUTOPILOT -u DELEGATE_AUTOPILOT_WAVE scripts/check`
 - Merge without asking when: checks, the task's and hidden scenarios, and required reviews pass.
 - Needs the user: new decisions, scope changes, accepting findings, discarding a feature.
