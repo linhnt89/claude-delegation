@@ -4,6 +4,15 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- t102, t086 (2026-11-01, user present): t102 fixed S098's check (its `evals/lib/helper.sh`
+  fixture was outside the test project), by Copilot Sonnet: the user agreed Claude's family fixes
+  it while Hyper has no login (exception to decision 024, like t099). t086, by Sol in four rounds
+  (deep from round 2): check writers' families from history, hidden checks included (vault,
+  `_evals/hidden`, `EVALS_HIDDEN`), across folder renames; `merge` refuses an implementer's
+  changes to its Acceptance checks unless `fixes_checks:` names them and warns on `evals/lib/`;
+  a check fix picks only from the named checks' writers. Round 3 fixed a bug hidden P025 caught
+  (a fix task also excluded same-job hidden-check writers, leaving no candidate). S096–S099, P025
+  pass; final review 0 high, its two mediums are t103.
 - t087, t099, t100, t101 (2026-11-01, user present): t099 fixed S097's and S100's check bugs
   and moved S083, S085 (`away` after `start`), S086 (quota floor only) to decision 026; t100
   made S115 require a reverted task to stop counting as merged; t101 made the quota unit tests
@@ -110,40 +119,35 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
-## Handoff (2026-11-01, autopilot wave 1)
-- Nothing merged. Both wave-1 tasks that ran are parked on check bugs; t090 never started.
-- `delegate list`: t086 (round 1, S096, S097, S099 pass; S098 fails on its fixture; parked),
-  t092 (round 2, `scripts/check` passes; S108 fails on its check's empty-array loop; parked),
-  t090 (not run; waits for t086's merge, since both touch `delegate/src/commands.rs`).
-- Plan review (gpt-6.1-sol, this wave) changes applied: t086 gets `checks_by: t085, t099`;
-  t090 is serialized after t086 (the table and Waves line say so); t090's spec now keeps the
-  autopilot control variables for the lead and detached runs and adds the S084–S089 regression
-  line. The t091/t095 split and the Goal ids are still open (review finding 4): finish the split
-  and list every piece id in the Goal before wave 2 and wave 4 start.
+## Handoff (2026-11-01, after wave 1, user present)
+- Merged on `autopilot` (not landed on main yet): t102, t086. The driver is stopped; land with
+  the user's approval (`delegate autopilot land`).
+- `delegate list`: t092 (round 2, `scripts/check` passes; S108 fails on its check's empty-array
+  loop; parked), t090 (not run; unblocked now that t086 is merged).
+- Plan review (gpt-6.1-sol, wave 1) changes applied: t090's spec keeps the autopilot control
+  variables for the lead and detached runs and adds the S084–S089 regression line. The t091/t095
+  split and the Goal ids are still open (review finding 4): finish the split and list every piece
+  id in the Goal before wave 2 and wave 4 start.
 - t092's round 2 added one product line: `delegate new` writes `REPORT.template.md` into the task
   home, as S108 asks (`commands.rs`, `new` only). It stays on `task/t092`.
-- Next (for the next wave lead): fix S098 and S108 through `fix-check` once their writer families
-  have quota (or by a fix task with `fixes_checks:` after t091), merge t086, start t090, then
-  t092. Wave 2 (t091's pieces) waits for t086.
+- Next: start t090; then wave 2 (t091's pieces); then fix S108 through `fix-check` (Claude's
+  family wrote it) and rerun t092.
 
 ## Waiting for you
 - t092: S108's check is broken, not the kit. Its `gaps` loop (`evals/scenarios/S108-*/check`,
   line 94) reads `${where_missing[$line]}` with `$line` empty when the kit passes everything, so
-  `set -u` stops the check with "bad array subscript" and it fails with the kit fully correct
-  (`_evals/results/logs/S108.log` in the checkout; t092's round 2 in `t092/CHECKS.txt`). The
-  writer is Claude (`Worker: claude:sonnet@high`, t097), so a fix comes from that family via
-  `delegate fix-check S108 --from t092` once t091 exists. t092's work (kit text, the
-  `delegate new` copy of REPORT.template.md, `commands.rs` `new` only) stays on
-  `task/t092`, not merged; t096 waits on it. Parked per the mandate (check bug): the fix goes
-  through `fix-check` once t091 merges, in wave 2.
-
-- t086: S098's check is broken, not the change. Its fixture writes `evals/lib/helper.sh` where
-  the shell isn't in `$PROJ` (t086's implementer found it: `t086/REPORT.md` "Check problems";
-  I did not re-run it). The warning is in place: its unit test passes with a real helper change.
-  S098's writer is DeepSeek (t085), and Hyper, DeepSeek's only route, is out of quota, so no
-  family can fix it yet. Parked per the mandate (check bug). Its other checks pass: S096, S097,
-  S099 and `scripts/check` (310 tests). Hidden P025 still to run at review. Dependents: t090,
-  t091 (wait for t086's merge).
+  `set -u` stops the check with "bad array subscript". The writer is Claude (t097), so the fix is
+  `delegate fix-check S108 --from t092` once t091 merges. t096 waits on t092.
+- t103: two medium findings from t086's final review need a decision before a spec:
+  1. Only the file named `check` counts as a check. S060–S065 keep their assertions in
+     `mod.test.tsx` beside it, so an implementer can edit that and merge, and its fixers aren't
+     counted as writers. Should every file in a scenario folder count?
+  2. A check with no `Worker:` trailer in its history (69 of 117 here: lead- or hand-written)
+     can never get a `fixes_checks:` task: no writer family, so no candidate, even with
+     `--worker`. Allow any family with a warning, or another way out?
+  Also to decide: a check-writing task whose Acceptance names the scenario it creates is refused
+  at merge (its new `check` counts as changing its own check). Today's check tasks keep those as
+  review items, so nothing breaks yet.
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01; renewed the same day after their answers. -->
@@ -155,7 +159,7 @@
 - Not in this run: t025 (needs a design with the user).
 - Waves: 1 = t086, t090, t092 (t090 starts only after t086 merges, the plan review's
   serialization for `commands.rs`); 2 = t091's pieces; 3 = t095's pieces, t096.
-- Split t091 and t095 as the plan review below says (new ids from t102), before their wave;
+- Split t091 and t095 as the plan review below says (new ids from t104), before their wave;
   splitting them isn't a scope change.
   Start a task early only when its dependencies are merged and it shares no files with a
   running task.
@@ -187,12 +191,12 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 1 | review (parked: S098 check bug) | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
-| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 (starts after t086 merges: both touch `commands.rs`) | todo (waits for t086's merge) | t086, t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
+| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 | todo | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
 | t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 3 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
 | t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | review (parked: S108 check bug) | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
 | t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 4 | todo | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t103 | Follow-ups to t086: which files in a scenario folder count as its check; a way to fix a check with no known writer; check tasks naming their own new scenarios (decisions 023, 024) | – | todo (Waiting for you) | – | standard | to write after the user decides | `check_writers.rs` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 Plan review (gpt-6.1-sol, 2026-11-01), for the wave leads who write these specs:
@@ -208,6 +212,10 @@ Plan review (gpt-6.1-sol, 2026-11-01), for the wave leads who write these specs:
 - t092, t096: kit text.
 
 ## Known, not fixed
+- Accepted at t086's merge (review, low): hidden checks are read from the first vault project
+  folder only, without a pull (`evals/run` pulls first), so a check only in a duplicate folder or
+  on the remote isn't counted; a hidden check outside git, or renamed and rewritten by more than
+  half in one commit, loses its earlier writers.
 - A round that only reruns checks after a check fix still steps the tier up (t087 went to
   `deep` on 2026-11-01): the failed round's checks counted against the product. `fix-check`
   (t091) should keep the tier when the failure was a check bug.
