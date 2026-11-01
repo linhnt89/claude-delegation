@@ -19,6 +19,7 @@ never per task. Project rules in `.delegate.toml` set minimum tiers and required
 
 ## Sessions
 One session covers one phase: discussion (end with `/distill`), planning, or one wave.
+With a mandate, waves run in the driver's fresh headless sessions, never the user's session.
 End each phase with a handoff in `PLAN.md`: what's next and what waits for the user.
 Then suggest `/clear` or a new session; do this before the user leaves for long, too.
 Open a new session with a short catch-up brief from `PLAN.md` and the last autopilot run
@@ -38,12 +39,21 @@ Write this format in `PLAN.md`; Goal must be non-empty and Gate must name a comm
 - Needs the user: new decisions, scope changes, accepting findings, discarding a feature.
 ```
 
-Commit `PLAN.md` before `delegate autopilot start`. The driver starts a fresh headless lead
-per wave in its own `autopilot` checkout, never merging into the user's checkout.
-Use `delegate autopilot status` to inspect it, `delegate autopilot stop` to stop it, and
-`delegate autopilot land` on return to bring its work to the base branch with the user's approval.
-While the autopilot lock is held, another lead only discusses and writes specs; do not run,
-merge or discard tasks until `delegate autopilot stop` releases it.
+Once `PLAN.md` has a mandate and the user says "go", the lead commits `PLAN.md` and runs
+`delegate autopilot start` itself; do not ask the user to start it or run waves in their session.
+The driver starts a fresh headless lead per wave in its own `autopilot` checkout, present or away.
+Without a mandate, use the non-autopilot workflow below.
+
+Presence is explicit, never inferred from idle time: "I'm off" means run `delegate autopilot away`;
+"back" means run `delegate autopilot here`.
+While the user is present, wait with `delegate wait` for wave ends and parked items, and ask
+parked questions as they come. Pass answers with `delegate autopilot answer <task or item> "…"`,
+not by editing the autopilot branch. Post a short summary after each landed wave.
+While away, questions queue; on return, read the complete run report and use
+`delegate autopilot land` to bring unlanded work to the base branch with the user's approval.
+Use `delegate autopilot status` to inspect the run and `delegate autopilot stop` to stop it.
+While the autopilot lock is held, the user's lead session waits, asks questions, passes answers,
+discusses and writes specs; only the driver's headless lead may run, merge or discard tasks.
 
 A headless lead may run and merge per the mandate, write specs for tasks already in `PLAN.md`,
 and add fix tasks only for breakage it caused. Record small, reversible choices as `proposed`
