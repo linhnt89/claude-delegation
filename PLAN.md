@@ -133,27 +133,21 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
-## Handoff (2026-11-01, autopilot wave 1)
-- Landed on main: t102, t086, t090, t104, t092. `~/.local/bin/delegate` is still the build from
-  before t086: reinstall it (README) before the next run, or `fixes_checks:` isn't applied.
-- `delegate list`: no open tasks.
+## Handoff (2026-11-01, after the t103 discussion)
+- Landed on main: t102, t086, t090, t104, t092, t105. `~/.local/bin/delegate` is still the build
+  from before t086: reinstall it (README) before the next run, or `fixes_checks:` isn't applied.
+- `delegate list`: no open tasks. Autopilot run 4f62f7e2 is stopped and landed.
+- Decisions 028 (what a check is) and 029 (model fallback when families run out) accepted; their
+  tasks are t103, t106, t107 below, outside the mandate.
 - Plan review (gpt-6.1-sol, wave 1) changes applied: t090's spec keeps the autopilot control
   variables for the lead and detached runs and adds the S084–S089 regression line. The t091/t095
   split and the Goal ids are still open (review finding 4): finish the split and list every piece
   id in the Goal before wave 2 and wave 4 start.
-- Next: wave 2 (t091's pieces). t096 is unblocked (t092 merged).
+- Next: wave 2 (t091's pieces) and t096 (unblocked: t092 merged).
 
 ## Waiting for you
-- t103: two medium findings from t086's final review need a decision before a spec:
-  1. Only the file named `check` counts as a check. S060–S065 keep their assertions in
-     `mod.test.tsx` beside it, so an implementer can edit that and merge, and its fixers aren't
-     counted as writers. Should every file in a scenario folder count?
-  2. A check with no `Worker:` trailer in its history (69 of 117 here: lead- or hand-written)
-     can never get a `fixes_checks:` task: no writer family, so no candidate, even with
-     `--worker`. Allow any family with a warning, or another way out?
-  Also to decide: a check-writing task whose Acceptance names the scenario it creates is refused
-  at merge (its new `check` counts as changing its own check). Today's check tasks keep those as
-  review items, so nothing breaks yet.
+- t103, t106, t107: add them to the mandate (a scope change), and where? t106 (scenarios for
+  029) can run beside wave 2; t107 and t103 both change candidate selection, so t107 goes first.
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01; renewed the same day after their answers. -->
@@ -197,12 +191,12 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 | done | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
 | t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 3 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
-| t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | done | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
 | t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 4 | todo | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
-| t103 | Follow-ups to t086: which files in a scenario folder count as its check; a way to fix a check with no known writer; check tasks naming their own new scenarios (decisions 023, 024) | – | todo (Waiting for you) | – | standard | to write after the user decides | `check_writers.rs` |
+| t103 | Decision 028: every file in a scenario folder is its check; a check with no recorded writer gets any family's fix, with a warning; checks new in the task aren't its own | – | todo | t107 | standard | scenarios first (`/evaluate feature`) | `check_writers.rs`, `commands.rs` |
+| t106 | Scenarios for decision 029: `independence = "model"` fallback for implement, review, plan review and check fixes; never the same model; `Independence: model` trailer; hidden scenarios required | – | todo | – | standard | its checks fail on main for the stated reason | `evals/scenarios/` only |
+| t107 | Decision 029: the `independence` setting, model fallback in candidate selection, the trailer, `list` and review show it, hidden scenarios required at merge, `setup` asks | – | todo | t106 | deep | t106's scenarios, `scripts/check` | `config.rs`, `check_writers.rs`, `commands.rs`, `setup` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 Plan review (gpt-6.1-sol, 2026-11-01), for the wave leads who write these specs:
