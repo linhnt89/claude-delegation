@@ -49,7 +49,9 @@ with a `## Property` section, `Judged by: auto`. The user approves the sentences
 A property must be stronger than "returns something", and simpler than the code it checks.
 
 ## 4. Checks
-Write `check` for each agreed scenario and make it executable:
+Delegate a check task: a worker writes `check` for each agreed scenario and makes it
+executable, not the lead. The lead does not write checks or shared setup in `evals/lib/`.
+Give the worker these requirements:
 - Drive the real interface: run the CLI, call the HTTP API, use a browser. Never import the
   product's internals; that tests the code, not the product.
 - Build the starting state in `$EVALS_WORK` with realistic data; put shared setup in
@@ -63,7 +65,8 @@ Write `check` for each agreed scenario and make it executable:
 - Exit 3 for bugs in the check itself (bad setup, invalid generated input, flakiness), not for
   product failures. `evals/run` reports a `check error`, exits 3 when no product check failed,
   and exits 1 if anything failed. Check errors block merge but do not count toward a worker
-  tier step-up; fix the check rather than sending the product to a stronger model.
+  tier step-up; delegate a separate check-fix task with `fixes_checks:` rather than sending
+  the product to a stronger model.
 - `rubric` checks ask a judge model with the criteria from `scenario.md`; `human` checks print
   what to look at and exit 2.
 Set `Status: automated` once `evals/run <id>` gives a real verdict. Pick the tier by cost:
@@ -78,7 +81,7 @@ content, in `jobs.md` under "Hidden". They catch work tailored to the visible ch
 ## 6. Run and baseline
 `evals/run fast` (or `full`, `all`). On a new set, failures are expected: they are the work to
 do, not broken checks. A check that fails for a reason unrelated to the product (setup,
-flakiness) gets fixed now.
+flakiness) gets a separate check-fix task with `fixes_checks:`, not a lead edit.
 
 **Reporting to the user:** they shouldn't need to remember what an id means. Lead with what
 each scenario is about and, for failures, what it means for their users; an id only goes in
@@ -87,8 +90,9 @@ was built (whose answers, which scenarios they approved, what was inferred) so t
 how far to trust it.
 
 ## 7. Bug → scenario
-Write the bug as a scenario (or property) that fails on the current product, confirm it fails
-with `evals/run <id>`, get the user's yes, then fix or delegate the fix. It stays in the set.
+Write the bug as a scenario (or property), get the user's yes, then have a worker write its
+check (step 4). Confirm it fails on the current product for the stated reason with
+`evals/run <id>` before delegating the product fix. It stays in the set.
 
 ## 8. Review of delegated work
 For a task in review, in its worktree: `evals/run <ids from the spec>` and the hidden ones that

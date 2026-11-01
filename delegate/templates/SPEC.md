@@ -2,6 +2,8 @@
 
 <!-- Optional: task ids that wrote these checks; implementers skip their model families. -->
 checks_by:
+<!-- Optional: scenario ids whose checks this task fixes; workers come from their writer families. -->
+fixes_checks:
 <!-- Optional: small | medium | long (default medium); a long task needs more quota runway. -->
 size: medium
 

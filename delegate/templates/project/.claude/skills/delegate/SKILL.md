@@ -77,8 +77,14 @@ listed in `Scope In`.
 - Scope In: list paths in backticks; project rules use them to raise the tier up front.
 - Scope Out: name files parallel tasks are touching.
 - When another task wrote the checks, set `checks_by: t001` (comma-separated ids allowed).
-  The runner skips those tasks' worker families on every implement round, including step-ups.
-  If none remain at that tier, add a candidate of another family to that tier in `workers.toml`.
+  The runner skips those tasks' worker families and every family that changed the Acceptance
+  scenarios' checks (from git's `Worker:` trailers), including hidden checks, on every implement
+  round, including step-ups. If none remain at that tier, add a candidate of another family
+  to that tier in `workers.toml`.
+- Implementers report check bugs; they don't change or fix the checks judging their work.
+  A check fix goes to its own task with `fixes_checks: S001, S002`, naming only the scenarios
+  whose checks it may change. The runner picks from the families that wrote those checks;
+  if none is available in the tier, add a candidate of a writer family there, not a new family.
 - Set `size: small | medium | long` (default medium) when the task is unusually short or long.
   Before running, the runner skips an account whose quota runway is shorter than that size
   needs, so a long task is not handed to a subscription that stops halfway.
@@ -138,8 +144,9 @@ What happens:
 - **Step-up:** after `[defaults] step_up_after` product-failing rounds at the current tier
   (default 1), the next run goes one tier higher, up to deep. A passing round resets the count;
   check errors (exit 3) and unfinished rounds neither count nor reset it. After a check error,
-  fix the broken check or the spec's Acceptance; the next run stays at the same tier. Automatic
-  selection never steps down, even after a pass.
+  delegate the broken check's fix to its own task with `fixes_checks:`, or correct the spec's
+  Acceptance; the next run stays at the same tier. Automatic selection never steps down,
+  even after a pass.
 - `--no-ask` skips the question phase; `--worker harness:model@effort` overrides the config
   for debugging or demos, bypassing family rules; `--dry-run` shows the tier and candidates.
   Do not pin `--worker` for family independence; use `checks_by` instead.
@@ -167,6 +174,11 @@ Read in this order and stop when you can decide:
    (the sandboxed checks can't see hidden scenarios; you can)
 3. `REPORT.md`, and `REVIEW.md` if reviewed
 4. `git diff <base>...task/<id> -- <file>` only for files that matter
+
+A check task's `REPORT.md` must list each check with the failure it gives on the current
+product. Before dependent work starts, you as lead confirm each fails for the reason its
+`scenario.md` states: no setup error, no exit 3. Report check bugs and delegate their fixes
+as above; don't fix checks yourself.
 
 You never commit on a task branch, not even a one-line fix or a doc: everything on it is
 the worker's, so the record shows what each model did. Judge by the spec's Acceptance and
