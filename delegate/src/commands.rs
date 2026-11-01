@@ -321,8 +321,12 @@ fn pick_tier(
         .map(|_| 1_u64)
         .sum();
     let threshold = cfg.defaults.step_up_after;
+    let check_judged_right = fs::read_to_string(t.dir.join("CHECKS.txt"))
+        .is_ok_and(|text| text.contains("Product failure (") && text.contains("check judged right by "));
     if last_checks.is_some_and(|c| c.outcome == CheckOutcome::CheckError) {
         why = "same tier (check error, not a product failure)".into();
+    } else if check_judged_right {
+        why = format!("same tier (check judged right; returning to {tier})");
     } else if failures >= threshold {
         why = if threshold == 1 {
             format!("stepped up after failed checks at {tier}")

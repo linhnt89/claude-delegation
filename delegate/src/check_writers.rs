@@ -145,6 +145,35 @@ fn hidden_history(path: &Path) -> Result<BTreeSet<String>> {
     history_families(&repo, "HEAD", &relative, "a hidden check")
 }
 
+/// Hidden scenario IDs configured for this checkout (from `_evals/hidden`, `EVALS_HIDDEN`, or the vault).
+pub(crate) fn hidden_scenario_ids(ctx: &Ctx) -> BTreeSet<String> {
+    let mut extra_hidden = Vec::new();
+    if let Some(path) = std::env::var_os("EVALS_HIDDEN").filter(|path| !path.is_empty()) {
+        extra_hidden.push(PathBuf::from(path));
+    }
+    if let Ok(Some(project)) = crate::vault::hidden_project(ctx) {
+        extra_hidden.push(project.join("hidden"));
+    }
+    let hidden_roots: BTreeSet<_> = crate::commands::hidden_homes(ctx)
+        .into_iter()
+        .map(|home| home.join("_evals/hidden"))
+        .chain(extra_hidden)
+        .collect();
+    let mut ids = BTreeSet::new();
+    for root in hidden_roots {
+        if let Ok(entries) = fs::read_dir(root.join("scenarios")) {
+            for entry in entries.flatten() {
+                let folder = entry.file_name().to_string_lossy().into_owned();
+                let id = folder.split('-').next().unwrap_or_default();
+                if spec::scenario_id(id) {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
 fn load_checks(ctx: &Ctx, extra_hidden: &[PathBuf]) -> Result<Vec<Check>> {
     let mut checks = scenarios(&ctx.root.join("evals/scenarios"), false)
         .context("reading Acceptance checks; restore readable scenario folders and retry")?;

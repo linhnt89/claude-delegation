@@ -121,8 +121,27 @@ pub fn from_task(text: &str) -> Option<String> {
 
 fn marker_ids(text: &str, marker: &str) -> Vec<String> {
     let mut ids = Vec::new();
+    let mut fence_len: Option<usize> = None;
     for line in text.lines() {
-        if let Some(value) = line.trim().strip_prefix(marker) {
+        let trimmed = line.trim();
+        let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+        if ticks >= 3 {
+            match fence_len {
+                None => {
+                    fence_len = Some(ticks);
+                    continue;
+                }
+                Some(open) if ticks >= open && trimmed[ticks..].trim().is_empty() => {
+                    fence_len = None;
+                    continue;
+                }
+                Some(_) => continue,
+            }
+        }
+        if fence_len.is_some() {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix(marker) {
             for id in value.split(',').map(str::trim).filter(|id| !id.is_empty()) {
                 if !ids.iter().any(|seen| seen == id) {
                     ids.push(id.to_string());
@@ -217,12 +236,12 @@ mod tests {
         assert_eq!(checks_by("checks_by: \n"), Vec::<String>::new());
         assert_eq!(
             checks_by(
-                "# Task t005\nchecks_by: t001, t002\n## Goal\nGoal\n  checks_by: t002, t003, \n"
+                "# Task t005\nchecks_by: t001, t002\n## Goal\nGoal\nchecks_by: t002, t003, \n"
             ),
             ["t001", "t002", "t003"]
         );
         assert_eq!(
-            checks_by("<!-- checks_by: t001 -->\nprose checks_by: t002"),
+            checks_by("<!-- checks_by: t001 -->\nprose checks_by: t002\n  checks_by: t003"),
             Vec::<String>::new()
         );
     }
@@ -230,7 +249,7 @@ mod tests {
     #[test]
     fn reads_fix_markers_and_acceptance_scenarios() {
         assert_eq!(
-            fixes_checks("fixes_checks: S001, S002\n  fixes_checks: S002, P025, \n"),
+            fixes_checks("fixes_checks: S001, S002\nfixes_checks: S002, P025, \n"),
             ["S001", "S002", "P025"]
         );
         assert_eq!(
@@ -239,9 +258,10 @@ mod tests {
         );
         assert_eq!(from_task("no source\n"), None);
         assert_eq!(
-            fixes_checks("prose fixes_checks: S001"),
+            fixes_checks("prose fixes_checks: S001\n  fixes_checks: S002\n    from_task: t009"),
             Vec::<String>::new()
         );
+        assert_eq!(from_task("    from_task: t009\n"), None);
         assert_eq!(
             acceptance_scenarios(
                 "S999\n## Acceptance\n- [ ] `env -u X evals/run S001 S002`\n- [ ] `evals/scenarios/S001-pricing/check`\n- [ ] Hidden P025 passes\n## Other\nS003\n"

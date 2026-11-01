@@ -1,8 +1,8 @@
 //! Building and validating one-command check-fix tasks (`delegate fix-check`).
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
@@ -10,7 +10,7 @@ use crate::check_writers::{self, Check};
 use crate::commands::{self, QuestionPhase, RunArgs};
 use crate::config::{Role, Tier, WorkersConfig};
 use crate::spec;
-use crate::task::{Ctx, Task};
+use crate::task::{Ctx, Task, git};
 
 #[derive(Debug)]
 pub struct FixCheckArgs {
@@ -69,26 +69,96 @@ fn scenarios_in_command(command: &str) -> Vec<String> {
     ids
 }
 
-fn scenario_reported_failed(body: &[String], id: &str) -> bool {
-    let suffix = format!("({id})");
-    let suffix_hidden = format!("({id},");
-    let prefix = format!("({id}):");
-    body.iter().any(|line| {
-        let trimmed = line.trim();
-        let failed_verdict = trimmed.starts_with("FAIL ")
-            || trimmed.starts_with("HUMAN ")
-            || trimmed.starts_with("check error ");
-        failed_verdict
-            && (trimmed.ends_with(&suffix)
-                || trimmed.contains(&suffix_hidden)
-                || trimmed.contains(&prefix))
-    })
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScenarioVerdict {
+    Pass,
+    Fail,
 }
 
+/// Extract `(scenario_id, verdict, hidden)` from a single `evals/run` verdict line.
+/// Only reads the scenario's own parenthesized id (`(S001)` or `(S001, hidden)`),
+/// never words inside the trailing `: <reason>` text.
+fn parse_verdict_line(line: &str) -> Option<(String, ScenarioVerdict, bool)> {
+    let trimmed = line.trim();
+    let verdict = if trimmed.starts_with("FAIL ")
+        || trimmed.starts_with("HUMAN ")
+        || trimmed.starts_with("check error ")
+    {
+        ScenarioVerdict::Fail
+    } else if trimmed.starts_with("pass ")
+        || trimmed.starts_with("skip ")
+        || trimmed.starts_with("no check ")
+    {
+        ScenarioVerdict::Pass
+    } else {
+        return None;
+    };
+    let head = if trimmed.starts_with("check error ") {
+        let idx = trimmed.find("):")?;
+        &trimmed[..=idx]
+    } else {
+        trimmed
+    };
+    let open = head.rfind('(')?;
+    let inside = head.get(open + 1..)?.strip_suffix(')')?;
+    let (id, hidden) = match inside.split_once(',') {
+        Some((id, rest)) => (id.trim(), rest.trim() == "hidden"),
+        None => (inside.trim(), false),
+    };
+    if !spec::scenario_id(id) {
+        return None;
+    }
+    Some((id.to_string(), verdict, hidden))
+}
+
+fn redact_hidden_ids(line: &str, hidden_ids: &BTreeSet<String>) -> String {
+    if hidden_ids.is_empty() {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut token = String::new();
+    let flush = |token: &mut String, out: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        if hidden_ids.contains(token.as_str()) {
+            out.push_str("<hidden>");
+        } else {
+            out.push_str(token);
+        }
+        token.clear();
+    };
+    for ch in line.chars() {
+        if ch.is_ascii_alphanumeric() {
+            token.push(ch);
+        } else {
+            flush(&mut token, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut token, &mut out);
+    out
+}
+
+#[cfg(test)]
 pub(crate) fn failed_scenarios_in_checks(text: &str) -> Vec<String> {
+    failed_scenarios_in_checks_filtered(text, &[], &BTreeSet::new())
+}
+
+fn failed_scenarios_in_checks_filtered(
+    text: &str,
+    visible_ids: &[String],
+    hidden_ids: &BTreeSet<String>,
+) -> Vec<String> {
     let blocks = parse_checks_txt(text);
     let mut failed = Vec::new();
-    let mut record = |id: String| {
+    let mut record = |id: String, hidden: bool| {
+        if hidden || hidden_ids.contains(&id) {
+            return;
+        }
+        if !visible_ids.is_empty() && !visible_ids.iter().any(|v| v == &id) {
+            return;
+        }
         if !failed.contains(&id) {
             failed.push(id);
         }
@@ -100,63 +170,122 @@ pub(crate) fn failed_scenarios_in_checks(text: &str) -> Vec<String> {
         let cmd_ids = scenarios_in_command(&block.command);
         let mut saw_verdicts = false;
         for line in &block.body {
-            let trimmed = line.trim();
-            if trimmed.starts_with("pass ")
-                || trimmed.starts_with("skip ")
-                || trimmed.starts_with("no check ")
-            {
+            if let Some((id, verdict, hidden)) = parse_verdict_line(line) {
                 saw_verdicts = true;
-            }
-            if trimmed.starts_with("FAIL ")
-                || trimmed.starts_with("HUMAN ")
-                || trimmed.starts_with("check error ")
-            {
-                saw_verdicts = true;
-                for word in trimmed.split(|c: char| !c.is_ascii_alphanumeric()) {
-                    if spec::scenario_id(word) {
-                        record(word.to_string());
-                    }
+                if verdict == ScenarioVerdict::Fail {
+                    record(id, hidden);
                 }
             }
         }
-        if cmd_ids.len() == 1 && !saw_verdicts {
-            record(cmd_ids[0].clone());
-        } else if !saw_verdicts {
+        if !saw_verdicts {
             for id in cmd_ids {
-                record(id);
+                record(id, false);
             }
         }
     }
     failed
 }
 
+#[cfg(test)]
 fn failing_output_for_scenarios(text: &str, scenarios: &[String]) -> String {
+    failing_output_for_scenarios_filtered(text, scenarios, &BTreeSet::new())
+}
+
+fn failing_output_for_scenarios_filtered(
+    text: &str,
+    scenarios: &[String],
+    hidden_ids: &BTreeSet<String>,
+) -> String {
+    let mut hidden_ids = hidden_ids.clone();
     let blocks = parse_checks_txt(text);
+    for block in &blocks {
+        for line in &block.body {
+            if let Some((id, _, true)) = parse_verdict_line(line) {
+                hidden_ids.insert(id);
+            }
+        }
+    }
     let mut matched = Vec::new();
     for block in &blocks {
         if block.label == "PASS" {
             continue;
         }
-        let cmd_ids = scenarios_in_command(&block.command);
-        let hits = scenarios.iter().any(|id| {
-            cmd_ids.contains(id)
-                || scenario_reported_failed(&block.body, id)
-                || block.body.iter().any(|l| {
-                    l.split(|c: char| !c.is_ascii_alphanumeric())
-                        .any(|w| w == id)
-                })
-        });
-        if hits {
-            let mut rendered = format!("{}  {}", block.label, block.command);
-            for line in &block.body {
-                rendered.push('\n');
-                rendered.push_str(line);
+        let mut saw_verdicts = false;
+        let mut selected_lines: Vec<String> = Vec::new();
+        let mut header_lines: Vec<String> = Vec::new();
+        let mut footer_lines: Vec<String> = Vec::new();
+        let mut capturing = false;
+        let mut in_footer = false;
+        for line in &block.body {
+            let trimmed = line.trim();
+            if let Some((id, verdict, hidden)) = parse_verdict_line(line) {
+                saw_verdicts = true;
+                in_footer = false;
+                capturing = !hidden
+                    && !hidden_ids.contains(&id)
+                    && verdict == ScenarioVerdict::Fail
+                    && scenarios.iter().any(|s| s == &id);
+                if capturing {
+                    selected_lines.push(redact_hidden_ids(line, &hidden_ids));
+                }
+            } else if saw_verdicts
+                && (trimmed.starts_with("-- ")
+                    || trimmed.starts_with("results: ")
+                    || trimmed.starts_with("(no hidden scenarios found)"))
+            {
+                capturing = false;
+                in_footer = true;
+                footer_lines.push(redact_hidden_ids(line, &hidden_ids));
+            } else if !saw_verdicts {
+                header_lines.push(redact_hidden_ids(line, &hidden_ids));
+            } else if capturing {
+                selected_lines.push(redact_hidden_ids(line, &hidden_ids));
+            } else if in_footer {
+                footer_lines.push(redact_hidden_ids(line, &hidden_ids));
             }
-            matched.push(rendered);
+        }
+        if saw_verdicts {
+            if !selected_lines.is_empty() {
+                let mut rendered = format!(
+                    "{}  {}",
+                    block.label,
+                    redact_hidden_ids(&block.command, &hidden_ids)
+                );
+                for line in header_lines
+                    .iter()
+                    .chain(selected_lines.iter())
+                    .chain(footer_lines.iter())
+                {
+                    rendered.push('\n');
+                    rendered.push_str(line);
+                }
+                matched.push(rendered);
+            }
+        } else {
+            let cmd_ids = scenarios_in_command(&block.command);
+            let hits = scenarios.iter().any(|id| {
+                cmd_ids.contains(id)
+                    || block.body.iter().any(|l| {
+                        l.split(|c: char| !c.is_ascii_alphanumeric())
+                            .any(|w| w == id)
+                    })
+            });
+            if hits {
+                let mut rendered = format!(
+                    "{}  {}",
+                    block.label,
+                    redact_hidden_ids(&block.command, &hidden_ids)
+                );
+                for line in &block.body {
+                    rendered.push('\n');
+                    rendered.push_str(&redact_hidden_ids(line, &hidden_ids));
+                }
+                matched.push(rendered);
+            }
         }
     }
     if matched.is_empty() {
-        text.trim_end().to_string()
+        redact_hidden_ids(text.trim_end(), &hidden_ids)
     } else {
         matched.join("\n")
     }
@@ -189,17 +318,57 @@ pub(crate) fn format_check_output(command: &str, out: &str) -> Vec<String> {
     }
 }
 
-pub(crate) fn next_task_id(dhome: &Path) -> String {
-    let max = fs::read_dir(dhome)
+fn parse_task_number(s: &str) -> Option<u32> {
+    s.trim().strip_prefix('t')?.parse::<u32>().ok()
+}
+
+fn plan_table_task_numbers(plan_text: &str) -> Vec<u32> {
+    let mut nums = Vec::new();
+    for section_name in ["Next", "Tasks"] {
+        for line in spec::section(plan_text, section_name).lines() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with('|') {
+                continue;
+            }
+            for cell in trimmed.split('|') {
+                if let Some(n) = parse_task_number(cell) {
+                    nums.push(n);
+                }
+            }
+        }
+    }
+    nums
+}
+
+pub(crate) fn next_task_id(ctx: &Ctx) -> String {
+    let mut max = fs::read_dir(&ctx.dhome)
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            name.strip_prefix('t')?.parse::<u32>().ok()
-        })
+        .filter_map(|entry| parse_task_number(&entry.file_name().to_string_lossy()))
         .max()
         .unwrap_or(0);
+    if let Ok(refs) = git(
+        &ctx.root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/task/",
+        ],
+    ) {
+        for line in refs.lines() {
+            if let Some(id) = line.strip_prefix("task/")
+                && let Some(n) = parse_task_number(id)
+            {
+                max = max.max(n);
+            }
+        }
+    }
+    if let Ok(plan) = fs::read_to_string(ctx.root.join("PLAN.md")) {
+        for n in plan_table_task_numbers(&plan) {
+            max = max.max(n);
+        }
+    }
     let next = max + 1;
     if next < 1000 {
         format!("t{next:03}")
@@ -217,6 +386,14 @@ fn check_problems_from_report(report_text: &str) -> String {
     }
 }
 
+fn fence_for(text: &str) -> String {
+    let mut ticks = 3;
+    while text.contains(&"`".repeat(ticks)) {
+        ticks += 1;
+    }
+    "`".repeat(ticks)
+}
+
 fn build_fix_spec(
     id: &str,
     from_id: &str,
@@ -228,6 +405,12 @@ fn build_fix_spec(
 ) -> String {
     let scenario_list = scenarios.join(", ");
     let run_list = scenarios.join(" ");
+    let reason = reason
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     let scope_in = checks_map
         .iter()
         .map(|(_, folder, _)| format!("`evals/scenarios/{folder}/check`"))
@@ -256,7 +439,7 @@ fn build_fix_spec(
         "Fix {scenario_list}'s check (flagged from {from_id}): {reason}\n"
     );
     let _ = writeln!(spec, "## Lead's reason");
-    let _ = writeln!(spec, "{reason}\n");
+    let _ = writeln!(spec, "  {reason}\n");
     let _ = writeln!(spec, "## Context (read these, nothing more)");
     let _ = writeln!(spec, "- `AGENTS.md`");
     let _ = writeln!(spec, "{context_items}\n");
@@ -267,22 +450,33 @@ fn build_fix_spec(
         "- Out: product files and every check not listed in `fixes_checks:`\n"
     );
     for (sc_id, folder, sc_text) in checks_map {
+        let fence = fence_for(sc_text);
         let _ = writeln!(
             spec,
             "## Scenario {sc_id} (`evals/scenarios/{folder}/scenario.md`)"
         );
-        let _ = writeln!(spec, "{}\n", sc_text.trim_end());
+        let _ = writeln!(spec, "{fence}markdown\n{}\n{fence}\n", sc_text.trim_end());
     }
+    let out_fence = fence_for(failing_output);
     let _ = writeln!(
         spec,
         "## Failing output from {from_id}'s `CHECKS.txt`"
     );
-    let _ = writeln!(spec, "{}\n", failing_output.trim_end());
+    let _ = writeln!(
+        spec,
+        "{out_fence}text\n{}\n{out_fence}\n",
+        failing_output.trim_end()
+    );
+    let prob_fence = fence_for(check_problems);
     let _ = writeln!(
         spec,
         "## Check problems from the implementer's REPORT.md on {from_id} (the work being judged)"
     );
-    let _ = writeln!(spec, "{check_problems}\n");
+    let _ = writeln!(
+        spec,
+        "{prob_fence}text\n{}\n{prob_fence}\n",
+        check_problems.trim_end()
+    );
     let _ = writeln!(spec, "## Contract");
     let _ = writeln!(
         spec,
@@ -360,7 +554,11 @@ pub fn fix_check(ctx: &Ctx, args: &FixCheckArgs) -> Result<()> {
             source.id
         )
     })?;
-    let failed_in_round = failed_scenarios_in_checks(&checks_text);
+    let visible_checks = check_writers::scenarios(&ctx.root.join("evals/scenarios"), false)?;
+    let visible_ids: Vec<String> = visible_checks.iter().map(|c| c.id.clone()).collect();
+    let hidden_ids = check_writers::hidden_scenario_ids(ctx);
+    let failed_in_round =
+        failed_scenarios_in_checks_filtered(&checks_text, &visible_ids, &hidden_ids);
     for sc in &requested {
         if !failed_in_round.contains(sc) {
             let failed_list = if failed_in_round.is_empty() {
@@ -377,7 +575,6 @@ pub fn fix_check(ctx: &Ctx, args: &FixCheckArgs) -> Result<()> {
         }
     }
 
-    let visible_checks = check_writers::scenarios(&ctx.root.join("evals/scenarios"), false)?;
     let mut checks_map: Vec<(String, String, String)> = Vec::new();
     for sc in &requested {
         let Some(found): Option<&Check> = visible_checks.iter().find(|c| &c.id == sc) else {
@@ -402,9 +599,11 @@ pub fn fix_check(ctx: &Ctx, args: &FixCheckArgs) -> Result<()> {
     let report_text = fs::read_to_string(source.dir.join("REPORT.md"))
         .or_else(|_| fs::read_to_string(source.wt.join(".task/REPORT.md")))
         .unwrap_or_default();
-    let check_problems = check_problems_from_report(&report_text);
-    let failing_output = failing_output_for_scenarios(&checks_text, &requested);
-    let new_id = next_task_id(&ctx.dhome);
+    let check_problems =
+        redact_hidden_ids(&check_problems_from_report(&report_text), &hidden_ids);
+    let failing_output =
+        failing_output_for_scenarios_filtered(&checks_text, &requested, &hidden_ids);
+    let new_id = next_task_id(ctx);
     let spec_text = build_fix_spec(
         &new_id,
         &source.id,
@@ -427,18 +626,6 @@ pub fn fix_check(ctx: &Ctx, args: &FixCheckArgs) -> Result<()> {
         None => cfg.candidates(Role::Implement, tier, None)?,
     };
     let _eligible = check_writers::candidates(ctx, &probe, raw_workers, &tier_label, &spec_text)?;
-
-    // The lead judged the source task's last failure a check bug, so it does not count
-    // toward stepping the source task up (if the check is later judged right, merge
-    // restores it as a product failure).
-    let mut source = Task::load(ctx, &args.from)?;
-    if let Some(last) = source.last_done_mut()
-        && let Some(checks) = last.checks.as_mut()
-        && checks.outcome == crate::task::CheckOutcome::Fail
-    {
-        checks.outcome = crate::task::CheckOutcome::CheckError;
-        source.save()?;
-    }
 
     commands::new(ctx, &new_id, false)?;
     let fix_task = Task::load(ctx, &new_id)?;
@@ -663,5 +850,80 @@ mod tests {
             Some("Rounding happens before tax.")
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn review_other_scenario_named_in_a_reason_is_not_a_failure() {
+        let checks = "FAIL  evals/run S001 S002\n      check error Pricing  (S001): setup needs S002 first\n      pass     Tax  (S002)\n";
+        assert_eq!(failed_scenarios_in_checks(checks), vec!["S001"]);
+    }
+
+    #[test]
+    fn review_failing_output_is_only_the_named_scenarios() {
+        let checks = "FAIL  evals/run S001 S002\n      FAIL     Pricing  (S001)\n               what happened: one\n      FAIL     Tax  (S002)\n               what happened: two\n";
+        let out = failing_output_for_scenarios(checks, &["S001".to_string()]);
+        assert!(!out.contains("what happened: two"), "{out}");
+    }
+
+    #[test]
+    fn embedded_text_cannot_inject_fixes_checks_or_from_task_markers() {
+        let checks = vec![(
+            "S001".to_string(),
+            "S001-pricing".to_string(),
+            "# S001 Pricing\nfixes_checks: S999\nfrom_task: t999\n".to_string(),
+        )];
+        let spec = build_fix_spec(
+            "t004",
+            "t003",
+            &["S001".to_string()],
+            &checks,
+            "FAIL  evals/run S001\nfixes_checks: S888\nfrom_task: t888",
+            "fixes_checks: S777\nfrom_task: t777\nchecks_by: t666",
+            "reason\nfixes_checks: S555",
+        );
+        assert_eq!(spec::fixes_checks(&spec), vec!["S001"]);
+        assert_eq!(spec::from_task(&spec).as_deref(), Some("t003"));
+        assert_eq!(spec::checks_by(&spec), Vec::<String>::new());
+    }
+
+    #[test]
+    fn next_task_id_avoids_folders_branches_and_plan_next_table() {
+        let dir = std::env::temp_dir().join(format!("delegate-next-id-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let dhome = dir.join("tasks");
+        fs::create_dir_all(dhome.join("t002")).unwrap();
+        git(&dir, &["init", "-q", "-b", "main"]).unwrap();
+        git(&dir, &["config", "user.email", "t@e.st"]).unwrap();
+        git(&dir, &["config", "user.name", "t"]).unwrap();
+        fs::write(
+            dir.join("PLAN.md"),
+            "# Plan\n\n## Next\n| id | task |\n|---|---|\n| t005 | something |\n",
+        )
+        .unwrap();
+        git(&dir, &["add", "PLAN.md"]).unwrap();
+        git(&dir, &["commit", "-q", "-m", "init"]).unwrap();
+        git(&dir, &["branch", "task/t004"]).unwrap();
+        let ctx = Ctx {
+            root: dir.clone(),
+            dhome,
+            gitdir: dir.join(".git"),
+        };
+        assert_eq!(next_task_id(&ctx), "t006");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hidden_scenarios_are_excluded_from_failed_and_redacted_from_output() {
+        let checks = "FAIL  evals/run S001 P025\n      FAIL     Pricing  (S001)\n               what happened: collides with P025\n      FAIL     Hidden check  (P025, hidden)\n               what happened: secret\n";
+        let visible = vec!["S001".to_string(), "S002".to_string()];
+        let hidden = BTreeSet::from(["P025".to_string()]);
+        assert_eq!(
+            failed_scenarios_in_checks_filtered(checks, &visible, &hidden),
+            vec!["S001"]
+        );
+        let out = failing_output_for_scenarios_filtered(checks, &["S001".to_string()], &hidden);
+        assert!(!out.contains("P025"), "{out}");
+        assert!(!out.contains("secret"), "{out}");
+        assert!(out.contains("Pricing  (S001)"), "{out}");
     }
 }
