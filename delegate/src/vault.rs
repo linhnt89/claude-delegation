@@ -953,6 +953,23 @@ impl Vault {
     }
 }
 
+/// Read-only lookup for runner policy; never sync, repair, or print private names.
+pub(crate) fn hidden_project(ctx: &Ctx) -> Result<Option<PathBuf>> {
+    if sandboxed() {
+        return Ok(None);
+    }
+    let Some(id) = read_project_id(ctx)? else {
+        return Ok(None);
+    };
+    let data = data_dir();
+    if !data.join("vault/.git").is_dir() {
+        bail!(
+            "hidden checks' writers couldn't be found: vault missing; connect the vault with delegate setup --vault <url>"
+        );
+    }
+    Vault::at(&data).find_project(&id, false)
+}
+
 fn where_at(ctx: &Ctx, data: &Path) -> Result<()> {
     where_mode(ctx, data, false)
 }

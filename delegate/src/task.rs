@@ -373,10 +373,12 @@ impl Task {
 
     pub fn changed_paths(&self, ctx: &Ctx) -> Result<Vec<String>> {
         let range = format!("{}...{}", self.base(ctx)?, self.branch);
-        Ok(git(&ctx.root, &["diff", "--name-only", &range])?
-            .lines()
-            .map(str::to_string)
-            .collect())
+        Ok(
+            git(&ctx.root, &["diff", "--no-renames", "--name-only", &range])?
+                .lines()
+                .map(str::to_string)
+                .collect(),
+        )
     }
 
     pub fn last_round(&self) -> Option<&Round> {

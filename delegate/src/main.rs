@@ -1,6 +1,7 @@
 //! Delegate task specs to worker models by role and tier. Task state never lives in the repo.
 
 mod autopilot;
+mod check_writers;
 mod checkout;
 mod commands;
 mod config;

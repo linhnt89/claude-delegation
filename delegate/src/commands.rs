@@ -24,7 +24,7 @@ pub const PRUNE_TEMPLATE: &str = include_str!("../templates/PRUNE.md");
 const REPORT_TEMPLATE: &str = include_str!("../templates/REPORT.md");
 const CHECK_TIMEOUT: Duration = Duration::from_mins(15);
 
-fn hidden_homes(ctx: &Ctx) -> Vec<std::path::PathBuf> {
+pub(crate) fn hidden_homes(ctx: &Ctx) -> Vec<std::path::PathBuf> {
     let mut paths = vec![ctx.dhome.clone()];
     // Until t023 migrates old homes, they can still contain private scenarios.
     if let Some(main) = ctx.gitdir.parent() {
@@ -490,40 +490,13 @@ fn implement_candidates(
     tier: Tier,
     spec_text: &str,
 ) -> Result<Vec<Worker>> {
-    let mut workers = cfg.candidates(Role::Implement, tier, None)?;
-    let mut excluded = Vec::new();
-    for id in spec::checks_by(spec_text) {
-        let authors = t.check_writers(ctx, &id)?;
-        if authors.is_empty() {
-            println!(
-                "can't tell who wrote {id}'s checks (no Worker trailer on its merge); running without that rule"
-            );
-        }
-        for author in authors {
-            let family = author.family();
-            if !excluded.iter().any(|(seen, _)| seen == &family) {
-                println!("skipping the {family} family: {id} wrote its checks");
-                excluded.push((family, id.clone()));
-            }
-        }
-    }
-    workers.retain(|worker| {
-        !excluded
-            .iter()
-            .any(|(family, _)| *family == worker.family())
-    });
-    if workers.is_empty() {
-        let reasons = excluded
-            .iter()
-            .map(|(family, id)| format!("{family} family ({id} wrote its checks)"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        bail!(
-            "no [implement].{tier} candidate remains after excluding {reasons}; add a candidate of another family to [implement].{tier} in {}",
-            workers_config_path().display()
-        );
-    }
-    Ok(workers)
+    crate::check_writers::candidates(
+        ctx,
+        t,
+        cfg.candidates(Role::Implement, tier, None)?,
+        &tier.to_string(),
+        spec_text,
+    )
 }
 
 /// Best-effort advice only: another task's missing metadata must not block a run.
@@ -627,6 +600,15 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         (Some(tier), why, workers)
     };
     let tier_label = tier.map_or_else(|| "custom".into(), |x| x.to_string());
+    // An explicit debug worker must not bypass the check-fix writer requirement.
+    let workers = if a.worker.is_some()
+        && role == Role::Implement
+        && !spec::fixes_checks(&spec_text).is_empty()
+    {
+        crate::check_writers::candidates(ctx, &t, workers, &tier_label, &spec_text)?
+    } else {
+        workers
+    };
     println!(
         "task {}: {} @ {tier_label} ({why}), question phase: {}",
         t.id,
@@ -1588,6 +1570,18 @@ pub(crate) fn merge_readiness(
             );
         }
 
+        let spec_text = t.spec_text()?;
+        let helpers: Vec<_> = paths
+            .iter()
+            .filter(|path| path.starts_with("evals/lib/"))
+            .cloned()
+            .collect();
+        if !helpers.is_empty() {
+            warnings.push(format!(
+                "warning: shared check helpers changed: {}",
+                helpers.join(", ")
+            ));
+        }
         let head = t.head(ctx)?;
         let mut block = |message: String, command: String| {
             if problems.is_empty() {
@@ -1595,6 +1589,18 @@ pub(crate) fn merge_readiness(
             }
             problems.push(message);
         };
+        let forbidden = crate::check_writers::forbidden_changes(&spec_text, &paths);
+        if !forbidden.is_empty() {
+            block(
+                format!(
+                    "changed own Acceptance checks: {}; undo these changes, report check bugs in REPORT.md, and fix them in a separate task with fixes_checks:",
+                    forbidden.join(", ")
+                ),
+                format!(
+                    "undo the check changes in task {id}; report the bug in REPORT.md for a separate check-fix task"
+                ),
+            );
+        }
         match &implemented.checks {
             Some(c) if c.commit != head => block(
                 "acceptance checks haven't run on the final commit (run: delegate check)".into(),
@@ -2288,6 +2294,55 @@ mod tests {
         }];
         t.save()?;
         Ok((repo, ctx, t))
+    }
+
+    #[test]
+    fn merge_warns_for_shared_helpers_without_blocking() -> Result<()> {
+        let (_repo, ctx, mut task) = merge_fixture()?;
+        fs::create_dir_all(task.wt.join("evals/lib"))?;
+        fs::write(task.wt.join("evals/lib/helper.sh"), "# helper\n")?;
+        git(&task.wt, &["add", "evals/lib/helper.sh"])?;
+        git(&task.wt, &["commit", "-qm", "add helper"])?;
+        task.state.rounds[0].checks.as_mut().unwrap().commit = task.head(&ctx)?;
+        let readiness = merge_readiness(&ctx, &task, false, None);
+        assert_eq!(readiness.blockers, Vec::<String>::new());
+        assert_eq!(
+            readiness.warnings,
+            ["warning: shared check helpers changed: evals/lib/helper.sh"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_refuses_deleted_or_renamed_own_check_but_allows_a_fix() -> Result<()> {
+        let (_repo, ctx, mut task) = merge_fixture()?;
+        let check = "evals/scenarios/S001-pricing/check";
+        fs::create_dir_all(ctx.root.join("evals/scenarios/S001-pricing"))?;
+        fs::write(ctx.root.join(check), "# check\n")?;
+        git(&ctx.root, &["add", "evals"])?;
+        git(&ctx.root, &["commit", "-qm", "base check"])?;
+        git(&task.wt, &["merge", "-q", "main"])?;
+        git(
+            &task.wt,
+            &["mv", check, "evals/scenarios/S001-pricing/renamed"],
+        )?;
+        git(&task.wt, &["commit", "-qm", "rename own check"])?;
+        fs::write(&task.spec, "## Acceptance\n- [ ] `evals/run S001`\n")?;
+        task.state.rounds[0].checks.as_mut().unwrap().commit = task.head(&ctx)?;
+        assert!(task.changed_paths(&ctx)?.contains(&check.to_string()));
+        let readiness = merge_readiness(&ctx, &task, false, None);
+        let refusal = readiness.refusal.context("rename must be refused")?;
+        assert!(refusal.contains(check), "{refusal}");
+        assert!(refusal.contains("REPORT.md"), "{refusal}");
+        fs::write(
+            &task.spec,
+            "fixes_checks: S001\n## Acceptance\n- [ ] `evals/run S001`\n",
+        )?;
+        assert_eq!(
+            merge_readiness(&ctx, &task, false, None).blockers,
+            Vec::<String>::new()
+        );
+        Ok(())
     }
 
     #[test]
