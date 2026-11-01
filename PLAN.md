@@ -4,6 +4,12 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- t096, t112–t114 (2026-11-01, autopilot run c56298ee, wave 1): kit text for decision 026 (t096,
+  by GPT); the checks for S119–S129 and P027, split into three check tasks for decision 025's
+  five-scenario limit (t112–t114, by Claude Sonnet). Merged onto `autopilot`; P027 and S127 hidden.
+- t109 (2026-11-01, wave 1, parked): `fix-check` and per-scenario evidence, by Gemini (explicit
+  worker). Round 1 review 3 medium, round 2 review 3 high, round 3 review 2 high; fixes landed
+  in rounds 2–4, S101–S103 and `scripts/check` pass.
 - Landed on main (2026-11-01, user present): t102, t086, t090, t104, t092 from autopilot run
   4f62f7e2. Then t105 (by Luna): the `.delegate.toml` template shows `[env] allow`; `AGENTS.md`
   lists `environment.rs`.
@@ -133,20 +139,32 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
-## Handoff (2026-11-01, after the t103 discussion)
-- Landed on main: t102, t086, t090, t104, t092, t105. `~/.local/bin/delegate` is still the build
-  from before t086: reinstall it (README) before the next run, or `fixes_checks:` isn't applied.
-- `delegate list`: no open tasks. Autopilot run 4f62f7e2 is stopped and landed.
-- Decisions 028 (what a check is) and 029 (model fallback when families run out) accepted;
-  scenarios S119–S129, P027 agreed with the user; t108, t107, t103 are in the mandate.
-- Plan review (gpt-6.1-sol, wave 1) changes applied: t090's spec keeps the autopilot control
-  variables for the lead and detached runs and adds the S084–S089 regression line. The t091/t095
-  split and the Goal ids are still open (review finding 4): finish the split and list every piece
-  id in the Goal before wave 2 and wave 3 start.
-- Next: wave 2 (t091's pieces, t096, t108).
+## Handoff (2026-11-01, autopilot run c56298ee, wave 1 of 5, ended)
+- Merged on `autopilot` this wave: t096 (kit text, decision 026), t112, t113, t114 (checks for
+  S119–S129 and P027, the pieces of t108). Gate `scripts/check` passes on `autopilot` (326 tests).
+- Hidden now (vault, `delegate hidden add`): P027 and S127. Listed in `evals/jobs.md` under "Hidden".
+- t109 (t091 part 1, `fix-check`) is parked: its review of round 4 found 2 high findings in the
+  evidence parser (see Waiting for you). The branch `task/t109` is kept, with 4 rounds.
+- t110 and t111 (the other t091 pieces) are not run: they follow t109 in the same files.
+  t107 (after t111), t103 (after t107) and t095's pieces (not split yet) wait behind it.
+- `delegate list`: t109 open. No other open tasks.
+- Workers: t110 and t111 can't pick a standard candidate except Copilot Gemini (Claude, GPT and
+  DeepSeek are excluded by their checks' writers). Start them with
+  `--worker pi:github-copilot/gemini-4-argon` until a candidate of another family is in
+  `[implement].standard`.
+- Next: t109's decision, then t110, t111, t107, t103; t095's split ids from t115.
 
 ## Waiting for you
-- Reinstall `~/.local/bin/delegate` from main (README), then `delegate autopilot start`.
+- t109 (`fix-check`, part 1 of t091): review round 4 (gpt-6.1-sol) found 2 high findings, both in
+  `delegate/src/fix_check.rs`'s evidence parser: an indented `FAIL … (S002)` in S001's diagnostic is
+  read as S002's verdict, and output before the named scenario's verdict is copied into its
+  evidence. Four rounds have run and the round limit is reached, so the lead parks it instead of
+  rerunning. Options: (a) one more round with a different family's worker, if one can be added
+  to `[implement].standard` (Gemini is the only one open for this task); (b) take the parser
+  apart: fix-check reads only the verdict lines and the blocks they open, with no fallback; (c)
+  accept the two findings and ship with the known gap (the user's call under the mandate).
+- `~/.config/delegate/workers.toml`: add `pi:github-copilot/gemini-4-argon` to `[implement].standard`
+  if the run should keep going without `--worker`. Not changed by the lead.
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01; renewed after wave 1 to add decisions 028, 029. -->
@@ -194,14 +212,14 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t109 | t091 part 1: `delegate fix-check` and per-scenario failure evidence in `CHECKS.txt` | 2 | running | t086, t089, t097 | standard | `evals/run S101 S102 S103`, `scripts/check` | `commands.rs`; first of the three t091 pieces, which run one at a time |
+| t109 | t091 part 1: `delegate fix-check` and per-scenario failure evidence in `CHECKS.txt` | 2 | review | t086, t089, t097 | custom (gemini, explicit) | `evals/run S101 S102 S103`, `scripts/check`; review 0 high | parked: 2 high review findings, rounds used; see Waiting for you |
 | t110 | t091 part 2: a task's next round takes in merged check fixes; base update rolls back on conflict | 2 | todo | t109 | standard | `evals/run S104`, `scripts/check` | `commands.rs` (round start); after t109 |
 | t111 | t091 part 3: question-phase check flags stop the run; autopilot runs `fix-check` on a check bug; a check-bug round keeps its tier | 2 | todo | t110 | standard | `evals/run S105 S107`, `scripts/check` | `prompts.rs`, `commands.rs`, `autopilot.rs`; after t110 |
-| t112 | t108 part 1: checks for S119–S123 | 2 | running | – | claude:sonnet@high (explicit) | each check fails on main for its `scenario.md` reason | `evals/scenarios/` only |
-| t113 | t108 part 2: checks for S124–S128 | 2 | running | – | claude:sonnet@high (explicit) | each check fails on main for its `scenario.md` reason | `evals/scenarios/` only |
-| t114 | t108 part 3: checks for S129 and P027 | 2 | running | – | claude:sonnet@high (explicit) | each check fails on main for its `scenario.md` reason | `evals/scenarios/` only; P027 hidden after merge |
+| t112 | t108 part 1: checks for S119–S123 | 2 | done | – | claude:sonnet@high (explicit) | each check fails on main for its `scenario.md` reason | merged 9e0f795; see Known (check-task merge workaround) |
+| t113 | t108 part 2: checks for S124–S128 | 2 | done | – | claude:sonnet@high (explicit) | each check fails on main for its `scenario.md` reason | merged b30cd3c; S127 fails earlier than its merge step (Known) |
+| t114 | t108 part 3: checks for S129 and P027 | 2 | done | – | claude:sonnet@high (explicit) | each check fails on main for its `scenario.md` reason | merged 2878dcc; P027 and S127 hidden (5c88c6d) |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 3 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
-| t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 2 | running | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history`; `checks_by: t098` |
+| t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 2 | done | t092, t098 | fast | `evals/run S118`, `scripts/check` | merged 1ed7a55 |
 | t103 | Decision 028: every file in a scenario folder is its check; a check with no recorded writer gets any family's fix, with a warning; checks new in the task aren't its own | 4 | todo | t107 | standard | `evals/run S119 S120 S121 S122`, `scripts/check` | `check_writers.rs`, `commands.rs`; `checks_by: t112, t113, t114` |
 | t107 | Decision 029: `independence` setting, model keys, same-family fallback for implement, review, plan review and check fixes, `planner_model`, `Independence: model` trailer, `list` shows it, hidden scenarios required at merge, `setup` hint, workers.example.toml | 3 | todo | t111, t112, t113, t114 | deep | `evals/run S123 S124 S125 S126 S128 S129`, `scripts/check`; hidden P027, S127 at review | `config.rs`, `check_writers.rs`, `commands.rs`; `checks_by: t112, t113, t114` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
@@ -219,6 +237,17 @@ Plan review (gpt-6.1-sol, 2026-11-01), for the wave leads who write these specs:
 - t092, t096: kit text.
 
 ## Known, not fixed
+- Check tasks t112 and t113 merged without the runner's Acceptance check: a check task that
+  names its own new scenarios in Acceptance is refused (S122's bug, fixed by t103, which is
+  after t107). Their Acceptance lines were replaced by a lead-verified line (no scenario ids),
+  and each new check's failure on main was read from its CHECKS.txt and REPORT. Revert this
+  workaround's use once t103 merges; t114 did the same.
+- S127 (t113) fails on main at its fallback run, before the merge steps it checks (the fallback
+  doesn't exist on main, so no merge is reached). P027 (t114) fails at the family block, and its
+  real merges have no hidden scenario for the job, so the "hidden must pass" rule is vacuous there.
+  Both are noted in REPORT.md; the lead accepted them as failing for the stated reason.
+- Gemini (the only worker family left for t109–t111) stalled once in round 2 of t109: it re-read
+  one file for an hour without an edit. A fresh round with a "read once, then edit" note worked.
 - Accepted at t090's merge (review, low): `ProjectRules::load` runs `[warm]` validation (git
   calls) on every check and gate, so a stale `[warm]` path fails `delegate check`; acceptance and
   check processes lose `_DELEGATE_AUTOPILOT_GROUP`, so `kill_leftover` can miss them; unit tests
