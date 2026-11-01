@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# S083: autopilot runs a two-wave plan, keeps the user's checkout untouched, reports and
-# notifies once, and lands with one command. It also refuses a bad mandate, enforces the
-# round limit, and names proposed decisions in the run report. Decision 019.
+# S083: the user starts autopilot and says away; it runs a two-wave plan, keeps the user's
+# checkout untouched, reports and notifies once, and lands with one command. It also refuses a
+# bad mandate, enforces the round limit, and names proposed decisions in the run report.
+# Decisions 019, 026.
 . "$EVALS_LIB/common.sh"
 . "$EVALS_LIB/autopilot.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
 trap ap_cleanup EXIT
 ap_setup
 ap_specs t001 t002 t003 t004 t005
@@ -72,6 +74,9 @@ D
 wave() {
   case "${DELEGATE_AUTOPILOT_WAVE:-1}" in
     1)
+      # Hold wave 1 until the check has said "away", so nothing can land before it does.
+      lead_flag wave1-started
+      lead_wait release-1 || true
       proposed_once
       lead_run t005
       lead_merge t005
@@ -100,6 +105,10 @@ LEAD
 
 before="$(ap_snapshot)"
 ap_start
+wait_until 60 test -f "$EVALS_WORK/flags/wave1-started" || ap_status_fail "wave 1 never started"
+d autopilot away
+[ "$RC" -eq 0 ] || fail "delegate autopilot away exited $RC: $OUT"
+flag release-1
 ap_wait_stopped 120 || ap_status_fail "did not stop after the plan's two waves"
 ap_same_checkout "$before" "the user's checkout or base branch changed before land"
 

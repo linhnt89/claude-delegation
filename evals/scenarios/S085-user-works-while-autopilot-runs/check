@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # S085: while autopilot runs wave 1, the user keeps working in the main checkout and a
-# second lead's run is refused by the autopilot lock. Decision 019.
+# second lead's run is refused by the autopilot lock. Decisions 019, 026.
 . "$EVALS_LIB/common.sh"
 . "$EVALS_LIB/autopilot.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
 trap ap_cleanup EXIT
 ap_setup
 # Existing behaviour: writing and filling a spec works today. The autopilot part below is new.
@@ -19,7 +20,11 @@ wait_until 30 test -f "$EVALS_WORK/flags/t001-started" ||
   ap_status_fail "wave 1 never started t001"
 [ "$(ap_get running)" = true ] || ap_status_fail "autopilot isn't running while wave 1's worker is slow"
 
-# The user, present, in another session in the main checkout.
+# The user says away right away; wave 1 can't finish before that, its worker is waiting.
+d autopilot away
+[ "$RC" -eq 0 ] || fail "delegate autopilot away exited $RC: $OUT"
+
+# The user, in another session in the main checkout.
 printf '\n# my notes while autopilot runs\n' >>"$PROJ/README.md"
 ap_specs t005
 [ -f "$DHOME/t005/SPEC.md" ] || fail "writing the t005 spec while autopilot ran did not work"

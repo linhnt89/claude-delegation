@@ -154,10 +154,18 @@ printf '\n$ delegate upgrade  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/trans
 missing="$(python3 "$EVALS_WORK/check_text.py" "$PROJ" 2>&1)" || \
   fail "delegate upgrade did not bring the check review to the previous kit's project: $missing"
 
-d new t001
+# The template a worker sees is the one the runner writes into the worktree's .task/ when a
+# round runs; the stand-in worker records .task/ on every call, so read it from there.
+rm -rf "$PROJ"
+setup_project
+simple_workers standard gpt-good gpt-good gpt-good
+write_spec t001 "Add a helper" "Add a helper." "true"
 [ "$RC" -eq 0 ] || fail "setup: delegate new failed: $(echo "$OUT" | tr '\n' ' ')"
-template="$DHOME/t001/REPORT.template.md"
-[ -f "$template" ] || fail "delegate new did not install .task/REPORT.template.md"
+d run t001 --no-ask
+first_call="$(calls_where work | head -1)"
+[ -n "$first_call" ] || fail "setup: the round did not start a worker: $(echo "$OUT" | tr '\n' ' ')"
+template="$HOME/.cache/stub/calls/$first_call/task/REPORT.template.md"
+[ -f "$template" ] || fail "the runner did not put .task/REPORT.template.md where a worker sees it"
 missing="$(python3 "$EVALS_WORK/check_text.py" --report-template "$template" 2>&1)" || \
   fail "the REPORT template has no place for a check task's list of checks and their failures: $missing"
 

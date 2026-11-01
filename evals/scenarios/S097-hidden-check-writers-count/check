@@ -103,8 +103,10 @@ for secret in S002 S003 S002-marker S003-marker; do
   echo "$OUT" | grep -qF -- "$secret" \
     && fail "the run named hidden material ($secret): $(echo "$OUT" | tr '\n' ' ')"
 done
+# An empty file is fine: a sandboxed worker that can read nothing hidden writes one.
+git -C "$PROJ" cat-file -e task/t003:seen-hidden.txt 2>/dev/null \
+  || fail "setup: the worker's seen-hidden.txt wasn't committed"
 seen="$(git -C "$PROJ" show task/t003:seen-hidden.txt 2>/dev/null)"
-[ -n "$seen" ] || fail "setup: the worker's seen-hidden.txt wasn't committed"
 for secret in S002 S003 S002-marker S003-marker; do
   echo "$seen" | grep -qF -- "$secret" && fail "the worker could read hidden material ($secret)"
 done
