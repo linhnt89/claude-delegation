@@ -1988,6 +1988,11 @@ mod tests {
         }
     }
 
+    fn future_utc_date_only() -> String {
+        let future = format_rfc3339(now_seconds() + 7 * ONE_DAY);
+        future[..10].to_string()
+    }
+
     #[test]
     fn pi_api_key_entries_use_the_key_without_exchange() {
         let key = json!({ "type": "api_key", "key": "never-print-this" });
@@ -2476,7 +2481,9 @@ mod tests {
 
     #[test]
     fn copilot_unusable_category_resets_fall_back_to_the_account_date() {
-        let day = parse_time(&json!("2026-11-01"));
+        let account_date = future_utc_date_only();
+        let account_reset = format!("{account_date}T00:00:00Z");
+        let day = parse_time(&json!(account_reset));
         for bad in [json!(0), json!(""), json!(null), json!(-1)] {
             let payload = json!({
                 "quota_snapshots": {
@@ -2486,7 +2493,7 @@ mod tests {
                         "quota_reset_at": bad,
                     },
                 },
-                "quota_reset_date_utc": "2026-11-01T00:00:00Z",
+                "quota_reset_date_utc": account_reset.as_str(),
             });
             let windows = copilot_windows_from(&payload).unwrap();
             assert_eq!(windows.len(), 1);
@@ -2559,9 +2566,9 @@ mod tests {
 
     #[test]
     fn copilot_window_is_the_calendar_month_before_its_reset() {
-        let reset = parse_time(&json!("2026-11-01")).unwrap();
+        let reset = parse_time(&json!("2999-11-01")).unwrap();
         assert_eq!(copilot_window_seconds(reset), 31 * ONE_DAY);
-        let january = parse_time(&json!("2027-01-01")).unwrap();
+        let january = parse_time(&json!("3000-01-01")).unwrap();
         assert_eq!(copilot_window_seconds(january), 31 * ONE_DAY);
     }
 
@@ -2819,14 +2826,15 @@ mod tests {
     #[test]
     fn null_alternatives_fall_back_to_the_older_field() {
         // Copilot: a null UTC reset must not hide the date-only one.
+        let reset_date = future_utc_date_only();
         let payload = json!({
             "quota_reset_date_utc": null,
-            "quota_reset_date": "2026-11-01",
+            "quota_reset_date": reset_date.as_str(),
             "quota_snapshots": {"premium_interactions": {
                 "entitlement": 300, "percent_remaining": 0}},
         });
         let windows = copilot_windows_from(&payload).unwrap();
-        assert_eq!(windows[0].resets_at, parse_date_only("2026-11-01"));
+        assert_eq!(windows[0].resets_at, parse_date_only(&reset_date));
 
         // Codex: a null container or reset falls back to the next key.
         let now = now_seconds();
@@ -2847,6 +2855,7 @@ mod tests {
 
     #[test]
     fn non_finite_usage_makes_the_account_unknown() {
+        let reset_date = future_utc_date_only();
         let payload = json!({
             "rate_limit": {"primary_window": {
                 "used_percent": "NaN",
@@ -2858,7 +2867,7 @@ mod tests {
 
         for bad in ["inf", "-inf", "NaN"] {
             let payload = json!({
-                "quota_reset_date": "2026-11-01",
+                "quota_reset_date": reset_date.as_str(),
                 "quota_snapshots": {"premium_interactions": {
                     "entitlement": 300, "percent_remaining": bad}},
             });
