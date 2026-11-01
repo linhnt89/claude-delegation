@@ -408,7 +408,7 @@ fn refusal() -> anyhow::Error {
 /// Authorized lead commands instead rely on the driver's exclusive lease and live identity.
 pub fn authorize(ctx: &Ctx) -> Result<Option<Lock>> {
     let directory = Lock::directory(&ctx.dhome, true)?;
-    let token = std::env::var("DELEGATE_AUTOPILOT").ok();
+    let token = crate::environment::var("DELEGATE_AUTOPILOT").ok();
     // Ordinary commands (including dry runs) leave no autopilot footprint.
     if load(ctx)?.is_none() {
         return if token.is_some() {
@@ -434,7 +434,7 @@ pub fn authorize(ctx: &Ctx) -> Result<Option<Lock>> {
 }
 
 fn authorized_run(ctx: &Ctx) -> Result<Option<Run>> {
-    if let Some(token) = std::env::var_os("DELEGATE_AUTOPILOT") {
+    if let Some(token) = crate::environment::var_os("DELEGATE_AUTOPILOT") {
         let run = load(ctx)?
             .filter(|run| run.running() && token == run.id.as_str() && ctx.root == run.worktree)
             .ok_or_else(refusal)?;
@@ -488,7 +488,8 @@ pub fn after_merge(ctx: &Ctx, id: &str) -> Result<()> {
         .open(run.log.join("merges"))?;
     writeln!(journal, "{id}")?;
     run.log(&format!("merged {id}; gate: {}", run.mandate.gate))?;
-    let result = Command::new("sh")
+    let rules = crate::config::ProjectRules::load(&run.worktree)?;
+    let result = crate::environment::judging(&mut Command::new("sh"), &rules.env.allow)
         .args(["-c", &run.mandate.gate])
         .current_dir(&run.worktree)
         .stdin(Stdio::null())
@@ -942,7 +943,9 @@ fn waves(ctx: &Ctx, run: &mut Run) -> Result<&'static str> {
             return Ok("stopped");
         }
         let mut gate = Command::new("sh");
-        gate.args(["-c", &run.mandate.gate])
+        let rules = crate::config::ProjectRules::load(&run.worktree)?;
+        crate::environment::judging(&mut gate, &rules.env.allow)
+            .args(["-c", &run.mandate.gate])
             .stdout(log_file(run)?)
             .stderr(log_file(run)?);
         let passed = run_process(ctx, run, gate)?;
@@ -1613,7 +1616,7 @@ mod tests {
     }
 
     fn child(fixture: &Fixture, token: Option<&str>, allowed: bool, rounds: bool) -> Result<()> {
-        let mut command = Command::new(std::env::current_exe()?);
+        let mut command = crate::environment::test_command(std::env::current_exe()?);
         command
             .args([
                 "--exact",
@@ -1696,7 +1699,7 @@ mod tests {
         let fixture = Fixture::new()?;
         let executable = std::env::current_exe()?;
         let run_child = || -> Result<()> {
-            let output = Command::new(&executable)
+            let output = crate::environment::test_command(&executable)
                 .args([
                     "--exact",
                     "autopilot::tests::authorization_child",

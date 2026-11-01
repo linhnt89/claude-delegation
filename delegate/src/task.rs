@@ -34,10 +34,10 @@ impl Ctx {
             main.file_name().unwrap_or_default().to_string_lossy()
         ));
         // Existing homes still need their crash-safe migration on first use.
-        if legacy.exists() && std::env::var_os("DELEGATE_HOME").is_none() {
+        if legacy.exists() && crate::environment::var_os("DELEGATE_HOME").is_none() {
             return Self::discover();
         }
-        let dhome = std::env::var_os("DELEGATE_HOME").map_or_else(
+        let dhome = crate::environment::var_os("DELEGATE_HOME").map_or_else(
             || crate::checkout::peek(&gitdir, main, &crate::vault::data_dir()),
             |path| Ok(PathBuf::from(path)),
         )?;
@@ -67,7 +67,7 @@ impl Ctx {
             &root,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?);
-        let dhome = if let Some(path) = std::env::var_os("DELEGATE_HOME") {
+        let dhome = if let Some(path) = crate::environment::var_os("DELEGATE_HOME") {
             crate::checkout::cleanup()?;
             PathBuf::from(path)
         } else {
@@ -467,7 +467,7 @@ mod tests {
             (&linked, &shared_home, false),
             (&linked, &override_home, true),
         ] {
-            let mut child = Command::new(std::env::current_exe()?);
+            let mut child = crate::environment::test_command(std::env::current_exe()?);
             child
                 .args([
                     "--exact",

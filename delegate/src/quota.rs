@@ -983,7 +983,7 @@ fn loopback_base(value: &str) -> Option<String> {
 }
 
 fn base_url(variable: &str, default: &str) -> String {
-    if let Some(value) = std::env::var_os(variable) {
+    if let Some(value) = crate::environment::var_os(variable) {
         let value = value.to_string_lossy();
         if let Some(base) = loopback_base(&value) {
             return base;

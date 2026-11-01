@@ -563,7 +563,7 @@ pub fn collect(ctx: &Ctx, id: Option<&str>, depth: Depth) -> Result<Vec<TaskView
             if step_activity > activity {
                 view.last_activity_at = Some(timestamp(step_activity));
                 view.activity_age_secs = now_secs().saturating_sub(step_activity);
-                let threshold = std::env::var("DELEGATE_STALL_SECS")
+                let threshold = crate::environment::var("DELEGATE_STALL_SECS")
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(300);
@@ -637,7 +637,7 @@ fn collect_task(ctx: &Ctx, t: &Task, depth: Depth) -> Result<TaskView> {
     let start = started_at.as_deref().and_then(parse_timestamp).unwrap_or(0);
     let now = now_secs();
     let activity = latest_mtime(&t.wt).max(start);
-    let stall_secs = std::env::var("DELEGATE_STALL_SECS")
+    let stall_secs = crate::environment::var("DELEGATE_STALL_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);
@@ -1627,7 +1627,7 @@ mod tests {
         };
         let t = Task::load(&ctx, "t001")?;
         fs::write(&t.spec, "# Task t001\n")?;
-        let threshold: u64 = std::env::var("DELEGATE_STALL_SECS")
+        let threshold: u64 = crate::environment::var("DELEGATE_STALL_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(300);

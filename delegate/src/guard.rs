@@ -62,15 +62,15 @@ struct Env {
 impl Env {
     fn current() -> Self {
         Env {
-            off: std::env::var_os("DELEGATE_GUARD").is_some_and(|v| v == "off"),
-            worker: std::env::var("DELEGATE_WORKER")
+            off: crate::environment::var_os("DELEGATE_GUARD").is_some_and(|v| v == "off"),
+            worker: crate::environment::var("DELEGATE_WORKER")
                 .ok()
                 .filter(|id| !id.is_empty()),
             project: std::env::var_os("CLAUDE_PROJECT_DIR")
                 .map(PathBuf::from)
                 .filter(|p| p.is_absolute()),
             data: crate::vault::data_dir(),
-            delegate_home: std::env::var_os("DELEGATE_HOME")
+            delegate_home: crate::environment::var_os("DELEGATE_HOME")
                 .map(PathBuf::from)
                 .filter(|p| !p.as_os_str().is_empty()),
         }

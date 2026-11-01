@@ -653,7 +653,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     if harness::needs_bwrap(
         workers.iter().map(|w| w.harness),
         a.research,
-        std::env::var("DELEGATE_SANDBOX").is_ok_and(|v| v == "0"),
+        crate::environment::var("DELEGATE_SANDBOX").is_ok_and(|v| v == "0"),
     ) {
         harness::require_bwrap()?;
     }
@@ -1037,12 +1037,12 @@ fn background(a: &RunArgs, t: &Task) -> Result<()> {
 
 // ---------------------------------------------------------------- checks
 
-fn run_with_timeout(cmd: &[String], cwd: &Path) -> Result<(i32, String)> {
+fn run_with_timeout(cmd: &[String], cwd: &Path, extra: &[String]) -> Result<(i32, String)> {
     let (program, args) = cmd.split_first().context("empty command")?;
     let out_path =
         std::env::temp_dir().join(format!("delegate-check-{}.log", uuid::Uuid::new_v4()));
     let out = fs::File::create(&out_path)?;
-    let mut child = Command::new(program)
+    let mut child = crate::environment::judging(&mut Command::new(program), extra)
         .args(args)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
@@ -1090,10 +1090,11 @@ fn run_checks(ctx: &Ctx, t: &Task, operation: &Operation) -> Result<Checks> {
             "no runnable acceptance commands in the spec (lines like: - [ ] `command`)".to_string(),
         );
     }
+    let rules = ProjectRules::load(&ctx.root)?;
     let sb = harness::sandbox(None, &task_bounds(ctx, t)?, &t.wt)?;
     for c in &cmds {
         let full = [sb.clone(), vec!["bash".into(), "-c".into(), c.clone()]].concat();
-        let (rc, out) = run_with_timeout(&full, &t.wt)?;
+        let (rc, out) = run_with_timeout(&full, &t.wt, &rules.env.allow)?;
         let label = match rc {
             0 => "PASS",
             3 => {
@@ -1968,7 +1969,7 @@ mod tests {
     #[test]
     fn acceptance_checks_are_marked_sandboxed_without_bwrap() {
         let cmd = ["sh", "-c", "printf '%s' \"$DELEGATE_SANDBOXED\""].map(str::to_owned);
-        let (rc, output) = run_with_timeout(&cmd, &std::env::temp_dir()).unwrap();
+        let (rc, output) = run_with_timeout(&cmd, &std::env::temp_dir(), &[]).unwrap();
         assert_eq!(rc, 0);
         assert_eq!(output, "1");
     }
@@ -2600,7 +2601,7 @@ deep = ["claude:sonnet@high"]
         let path = std::env::join_paths(std::iter::once(ctx.root.join("bin")).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))?;
-        let mut command = Command::new(std::env::current_exe()?);
+        let mut command = crate::environment::test_command(std::env::current_exe()?);
         command
             .args([
                 "--exact",
@@ -3360,7 +3361,7 @@ deep = ["claude:sonnet@high"]
         assert!(Command::new("mkfifo").arg(&t.spec).status()?.success());
         // Block the repeated spec preflight indefinitely. The child's live state
         // must be visible even when this takes longer than startup's deadline.
-        let mut child = Command::new(std::env::current_exe()?)
+        let mut child = crate::environment::test_command(std::env::current_exe()?)
             .args([
                 "--exact",
                 "commands::tests::detached_child_publishes_live_before_slow_preflight",

@@ -1044,10 +1044,10 @@ pub(crate) fn where_pulled(ctx: &Ctx) -> Result<()> {
 pub(crate) fn sandboxed() -> bool {
     // Unit tests may themselves run inside a task's sandbox; only the command bridge (a child
     // test process started for one command) honours the variable.
-    if cfg!(test) && std::env::var_os("DELEGATE_VAULT_TEST_COMMAND").is_none() {
+    if cfg!(test) && crate::environment::var_os("DELEGATE_VAULT_TEST_COMMAND").is_none() {
         return false;
     }
-    std::env::var_os("DELEGATE_SANDBOXED").is_some_and(|v| v == "1")
+    crate::environment::var_os("DELEGATE_SANDBOXED").is_some_and(|v| v == "1")
 }
 
 /// What isn't on the vault's remote yet. Local reads only: never the network, never the lock.
@@ -1753,7 +1753,7 @@ mod tests {
 
         // Exercise real command dispatch. `where --pull` is the sync point; `list` is local.
         let run = |data: &Path, command: &str| {
-            let output = Command::new(std::env::current_exe().unwrap())
+            let output = crate::environment::test_command(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
                     "vault::tests::command_bridge",
@@ -1990,7 +1990,7 @@ mod tests {
     #[test]
     fn command_bridge() {
         use clap::Parser;
-        let Ok(command) = std::env::var("DELEGATE_VAULT_TEST_COMMAND") else {
+        let Ok(command) = crate::environment::var("DELEGATE_VAULT_TEST_COMMAND") else {
             return;
         };
         let args =
@@ -2186,7 +2186,7 @@ mod tests {
         fs::create_dir(ctx.root.join(".task")).unwrap();
         let runner = ctx.root.join("evals/run");
         fs::write(&runner, include_str!("../templates/project/evals/run")).unwrap();
-        let output = Command::new("bash")
+        let output = crate::environment::test_command("bash")
             .arg(&runner)
             .arg("fast")
             .current_dir(&ctx.root)
@@ -2721,7 +2721,7 @@ mod tests {
         fs::write(vault.join(".git/delegate-conflict"), "a/file\n").unwrap();
         let fixture_path = fixture.0.display().to_string();
         let run = |sandboxed: bool, args: &str| {
-            let mut command = Command::new(std::env::current_exe().unwrap());
+            let mut command = crate::environment::test_command(std::env::current_exe().unwrap());
             command
                 .args([
                     "--exact",
@@ -2827,7 +2827,7 @@ mod tests {
     }
 
     fn command_output(fixture: &Fixture, home: &Path, sandboxed: bool, args: &str) -> String {
-        let mut command = Command::new(std::env::current_exe().unwrap());
+        let mut command = crate::environment::test_command(std::env::current_exe().unwrap());
         command
             .args([
                 "--exact",

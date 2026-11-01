@@ -5,6 +5,7 @@ mod check_writers;
 mod checkout;
 mod commands;
 mod config;
+mod environment;
 mod guard;
 mod harness;
 mod init;

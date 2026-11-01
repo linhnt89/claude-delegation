@@ -277,7 +277,8 @@ fn warm_cache_dirs(task_home: &Path, worktree: &Path) -> Result<Vec<PathBuf>> {
 /// bwrap prefix for a worker (or for acceptance checks when `harness` is None).
 /// Codex keeps its own sandbox; `DELEGATE_SANDBOX=0` disables sandboxing.
 pub fn sandbox(harness: Option<Harness>, bounds: &Bounds, chdir: &Path) -> Result<Vec<String>> {
-    if harness == Some(Harness::Codex) || std::env::var("DELEGATE_SANDBOX").is_ok_and(|v| v == "0")
+    if harness == Some(Harness::Codex)
+        || crate::environment::var("DELEGATE_SANDBOX").is_ok_and(|v| v == "0")
     {
         return Ok(vec![]);
     }
@@ -857,7 +858,7 @@ mod tests {
 
     #[test]
     fn data_is_hidden_after_state_and_worktree_binds() {
-        if std::env::var_os("DELEGATE_TEST_DATA_HIDE").is_some() {
+        if crate::environment::var_os("DELEGATE_TEST_DATA_HIDE").is_some() {
             let data = crate::vault::data_dir();
             let root = home();
             let bounds = Bounds {
@@ -963,7 +964,7 @@ mod tests {
         let bwrap = root.join("bin/bwrap");
         std::fs::write(&bwrap, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = Command::new(std::env::current_exe().unwrap())
+        let out = crate::environment::test_command(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "harness::tests::data_is_hidden_after_state_and_worktree_binds",
