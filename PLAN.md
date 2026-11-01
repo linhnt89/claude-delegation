@@ -4,6 +4,11 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- t087, t099, t100, t101 (2026-11-01, user present): t099 fixed S097's and S100's check bugs
+  and moved S083, S085 (`away` after `start`), S086 (quota floor only) to decision 026; t100
+  made S115 require a reverted task to stop counting as merged; t101 made the quota unit tests
+  stop depending on today's date (two had failed since 2026-11-01, blocking every merge); t087's
+  kit text then passed S100 unchanged. t099, t100 by Copilot Sonnet, t101 by Luna, t087 by Sol.
 - t089, t094, t097, t098 (2026-11-01, wave 1): checks for S101–S105 (t089), S109–S113 (t094),
   S106, P026, S107, S108 (t097), S114–S118 (t098). Each fails on main for its stated reason; the
   lead read the failures in each REPORT and in `evals/run`. Merged as squash commits on
@@ -105,22 +110,15 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
-## Handoff (2026-11-01, user back after wave 2)
-- The autopilot run stopped at wave 2 (waiting for the user) and was landed on main. Decision
-  027 is accepted. The user answered every "Waiting for you" item:
-  - t086, t087 (check bugs in S097, S100): fixed in t099, a hand-written fix task, since
-    `fix-check` doesn't exist yet.
-  - t095 (S083, S085, S086 replaced by decision 026): contracts changed (`away` right after
-    `start` in S083, S085; S086 keeps only the quota floor), and the checks are fixed in t099.
-  - S115: its contract now says a reverted task doesn't count as merged; check fixed in t100.
-  - Stray `DELEGATE_AUTOPILOT` (t090): still refused by `run`, `merge`, `discard`, and
-    ignored by `check`; S106's contract says so. Its check already matched, so no task.
+## Handoff (2026-11-01, after the user's answers)
+- All "Waiting for you" items are answered (contracts in S083, S085, S086, S106, S115;
+  decision 027 accepted) and the check fixes are merged. Nothing is parked.
 - Exception to decision 024, agreed with the user: Hyper (DeepSeek's only route) was out of
-  quota, so t099 fixes DeepSeek's checks (S097, S100 from t085; S083, S085, S086 from t064)
-  in Claude's family (`pi:github-copilot/claude-sonnet-5.5@high`). From now on those checks'
-  writers include Claude, so t086 skips claude too (its implementer is GPT).
-- Next: review and merge t099, t100; rerun t087's checks with t099 merged (S100 should pass,
-  no new round); run t086; then restart autopilot for t090, t092 onward.
+  quota, so t099 fixed DeepSeek's checks in Claude's family. Those checks' writers now include
+  Claude, so t086 skips claude as well as deepseek (its implementer is GPT).
+- The kit text from t087 already describes t086's writer-family skip; it is true once t086 merges.
+- Next: restart autopilot for t086, t090, t092, then t091, t095, t096 (Mandate below).
+- `delegate list`: no open tasks.
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01 before they went away. -->
@@ -160,8 +158,7 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 1 | todo | t085, t099 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
-| t087 | Kit text for decisions 023, 024: `/evaluate` step 4 says a worker writes checks; delegate skill gets the check review step, "report check bugs, don't fix them" and `fixes_checks:`; SPEC template gets `fixes_checks:`; REPORT template lists a check task's failures | 1 | review (checks rerun after t099) | t085, t099 | fast | `evals/run S100`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 1 | todo | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
 | t089 | Checks for S101–S105 (decision 025: `fix-check`, check is right, fixes reach running tasks, question-phase flags) | 1 | done | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
 | t097 | Checks for S106, P026, S107, S108 (decision 025: clean child environment, autopilot fixes checks, kit text) | 1 | done | t088 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
 | t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 2 | todo | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
@@ -169,10 +166,8 @@
 | t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | todo | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t094 | Checks for S109–S113 (decision 026: presence, `wait`, landing while present, landing conflict, answers) | 1 | done | t093 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
 | t098 | Checks for S114–S118 (decision 026: gate rerun, revert and fix task, still red stops, complete report, kit text) | 1 | done | t093 | standard | each fails for the reason its `scenario.md` states | with the check-task checklist (decision 025) |
-| t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098, t099, t100 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
+| t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
 | t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 4 | todo | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
-| t099 | Fix checks: S097 (empty `seen-hidden.txt` is fine), S100 (read the template where the runner writes it), S083, S085 (`away` after `start`), S086 (quota floor only) | 1 | running | – | standard | `scripts/check`; each check fails or passes for its `scenario.md`'s reason | `fixes_checks: S097, S100, S083, S085, S086`; Copilot Sonnet (exception to 024) |
-| t100 | Fix check: S115 also requires that a reverted task stops counting as merged | 1 | running | – | standard | `scripts/check`; S115 fails for its stated reason | `fixes_checks: S115`; Copilot Sonnet (Claude family wrote it) |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 Plan review (gpt-6.1-sol, 2026-11-01), for the wave leads who write these specs:
@@ -185,9 +180,12 @@ Plan review (gpt-6.1-sol, 2026-11-01), for the wave leads who write these specs:
 - t095: too big (review 5): split presence and answers, `wait`, live landing, and gate
   recovery. Its Acceptance lists `S116`, which is hidden now; run it at review instead. The
   S083/S085 migration in Waiting for you comes first.
-- t092, t096: kit text; t092 waits on t087 (parked).
+- t092, t096: kit text.
 
 ## Known, not fixed
+- A round that only reruns checks after a check fix still steps the tier up (t087 went to
+  `deep` on 2026-11-01): the failed round's checks counted against the product. `fix-check`
+  (t091) should keep the tier when the failure was a check bug.
 - P018 (hidden) failed again under a full parallel `evals/run fast` (2026-10-31: "t101 belongs to
   <session>, created by None"), passing on rerun: flakiness under load, not tied to a change.
 - Accepted at t056's merge (review, medium): a shell edit by the lead from the main checkout
