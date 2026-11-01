@@ -91,7 +91,7 @@ gaps init skills "$PROJ"
 gaps REPORT.md report "$EVALS_ROOT/delegate/templates/REPORT.md"
 gaps new report "$DHOME/t001/REPORT.template.md"
 problems=""
-while IFS= read -r line; do problems+="$line (${where_missing[$line]}); "; done < <(printf '%s\n' "${!where_missing[@]}" | sort)
+while IFS= read -r line; do problems+="$line (${where_missing[$line]}); "; done < <(for gap in "${!where_missing[@]}"; do printf '%s\n' "$gap"; done | sort)
 [ -z "$problems" ] || fail "the kit does not teach decision 025: $problems"
 
 pass "the evaluate and delegate skills (root, templates and a fresh init) teach pinned contracts, small check tasks with the checklist, the question-phase review and fix-check for autopilot too; the REPORT template has '## Check problems'"
