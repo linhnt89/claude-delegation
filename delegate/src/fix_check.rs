@@ -78,8 +78,16 @@ enum ScenarioVerdict {
 /// Extract `(scenario_id, verdict, hidden)` from a single `evals/run` verdict line.
 /// Only reads the scenario's own parenthesized id (`(S001)` or `(S001, hidden)`),
 /// never words inside the trailing `: <reason>` text.
+/// `format_check_output` prefixes every output line with exactly six spaces; a real
+/// verdict starts at column 0 of the runner output, so it must follow that prefix
+/// immediately. Detail lines carry nine more spaces, so a quoted verdict inside a
+/// diagnostic never counts as a verdict.
 fn parse_verdict_line(line: &str) -> Option<(String, ScenarioVerdict, bool)> {
-    let trimmed = line.trim();
+    let stripped = line.strip_prefix("      ")?;
+    if stripped.starts_with(' ') || stripped.starts_with('\t') {
+        return None;
+    }
+    let trimmed = stripped.trim_end();
     let verdict = if trimmed.starts_with("FAIL ") || trimmed.starts_with("check error ") {
         ScenarioVerdict::Fail
     } else if trimmed.starts_with("pass ")
@@ -138,6 +146,13 @@ fn redact_hidden_ids(line: &str, hidden_ids: &BTreeSet<String>) -> String {
     out
 }
 
+/// Only `evals/run` prints scenario verdict lines. A check's own stdout (for a
+/// command like `evals/scenarios/S001-pricing/check`) may contain a verdict-like
+/// line with the same six-space `CHECKS.txt` indentation; that is not a verdict.
+fn block_reports_verdicts(block: &CommandBlock) -> bool {
+    block.command.contains("evals/run")
+}
+
 #[cfg(test)]
 pub(crate) fn failed_scenarios_in_checks(text: &str) -> Vec<String> {
     failed_scenarios_in_checks_filtered(text, &[], &BTreeSet::new())
@@ -162,7 +177,7 @@ fn failed_scenarios_in_checks_filtered(
         }
     };
     for block in &blocks {
-        if block.label == "PASS" {
+        if block.label == "PASS" || !block_reports_verdicts(block) {
             continue;
         }
         for line in &block.body {
@@ -189,6 +204,9 @@ fn failing_output_for_scenarios_filtered(
     let mut hidden_ids = hidden_ids.clone();
     let blocks = parse_checks_txt(text);
     for block in &blocks {
+        if !block_reports_verdicts(block) {
+            continue;
+        }
         for line in &block.body {
             if let Some((id, _, true)) = parse_verdict_line(line) {
                 hidden_ids.insert(id);
@@ -197,12 +215,12 @@ fn failing_output_for_scenarios_filtered(
     }
     let mut matched = Vec::new();
     for block in &blocks {
-        if block.label == "PASS" {
+        if block.label == "PASS" || !block_reports_verdicts(block) {
             continue;
         }
         let mut saw_verdicts = false;
         let mut selected_lines: Vec<String> = Vec::new();
-        let mut header_lines: Vec<String> = Vec::new();
+        let mut preamble_lines: Vec<String> = Vec::new();
         let mut footer_lines: Vec<String> = Vec::new();
         let mut capturing = false;
         let mut in_footer = false;
@@ -227,8 +245,19 @@ fn failing_output_for_scenarios_filtered(
                 in_footer = true;
                 footer_lines.push(redact_hidden_ids(line, &hidden_ids));
             } else if !saw_verdicts {
-                header_lines.push(redact_hidden_ids(line, &hidden_ids));
+                // Lines before the first verdict can be another command's
+                // output (a compound acceptance command). Keep only the
+                // runner's own `evals:` preamble, which belongs to this
+                // command's output, so the failing output stays whole.
+                if line
+                    .strip_prefix("      ")
+                    .is_some_and(|s| s.starts_with("evals:"))
+                {
+                    preamble_lines.push(redact_hidden_ids(line, &hidden_ids));
+                }
             } else if capturing {
+                // A scenario's evidence is its own verdict line plus the detail
+                // lines under it.
                 selected_lines.push(redact_hidden_ids(line, &hidden_ids));
             } else if in_footer {
                 footer_lines.push(redact_hidden_ids(line, &hidden_ids));
@@ -240,11 +269,7 @@ fn failing_output_for_scenarios_filtered(
                 block.label,
                 redact_hidden_ids(&block.command, &hidden_ids)
             );
-            for line in header_lines
-                .iter()
-                .chain(selected_lines.iter())
-                .chain(footer_lines.iter())
-            {
+            for line in preamble_lines.iter().chain(selected_lines.iter()).chain(footer_lines.iter()) {
                 rendered.push('\n');
                 rendered.push_str(line);
             }
@@ -743,6 +768,43 @@ mod tests {
         );
         assert!(checks_txt.contains("detail line 25 for S001"));
         assert_eq!(failed_scenarios_in_checks(&checks_txt), vec!["S001"]);
+    }
+
+    #[test]
+    fn review_nested_diagnostic_verdict_does_not_fail_passing_scenario() {
+        // evals/run indents the scenario's "what it means" text by nine spaces;
+        // CHECKS.txt adds another six spaces to every output line.
+        let checks = "FAIL  evals/run S001 S002\n      FAIL     Pricing  (S001)\n               what it means: the diagnostic can quote a runner verdict:\n               FAIL     Tax  (S002)\n               still part of Pricing's explanation\n      pass     Tax  (S002)\n";
+        assert_eq!(failed_scenarios_in_checks(checks), vec!["S001"]);
+        assert_eq!(failing_output_for_scenarios(checks, &["S002".to_string()]), "");
+    }
+
+    #[test]
+    fn review_nested_pass_diagnostic_does_not_truncate_failure_evidence() {
+        let checks = "FAIL  evals/run S001\n      FAIL     Pricing  (S001)\n               what it means: expected runner output:\n               pass     Tax  (S002)\n               important remaining Pricing failure evidence\n";
+        let out = failing_output_for_scenarios(checks, &["S001".to_string()]);
+        assert!(
+            out.contains("important remaining Pricing failure evidence"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn review_same_acceptance_command_preamble_is_not_scenario_evidence() {
+        let checks = "FAIL  evals/scenarios/S002-tax/check; evals/run S001\n      S002 unrelated diagnostic mentions S001\n      evals: selected\n      FAIL     Pricing  (S001)\n               what happened: pricing mismatch\n";
+        let out = failing_output_for_scenarios(checks, &["S001".to_string()]);
+        assert!(!out.contains("S002 unrelated diagnostic"), "{out}");
+    }
+
+    #[test]
+    fn review_check_stdout_verdict_like_line_is_not_a_verdict() {
+        // A check's own stdout is indented with the same six spaces, but its
+        // command is not `evals/run`, so a verdict-like line there names no
+        // scenario as failed and contributes no evidence.
+        let checks = "FAIL  evals/scenarios/S001-pricing/check\n      FAIL     Pricing  (S001)\n               what happened: stdout mismatch\n";
+        assert_eq!(failed_scenarios_in_checks(checks), Vec::<String>::new());
+        let out = failing_output_for_scenarios(checks, &["S001".to_string()]);
+        assert!(!out.contains("Pricing"), "{out}");
     }
 
     #[test]
