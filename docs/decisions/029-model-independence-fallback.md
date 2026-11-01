@@ -24,6 +24,11 @@ while Hyper was out.
   an excluded family may run if its model differs from every model it must be independent of
   (the checks' writers, the implementer, the planner). If none is left, nothing starts and the
   message names what's missing, as today.
+- **Model key.** Models are compared by key: the last segment of the model path, lowercased,
+  effort and version dropped, Claude aliases mapped (`claude:opus` and
+  `pi:github-copilot/claude-opus-5.5` are both `opus`). The planner's model is the optional
+  top-level `planner_model` beside `planner_family`; a plan review that must fall back without
+  it stops and says to set it.
 - **Check fixes.** With `"model"`, when the writers' families have no candidate, a
   `fixes_checks:` task may use any available family, with a warning.
 - **Recorded.** A merge that used a fallback carries an `Independence: model` trailer; `list`
@@ -39,4 +44,4 @@ while Hyper was out.
 ## Consequences
 Same-family blind spots can come back where the fallback is used; hidden scenarios, which never
 enter a worker's sandbox, and the trailer bound and expose that. Amends 023, 024 and the review
-and plan-review family rules. t106 writes its scenarios, t107 implements it.
+and plan-review family rules. Scenarios S123–S129 and P027; t108 writes their checks, t107 implements it.

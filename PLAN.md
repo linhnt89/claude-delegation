@@ -137,66 +137,67 @@
 - Landed on main: t102, t086, t090, t104, t092, t105. `~/.local/bin/delegate` is still the build
   from before t086: reinstall it (README) before the next run, or `fixes_checks:` isn't applied.
 - `delegate list`: no open tasks. Autopilot run 4f62f7e2 is stopped and landed.
-- Decisions 028 (what a check is) and 029 (model fallback when families run out) accepted; their
-  tasks are t103, t106, t107 below, outside the mandate.
+- Decisions 028 (what a check is) and 029 (model fallback when families run out) accepted;
+  scenarios S119–S129, P027 agreed with the user; t108, t107, t103 are in the mandate.
 - Plan review (gpt-6.1-sol, wave 1) changes applied: t090's spec keeps the autopilot control
   variables for the lead and detached runs and adds the S084–S089 regression line. The t091/t095
   split and the Goal ids are still open (review finding 4): finish the split and list every piece
-  id in the Goal before wave 2 and wave 4 start.
-- Next: wave 2 (t091's pieces) and t096 (unblocked: t092 merged).
+  id in the Goal before wave 2 and wave 3 start.
+- Next: wave 2 (t091's pieces, t096, t108).
 
 ## Waiting for you
-- t103, t106, t107: add them to the mandate (a scope change), and where? t106 (scenarios for
-  029) can run beside wave 2; t107 and t103 both change candidate selection, so t107 goes first.
+- Reinstall `~/.local/bin/delegate` from main (README), then `delegate autopilot start`.
 
 ## Mandate
-<!-- Agreed with the user on 2026-11-01; renewed the same day after their answers. -->
-- Goal: t086, t090, t091, t092, t095, t096
+<!-- Agreed with the user on 2026-11-01; renewed after wave 1 to add decisions 028, 029. -->
+- Goal: t091, t095, t096, t108, t107, t103
 - The goal includes the pieces t091 and t095 are split into.
 - Gate: `env -u DELEGATE_AUTOPILOT -u DELEGATE_AUTOPILOT_WAVE scripts/check`
 - Merge without asking when: checks, the task's and hidden scenarios, and required reviews pass.
 - Needs the user: new decisions, scope changes, accepting findings, discarding a feature.
 - Not in this run: t025 (needs a design with the user).
-- Waves: 1 = t086, t090, t092 (t090 starts only after t086 merges, the plan review's
-  serialization for `commands.rs`); 2 = t091's pieces; 3 = t095's pieces, t096.
-- Split t091 and t095 as the plan review below says (new ids from t104), before their wave;
+- Waves: 2 = t091's pieces, t096, t108; 3 = t095's pieces, t107; 4 = t103. t107 and t103
+  both change candidate selection and `commands.rs`: t103 starts only after t107 merges, and
+  t107 only after t091's pieces merge.
+- Split t091 and t095 as the plan review below says (new ids from t109), before their wave;
   splitting them isn't a scope change.
   Start a task early only when its dependencies are merged and it shares no files with a
   running task.
-- Until t090 is merged, every `scripts/check` and `evals/run` line in a spec's Acceptance is
-  prefixed `env -u DELEGATE_AUTOPILOT -u DELEGATE_AUTOPILOT_WAVE` (the leak t090 fixes).
-- Check tasks (t089, t094, t097, t098): before merging, confirm each check fails on main for
-  the reason its `scenario.md` states (no setup error, no exit 3); a wrong reason is another
-  round. Their specs carry decision 025's checklist: set up your own data, no assumptions
-  about repo history, deterministic order, nothing taken from the ambient environment.
-- Hidden: after t097's merge, `delegate hidden add` P026 (J3); after t098's merge, S116 (J10).
-  Note each in `evals/jobs.md` under "Hidden".
-- `checks_by:` lines: t086 t085, t099; t090 t097; t091 t089, t097; t092 t097; t095 t094, t098;
-  t096 t098.
-- Reviews: t086, t090, t091 and t095 merge only after a review on the final commit with no
+- Check tasks (t108): before merging, confirm each check fails on main for the reason its
+  `scenario.md` states (no setup error, no exit 3); a wrong reason is another round. Its spec
+  carries decision 025's checklist: set up your own data, no assumptions about repo history,
+  deterministic order, nothing taken from the ambient environment. t108 runs on a Claude-family
+  worker, so t107's and t103's implementers skip Claude.
+- Hidden: after t108's merge, `delegate hidden add` P027 and S127 (J3). Note them in
+  `evals/jobs.md` under "Hidden"; t107 then runs them at review, not in Acceptance.
+- `checks_by:` lines: t091 t089, t097; t095 t094, t098; t096 t098; t107 t108; t103 t108.
+- Reviews: t091, t095, t107 and t103 merge only after a review on the final commit with no
   high-severity findings.
-- t090's Acceptance also runs `DELEGATE_AUTOPILOT=x DELEGATE_AUTOPILOT_WAVE=1 scripts/check`
-  (unit tests ignore ambient `DELEGATE_*`).
+- Contracts for decision 029 (pinned with the user): model key = last segment of the model
+  path, lowercased, effort and version dropped, Claude aliases mapped (`opus` =
+  `claude-opus-5.5`); top-level `planner_model` beside `planner_family`; `[defaults]
+  independence = "family" | "model"`, missing means `"family"`; trailer `Independence: model`
+  after `Worker:`; `delegate list` shows `same-family fallback`. t107 also updates
+  `delegate/templates/workers.example.toml` (both keys, and the `[review]`/`[plan_review]`
+  comments).
 - Answers for likely worker questions: a task's Acceptance scenarios are the ids on its
-  `evals/run` lines; their checks are `evals/scenarios/<id>-*/check`; hidden scenarios count
-  when their `Job:` matches one of those scenarios' jobs; `fixes_checks:` parses like
-  `checks_by:`; the child-environment allowlist is `PATH`, `HOME`, `USER`, `LANG`, `LC_*`,
-  `TERM`, `TMPDIR`, `CARGO_HOME`, `RUSTUP_HOME`, `MISE_*`, `DELEGATE_HOME`, plus names listed
-  in `.delegate.toml`; a fix-check worker that finds the check right writes
-  `Status: check is right` in REPORT.md and changes nothing; autopilot's presence right after
-  `start` is `present`.
+  `evals/run` lines; their checks are `evals/scenarios/<id>-*/check` (from t103 on, every file
+  in the folder); hidden scenarios count when their `Job:` matches one of those scenarios'
+  jobs; `fixes_checks:` parses like `checks_by:`; a fix-check worker that finds the check right
+  writes `Status: check is right` in REPORT.md and changes nothing; autopilot's presence right
+  after `start` is `present`.
 - A check bug found during this run: park it with the failing output and the implementer's
-  report (`fix-check` doesn't exist until t091).
+  report until t091 merges, then use `delegate fix-check`.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 3 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
-| t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
-| t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 4 | todo | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
-| t103 | Decision 028: every file in a scenario folder is its check; a check with no recorded writer gets any family's fix, with a warning; checks new in the task aren't its own | – | todo | t107 | standard | scenarios first (`/evaluate feature`) | `check_writers.rs`, `commands.rs` |
-| t106 | Scenarios for decision 029: `independence = "model"` fallback for implement, review, plan review and check fixes; never the same model; `Independence: model` trailer; hidden scenarios required | – | todo | – | standard | its checks fail on main for the stated reason | `evals/scenarios/` only |
-| t107 | Decision 029: the `independence` setting, model fallback in candidate selection, the trailer, `list` and review show it, hidden scenarios required at merge, `setup` asks | – | todo | t106 | deep | t106's scenarios, `scripts/check` | `config.rs`, `check_writers.rs`, `commands.rs`, `setup` |
+| t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 2 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
+| t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 3 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
+| t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 2 | todo | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t103 | Decision 028: every file in a scenario folder is its check; a check with no recorded writer gets any family's fix, with a warning; checks new in the task aren't its own | 4 | todo | t107 | standard | `evals/run S119 S120 S121 S122`, `scripts/check` | `check_writers.rs`, `commands.rs`; `checks_by: t108` |
+| t108 | Checks for S119–S129, P027 (decisions 028, 029), on a Claude-family worker | 2 | todo | – | standard | each check fails on main for its `scenario.md` reason | `evals/scenarios/` only; decision 025's checklist |
+| t107 | Decision 029: `independence` setting, model keys, same-family fallback for implement, review, plan review and check fixes, `planner_model`, `Independence: model` trailer, `list` shows it, hidden scenarios required at merge, `setup` hint, workers.example.toml | 3 | todo | t091, t108 | deep | `evals/run S123 S124 S125 S126 S128 S129`, `scripts/check`; hidden P027, S127 at review | `config.rs`, `check_writers.rs`, `commands.rs`; `checks_by: t108` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 Plan review (gpt-6.1-sol, 2026-11-01), for the wave leads who write these specs:

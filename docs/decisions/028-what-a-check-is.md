@@ -33,4 +33,4 @@ t086 built decisions 023 and 024 on the file named `check`. Its final review fou
 ## Consequences
 Implementers can't change any file of their Acceptance scenarios, `scenario.md` included (the
 AGENTS.md rule becomes enforced). Lead-written checks become fixable. Check tasks may list the
-scenarios they create in Acceptance. Amends 024; t103 implements it.
+scenarios they create in Acceptance. Amends 024. Scenarios S119–S122; t108 writes their checks, t103 implements it.
