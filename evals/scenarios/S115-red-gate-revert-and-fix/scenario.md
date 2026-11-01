@@ -19,6 +19,8 @@ independent.
 - The next wave lead's prompt names a fix task for t001, with the reverted commit and the
   gate output.
 - t002 is not started while t001 is reverted; t003 runs and merges.
+- While reverted, t001 doesn't count as merged: the goal isn't met, its dependents wait, and
+  the report and status don't list it as merged. It counts again when its fix task merges.
 - The report lists the revert with the gate output's reason.
 
 ## Passes when

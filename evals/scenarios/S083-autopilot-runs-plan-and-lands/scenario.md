@@ -5,13 +5,13 @@
 - Status: agreed
 
 ## Who
-The user, leaving after a prep session. A stand-in `claude` on PATH plays each wave's headless lead from a script (runs `delegate` commands, edits `PLAN.md`); stand-in workers do the tasks. Decision 019.
+The user, leaving after a prep session. A stand-in `claude` on PATH plays each wave's headless lead from a script (runs `delegate` commands, edits `PLAN.md`); stand-in workers do the tasks. Decisions 019, 026.
 
 ## Starting state
 A project after `delegate init` with a `## Mandate` in `PLAN.md` (goal: t001–t004; merge rule: checks and scenarios pass; gate command named) and specs for two waves: t001, t002 in wave 1, t003, t004 (depending on t001) in wave 2. A `notify` command is configured that records its calls.
 
 ## Steps
-1. `delegate autopilot start`, then wait until `delegate autopilot status` says it stopped.
+1. `delegate autopilot start`, then `delegate autopilot away` right away (the user is leaving), then wait until `delegate autopilot status` says it stopped.
 2. Look at the user's checkout, the run report and the notify calls.
 3. `delegate autopilot land`.
 

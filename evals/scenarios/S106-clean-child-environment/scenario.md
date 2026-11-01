@@ -21,7 +21,10 @@ file. The caller's environment has `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAV
   `UNLISTED_SECRET`.
 - Each sees `PATH`, `HOME`, `LANG`, the toolchain homes that were set (`CARGO_HOME`,
   `RUSTUP_HOME`, `MISE_*`), `DELEGATE_HOME` if set, and `EXTRA_ALLOWED`.
-- The same holds when the commands run under `delegate merge` and `delegate run`.
+- The same holds when the commands run under `delegate merge` and `delegate run`. There the
+  autopilot variables come from a real autopilot run; a caller holding a stray
+  `DELEGATE_AUTOPILOT` for a run that doesn't exist is still refused by `run`, `merge` and
+  `discard` (decision 019's lead lock), and `check` ignores it.
 
 ## Passes when
 - A check gives the same verdict whoever calls it.

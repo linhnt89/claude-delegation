@@ -5,10 +5,10 @@
 - Status: agreed
 
 ## Who
-The user, present, in another lead session in the main checkout. A stand-in `claude` on PATH plays each wave's headless lead from a script (runs `delegate` commands, edits `PLAN.md`); stand-in workers do the tasks. Decision 019.
+The user, present, in another lead session in the main checkout, who has told autopilot `away` (landing under a present user is S111, S112). A stand-in `claude` on PATH plays each wave's headless lead from a script (runs `delegate` commands, edits `PLAN.md`); stand-in workers do the tasks. Decisions 019, 026.
 
 ## Starting state
-A project after `delegate init` with a `## Mandate` in `PLAN.md` (goal: t001–t004; merge rule: checks and scenarios pass; gate command named) and specs for two waves: t001, t002 in wave 1, t003, t004 (depending on t001) in wave 2. A `notify` command is configured that records its calls. Autopilot is running wave 1 (the stand-in workers are slow).
+A project after `delegate init` with a `## Mandate` in `PLAN.md` (goal: t001–t004; merge rule: checks and scenarios pass; gate command named) and specs for two waves: t001, t002 in wave 1, t003, t004 (depending on t001) in wave 2. A `notify` command is configured that records its calls. Autopilot is running wave 1 (the stand-in workers are slow), and `delegate autopilot away` was run right after `start`.
 
 ## Steps
 1. In the main checkout: edit a file, `delegate new t005` and fill its spec.

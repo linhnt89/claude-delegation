@@ -1,7 +1,7 @@
 # 027: Check fixes take their named checks' families; the extras table
 
 - Date: 2026-11-01
-- Status: proposed (set by the autopilot lead during plan review; the user confirms or changes it)
+- Status: accepted (proposed by the autopilot lead during plan review; confirmed by the user 2026-11-01)
 
 ## Context
 Plan review of t085–t098 (2026-11-01) found two things decisions 024 and 025 leave open:
