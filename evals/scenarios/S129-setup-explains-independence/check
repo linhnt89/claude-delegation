@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# S129: `delegate setup` writes planner_model and independence with comments, and tells a user
+# who has only two families how to set independence = "model" without touching their value.
+# Decision 029.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+# Only the stand-in harnesses count as installed; nothing real from the machine running this.
+install_stub claude
+minimal_path sha256sum tr cut awk
+cfg="$HOME/.config/delegate/workers.toml"
+
+setup_run() { # sets OUT and RC; setup never waits for an answer here
+  OUT="$("$DELEGATE" setup </dev/null 2>&1)"; RC=$?
+  printf '\n$ delegate setup  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+}
+
+# --- 1. A new machine: setup writes the file ---
+rm -f "$cfg"
+setup_run
+[ "$RC" -eq 0 ] || fail "setup: delegate setup failed on a new machine: $OUT"
+[ -f "$cfg" ] || fail "setup: delegate setup did not write workers.toml: $OUT"
+
+# key_check <file> <section: top|defaults> <key>: prints "ok <value>" when the key is an
+# uncommented assignment in that section whose line directly above is a comment; else why not.
+key_check() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import re, sys
+path, section, key = sys.argv[1:]
+lines = open(path).read().splitlines()
+current = "top"
+for i, line in enumerate(lines):
+    head = re.match(r"^\s*\[([^\]]+)\]\s*$", line)
+    if head:
+        current = head[1].strip()
+        continue
+    m = re.match(rf"^{re.escape(key)}\s*=\s*(.*?)\s*$", line)
+    if not m or current != section:
+        continue
+    value = m[1].strip().strip('"').strip("'")
+    if not value:
+        print(f"{key} has an empty value")
+    elif i == 0 or not lines[i - 1].lstrip().startswith("#") or len(lines[i - 1].strip("# ")) < 8:
+        print(f"{key} has no comment on the line above it")
+    else:
+        print(f"ok {value}")
+    break
+else:
+    where = "at the top level" if section == "top" else f"under [{section}]"
+    print(f"no uncommented `{key}` {where}")
+PY
+}
+
+got="$(key_check "$cfg" defaults independence)"
+[ "$got" = 'ok family' ] || fail "the new workers.toml lacks a commented independence = \"family\" under [defaults]: $got"
+got="$(key_check "$cfg" top planner_model)"
+case "$got" in ok\ *) ;; *) fail "the new workers.toml lacks a commented top-level planner_model: $got" ;; esac
+python3 - "$cfg" <<'PY' || fail "the new workers.toml is not valid TOML with planner_model beside planner_family"
+import sys, tomllib
+data = tomllib.load(open(sys.argv[1], "rb"))
+assert data["defaults"]["independence"] == "family"
+assert isinstance(data["planner_model"], str) and data["planner_model"].strip()
+PY
+
+# --- 2. A second machine: only Claude and GPT candidates, the user's own independence value ---
+use_machine second
+cfg="$HOME/.config/delegate/workers.toml"
+user_config() { # independence line or nothing
+  cat >"$cfg" <<EOF
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+${1:-}
+[implement]
+fast = ["pi:openai-codex/gpt-sol@high"]
+standard = ["claude:sonnet@high", "pi:openai-codex/gpt-sol@high"]
+deep = ["claude:opus@high"]
+[research]
+fast = ["pi:openai-codex/gpt-luna@medium"]
+standard = ["claude:sonnet@medium"]
+[review]
+standard = ["claude:sonnet@high", "pi:openai-codex/gpt-sol@high"]
+[plan_review]
+standard = ["pi:openai-codex/gpt-sol@xhigh"]
+EOF
+}
+hint_run() { # <label> <independence line>: setup leaves the file alone
+  user_config "$2"
+  local before; before="$(sha256sum "$cfg")"
+  setup_run
+  [ "$RC" -eq 0 ] || fail "setup: delegate setup failed with $1: $OUT"
+  [ "$(sha256sum "$cfg")" = "$before" ] || fail "setup rewrote the user's workers.toml ($1)"
+}
+hinted() { # the output says only two families, and how to opt in
+  printf '%s\n' "$OUT" | grep -qi 'two famil' && printf '%s\n' "$OUT" | grep -qF 'independence = "model"'
+}
+
+hint_run 'independence = "family"' 'independence = "family"'
+printf '%s\n' "$OUT" | grep -qi 'two famil' || fail "setup does not say only two families have candidates: $OUT"
+printf '%s\n' "$OUT" | grep -qF 'independence = "model"' || fail "setup does not say how to set independence = \"model\": $OUT"
+grep -qxF 'independence = "family"' "$cfg" || fail "the user's independence = \"family\" was changed"
+
+# A user who already chose "model" is not nagged.
+hint_run 'independence = "model"' 'independence = "model"'
+! hinted || fail "setup printed the hint although the user set independence = \"model\": $OUT"
+grep -qxF 'independence = "model"' "$cfg" || fail "the user's independence = \"model\" was changed"
+
+# An older file with no independence key: not rewritten, same hint.
+hint_run 'no independence key' ''
+hinted || fail "setup printed no hint for a workers.toml without independence: $OUT"
+! grep -q 'independence' "$cfg" || fail "setup added independence to an existing workers.toml"
+
+pass "pass: setup writes planner_model and independence with comments and explains independence = \"model\" to two-family users"
