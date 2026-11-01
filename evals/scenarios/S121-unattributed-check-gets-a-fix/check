@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# S121: a check whose history has no Worker: trailer (lead- or hand-written) can still be fixed
+# by any candidate of the tier, with a warning; the fix then makes its family the writer. Decision 028.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-impl@high", "pi:deepseek-impl@high"]
+standard = ["pi:gpt-impl@high", "pi:deepseek-impl@high"]
+deep = ["pi:gpt-impl@high", "pi:deepseek-impl@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+for model in gpt-impl deepseek-impl; do
+  stub_worker "$model" <<B
+task_id() { sed -n '1s/^# Task \\([^:]*\\):.*/\\1/p' .task/SPEC.md 2>/dev/null; }
+work() {
+  printf '\\n\\ndef ${model//-/_}():\\n    return 1\\n' >>shop/pricing.py
+  [ "\$(task_id)" != t004 ] || printf '\\n# fixed by t004\\n' >>evals/scenarios/S001-pricing/check
+}
+B
+done
+
+# S001 was added and changed by the lead: plain commits, no Worker: trailer.
+scenario_with_check S001 pricing J1 "S001 ok"
+dir="evals/scenarios/S001-pricing"
+git -C "$PROJ" add -A && git -C "$PROJ" commit -qm "Add S001"
+append_check "$PROJ/$dir/check" "tweaked by the lead"
+git -C "$PROJ" commit -qam "Tweak S001's check"
+
+write_spec t004 "Fix S001's check" "Fix S001's check." "evals/run S001"
+spec="${OUT##*$'\n'}"
+sed -i '1a fixes_checks: S001' "$spec"
+d run t004
+[ "$RC" -eq 0 ] || fail "t004, a fix for the lead-written S001 check, did not run: $(echo "$OUT" | grep "^error" | head -1)"
+echo "$OUT" | grep -qi "warning" || fail "t004's run printed no warning: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -i "no recorded writer" | grep -qF "S001" \
+  || fail "the run didn't warn that S001 has no recorded writer: $(echo "$OUT" | tr '\n' ' ')"
+[ -n "$(calls_where work gpt-impl)" ] || fail "t004 did not run on the GPT-family candidate: $(calls_where work | tr '\n' ' ')"
+d merge t004
+[ "$RC" -eq 0 ] || fail "t004's merge was refused: $(echo "$OUT" | tr '\n' ' ')"
+git -C "$PROJ" log -1 --format=%B | grep -q '^Worker: .*gpt-impl' \
+  || fail "t004's merge commit carries no Worker: trailer for the GPT-family worker: $(git -C "$PROJ" log -1 --format=%B | tr '\n' ' ')"
+
+# GPT now counts as S001's writer.
+write_spec t005 "Add a helper" "Add a helper." "evals/run S001"
+d run t005
+[ "$RC" -eq 0 ] || fail "t005's run failed (it should have run on the DeepSeek family): $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -i "skip" | grep -qi "gpt" \
+  || fail "t005's run didn't say it skipped the GPT family that fixed S001's check: $(echo "$OUT" | tr '\n' ' ')"
+[ -n "$(calls_where work deepseek-impl)" ] || fail "t005 did not run on the DeepSeek-family candidate: $(calls_where work | tr '\n' ' ')"
+[ -z "$(calls_where work gpt-impl | tail -n +2)" ] || fail "t005 ran on the GPT family that fixed S001's check"
+
+pass "t004 fixed the lead-written S001 check on GPT with a no-recorded-writer warning; after its merge t005 skipped GPT and ran on DeepSeek"

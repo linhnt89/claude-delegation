@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# S119: every file in a scenario's folder is part of its check: an implementer can't change
+# mod.test.tsx or scenario.md beside `check`; a fixes_checks: task still can. Decision 028.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-impl@high", "pi:deepseek-impl@high"]
+standard = ["pi:gpt-impl@high", "pi:deepseek-impl@high"]
+deep = ["pi:gpt-impl@high", "pi:deepseek-impl@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+for model in gpt-impl deepseek-impl; do
+  stub_worker "$model" <<'B'
+task_id() { sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md 2>/dev/null; }
+work() {
+  dir=evals/scenarios/S060-pane
+  case "$(task_id)" in
+    t002|t004) printf '\n// changed by %s\n' "$(task_id)" >>"$dir/mod.test.tsx" ;;
+    t003) printf '\nChanged by t003.\n' >>"$dir/scenario.md" ;;
+  esac
+}
+B
+done
+
+# S060 keeps its assertions in mod.test.tsx beside `check`; DeepSeek wrote the folder.
+scenario_with_check S060 pane J3 "S060 ok"
+dir="evals/scenarios/S060-pane"
+printf 'test("pane", () => {});\n' >"$PROJ/$dir/mod.test.tsx"
+worker_commit t001 pi:deepseek-writer@high "Write S060" "$dir/check" "$dir/scenario.md" "$dir/mod.test.tsx"
+
+write_spec t002 "Touch the test file" "Touch the test file." "evals/run S060"
+write_spec t003 "Touch the scenario file" "Touch the scenario file." "evals/run S060"
+d run t002
+[ "$RC" -eq 0 ] || fail "setup: t002's run failed: $(echo "$OUT" | tail -3)"
+d run t003
+[ "$RC" -eq 0 ] || fail "setup: t003's run failed: $(echo "$OUT" | tail -3)"
+
+refused() { # id file
+  local base_before; base_before="$(git -C "$PROJ" rev-parse HEAD)"
+  d merge "$1"
+  [ "$RC" -ne 0 ] || fail "the merge accepted $1's change to $2, so a worker can weaken the assertions that judge its own work"
+  echo "$OUT" | grep -qF "$2" || fail "the refusal for $1 didn't name the changed file $2: $(echo "$OUT" | tr '\n' ' ')"
+  echo "$OUT" | grep -qF "REPORT.md" || fail "the refusal for $1 didn't say to report check bugs in REPORT.md: $(echo "$OUT" | tr '\n' ' ')"
+  echo "$OUT" | grep -qF "fixes_checks" || fail "the refusal for $1 didn't say to fix them in a task with fixes_checks: $(echo "$OUT" | tr '\n' ' ')"
+  [ "$(git -C "$PROJ" rev-parse HEAD)" = "$base_before" ] || fail "the refused merge of $1 still changed the base branch"
+}
+refused t002 "$dir/mod.test.tsx"
+refused t003 "$dir/scenario.md"
+
+# A task with fixes_checks: S060 may change mod.test.tsx.
+write_spec t004 "Fix S060's test file" "Fix S060's test file." "evals/run S060"
+spec="${OUT##*$'\n'}"
+sed -i '1a fixes_checks: S060' "$spec"
+d run t004
+[ "$RC" -eq 0 ] || fail "setup: t004's run failed: $(echo "$OUT" | tail -3)"
+d merge t004
+[ "$RC" -eq 0 ] || fail "t004, with fixes_checks: S060, was refused for changing mod.test.tsx: $(echo "$OUT" | tr '\n' ' ')"
+grep -qF "changed by t004" "$PROJ/$dir/mod.test.tsx" || fail "t004's merge did not land its change to mod.test.tsx"
+
+pass "t002's change to mod.test.tsx and t003's change to scenario.md were refused (file, REPORT.md and fixes_checks named); t004 with fixes_checks: S060 merged"

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# S122: a check-writing task may name the scenario it creates in its Acceptance: a check that
+# doesn't exist in the task's base isn't the task's own. One that does is still refused. Decision 028.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-impl@high"]
+standard = ["pi:gpt-impl@high"]
+deep = ["pi:gpt-impl@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+stub_worker gpt-impl <<'B'
+task_id() { sed -n '1s/^# Task \([^:]*\):.*/\1/p' .task/SPEC.md 2>/dev/null; }
+work() {
+  printf '#!/usr/bin/env bash\necho "S005 ok"\n' >evals/scenarios/S005-reports/check
+  chmod +x evals/scenarios/S005-reports/check
+  [ "$(task_id)" != t007 ] || printf '\n# changed by t007\n' >>evals/scenarios/S001-pricing/check
+}
+B
+
+# S001 has a check (written by DeepSeek); S005 has only its agreed scenario.md.
+scenario_with_check S001 pricing J1 "S001 ok"
+worker_commit t001 pi:deepseek-writer@high "Write S001's check" evals/scenarios/S001-pricing/check evals/scenarios/S001-pricing/scenario.md
+mkdir -p "$PROJ/evals/scenarios/S005-reports"
+printf '# S005 reports\n- Job: J2\n- Tier: fast\n- Judged by: auto\n- Status: agreed\n' >"$PROJ/evals/scenarios/S005-reports/scenario.md"
+git -C "$PROJ" add -A && git -C "$PROJ" commit -qm "Agree S005"
+
+write_spec t006 "Write S005's check" "Write S005's check." "evals/run S005"
+write_spec t007 "Write S005's check and change S001's" "Write S005's check and change S001's." "evals/run S001 S005"
+# Both tasks start from the base without S005's check, as the scenario says.
+d run t006
+[ "$RC" -eq 0 ] || fail "setup: t006's run failed: $(echo "$OUT" | tail -3)"
+d run t007
+[ "$RC" -eq 0 ] || fail "setup: t007's run failed: $(echo "$OUT" | tail -3)"
+
+d merge t006
+[ "$RC" -eq 0 ] || fail "t006 was refused although S005's check does not exist in its base, so a check task can't name the scenario it creates: $(echo "$OUT" | tr '\n' ' ')"
+[ -x "$PROJ/evals/scenarios/S005-reports/check" ] || fail "t006's merge did not land S005's check"
+
+base_before="$(git -C "$PROJ" rev-parse HEAD)"
+d merge t007
+[ "$RC" -ne 0 ] || fail "t007 merged although it changed S001's existing check, which its Acceptance names"
+echo "$OUT" | grep -qF "evals/scenarios/S001-pricing/check" \
+  || fail "t007's refusal didn't name S001's check: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qF "evals/scenarios/S005-reports/check" \
+  && fail "t007's refusal named S005's check, which is new in t007's base: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(git -C "$PROJ" rev-parse HEAD)" = "$base_before" ] || fail "the refused merge of t007 still changed the base branch"
+
+pass "t006 merged with its new S005 check; t007 was refused for S001's check only"

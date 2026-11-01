@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# S120: whoever changed ANY file in a scenario's folder counts as a writer of its check, so an
+# implementer is kept away from that family too. Decision 028.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:gpt-impl@high", "pi:deepseek-impl@high", "pi:claude-impl@high"]
+standard = ["pi:gpt-impl@high", "pi:deepseek-impl@high", "pi:claude-impl@high"]
+deep = ["pi:gpt-impl@high", "pi:deepseek-impl@high", "pi:claude-impl@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+for model in gpt-impl deepseek-impl claude-impl; do
+  stub_worker "$model" <<B
+work() { printf '\\n\\ndef ${model//-/_}():\\n    return 1\\n' >>shop/pricing.py; }
+B
+done
+
+# t001 (Claude family) wrote S001's check and its fixture; t002 (GPT family) changed only the fixture.
+scenario_with_check S001 pricing J1 "S001 ok"
+dir="evals/scenarios/S001-pricing"
+printf '{"items": [[2.5, 2], [1.0, 3]]}\n' >"$PROJ/$dir/fixture.json"
+worker_commit t001 pi:claude-writer@high "Write S001's check" "$dir/check" "$dir/scenario.md" "$dir/fixture.json"
+printf '{"items": [[2.5, 2], [1.0, 3], [4.0, 1]]}\n' >"$PROJ/$dir/fixture.json"
+worker_commit t002 pi:gpt-fixer@high "Change S001's fixture" "$dir/fixture.json"
+
+write_spec t003 "Add a helper" "Add a helper." "evals/run S001"
+d run t003
+[ "$RC" -eq 0 ] || fail "t003's run failed (it should have run on the DeepSeek-family candidate): $(echo "$OUT" | tr '\n' ' ')"
+[ -z "$(calls_where work gpt-impl)" ] \
+  || fail "t003 ran on the GPT family, which changed S001's fixture.json, so the data its check reads is not independent of it"
+[ -z "$(calls_where work claude-impl)" ] \
+  || fail "t003 ran on the Claude family, which wrote S001's check"
+[ -n "$(calls_where work deepseek-impl)" ] \
+  || fail "t003 did not run on the DeepSeek-family candidate: (it ran on: $(for c in $(calls_where work); do call_field "$c" model; done | tr '\n' ' '))"
+for family in gpt claude; do
+  echo "$OUT" | grep -i "skip" | grep -qi -- "$family" \
+    || fail "the run didn't say it skipped the $family family for S001's checks: $(echo "$OUT" | tr '\n' ' ')"
+done
+echo "$OUT" | grep -i "skip" | grep -qF "S001" \
+  || fail "the skip messages don't name S001: $(echo "$OUT" | tr '\n' ' ')"
+
+pass "t003 skipped the GPT family (fixture.json) and the Claude family (check) for S001 and ran on the DeepSeek family"

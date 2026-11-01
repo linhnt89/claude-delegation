@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# S123: with `independence = "model"` and only Claude and GPT, a task whose checks both families
+# touched runs on another model of the Claude family; list and the merge commit say so. Decision 029.
+. "$EVALS_LIB/common.sh"
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+install_stub claude
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+independence = "model"
+[implement]
+fast = ["pi:openai-codex/gpt-6.1-sol@high", "claude:sonnet@high"]
+standard = ["pi:openai-codex/gpt-6.1-sol@high", "claude:sonnet@high"]
+deep = ["pi:openai-codex/gpt-6.1-sol@high", "claude:sonnet@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+for model in gpt-6.1-sol sonnet; do
+  stub_worker "$model" <<B
+work() { printf '\\n\\ndef ${model//[-.]/_}():\\n    return 1\\n' >>shop/pricing.py; }
+B
+done
+
+# GPT wrote S001's check; Claude Opus fixed it later.
+scenario_with_check S001 pricing J1 "S001 ok"
+check="evals/scenarios/S001-pricing/check"
+worker_commit t001 pi:openai-codex/gpt-6.1-sol@high "Write S001's check" "$check" evals/scenarios/S001-pricing/scenario.md
+append_check "$PROJ/$check" "fixed by t002"
+worker_commit t002 claude:opus@high "Fix S001's check" "$check"
+
+write_spec t003 "Add a helper" "Add a helper." "evals/run S001"
+d run t003
+[ "$RC" -eq 0 ] || fail "t003 did not run although independence = \"model\" allows another Claude model: $(echo "$OUT" | grep "^error" | head -1)"
+[ -n "$(calls_where work sonnet)" ] \
+  || fail "t003 did not run on claude:sonnet: $(for c in $(calls_where work); do call_field "$c" model; done | tr '\n' ' ')"
+echo "$OUT" | grep -i "fell back\|falling back\|fallback" | grep -qi "claude" \
+  || fail "the run didn't say it fell back to another model of the Claude family: $(echo "$OUT" | tr '\n' ' ')"
+
+d list
+[ "$RC" -eq 0 ] || fail "delegate list failed: $OUT"
+echo "$OUT" | grep -E '^t003[[:space:]]' | grep -qF "same-family fallback" \
+  || fail "delegate list doesn't show 'same-family fallback' on t003's row: $(echo "$OUT" | tr '\n' ' ')"
+
+d merge t003
+[ "$RC" -eq 0 ] || fail "t003's merge failed: $(echo "$OUT" | tr '\n' ' ')"
+git -C "$PROJ" log -1 --format=%B | awk '/^Worker:/ {w=1; next} w && NF {found = ($0 == "Independence: model"); exit} END {exit !found}' \
+  || fail "the merge commit has no 'Independence: model' line right after its Worker: line: $(git -C "$PROJ" log -1 --format=%B | tr '\n' ' ')"
+
+pass "t003 ran on claude:sonnet and said it fell back, list showed same-family fallback, and the merge commit carries Independence: model after Worker:"
