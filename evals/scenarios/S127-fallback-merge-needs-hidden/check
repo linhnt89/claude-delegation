@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# S127: a task that ran on a same-family fallback merges only after the hidden scenarios of its
+# job pass; the merge then carries `Independence: model`. Decision 029.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+install_stub claude
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+independence = "model"
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["claude:opus@xhigh", "claude:sonnet@high"]
+standard = ["claude:opus@xhigh", "claude:sonnet@high"]
+deep = ["claude:opus@xhigh", "claude:sonnet@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+# Round 1 does not make the hidden scenario pass; round 2 does.
+stub_worker sonnet <<'B'
+work() {
+  printf '\ndef helper():\n    return 1\n' >>shop/pricing.py
+  [ ! -f "$HOME/.cache/round-1-done" ] || printf 'ready\n' >ready.txt
+  : >"$HOME/.cache/round-1-done"
+}
+B
+
+# S001 (job J1) had its checks written by claude:opus, so only another Claude model is left.
+scenario_with_check S001 pricing J1 "S001 ok"
+check="evals/scenarios/S001-pricing/check"
+worker_commit t001 claude:opus@xhigh "Write S001's check" "$check" evals/scenarios/S001-pricing/scenario.md
+# A hidden scenario of the same job, in its own git repo like the vault's. Its check passes
+# iff the task's worktree has ready.txt.
+hidden="$EVALS_WORK/hidden"
+hdir="$hidden/scenarios/S900-ready-file"
+mkdir -p "$hdir"
+printf '# S900 Hidden ready marker xyzzy\n- Job: J1\n- Tier: fast\n- Judged by: auto\n- Status: automated\n' >"$hdir/scenario.md"
+cat >"$hdir/check" <<'C'
+#!/usr/bin/env bash
+[ -f "$EVALS_ROOT/ready.txt" ] || { echo "no ready.txt"; exit 1; }
+echo "ready.txt present"
+C
+chmod +x "$hdir/check"
+git -C "$hidden" init -q && git -C "$hidden" add -A && git -C "$hidden" commit -qm "Hide S900"
+export EVALS_HIDDEN="$hidden"
+
+write_spec t003 "Add a helper" "Add a helper." "evals/run S001"
+d run t003
+[ "$RC" -eq 0 ] || fail "t003 could not run on a same-family fallback (claude:sonnet, as opus wrote S001's checks): $(echo "$OUT" | tr '\n' ' ')"
+[ -n "$(calls_where work sonnet)" ] || fail "t003 did not run on claude:sonnet: $(for c in $(calls_where work); do call_field "$c" model; done | tr '\n' ' ')"
+[ -z "$(calls_where work opus)" ] || fail "setup: t003 ran on opus, which wrote S001's checks"
+
+# 1. The hidden scenario fails on the branch: the merge is refused without naming it.
+head_before="$(git -C "$PROJ" rev-parse main)"
+d merge t003
+[ "$RC" -ne 0 ] || fail "t003 merged although its hidden scenario failed after a fallback: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(git -C "$PROJ" rev-parse main)" = "$head_before" ] || fail "main moved although the merge was refused"
+echo "$OUT" | grep -qi 'hidden' || fail "the refusal doesn't mention hidden scenarios: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -Eqi 'fall(s|ing)? back|fell back|fallback|same-family|independence' \
+  || fail "the refusal doesn't say the task used a fallback: $(echo "$OUT" | tr '\n' ' ')"
+for secret in S900 xyzzy ready-file ready.txt; do
+  echo "$OUT" | grep -qF -- "$secret" && fail "the refusal named hidden material ($secret): $(echo "$OUT" | tr '\n' ' ')"
+done
+
+# 2. A later round makes the hidden scenario pass: the merge goes through with the trailer.
+d run t003
+[ "$RC" -eq 0 ] || fail "t003's second round failed: $(echo "$OUT" | tr '\n' ' ')"
+d merge t003
+[ "$RC" -eq 0 ] || fail "t003 was still refused after its hidden scenario passed: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(git -C "$PROJ" rev-parse main)" != "$head_before" ] || fail "the merge reported success but main did not move"
+msg="$(git -C "$PROJ" log -1 --format=%B main)"
+worker_line="$(echo "$msg" | grep -n '^Worker:' | head -1 | cut -d: -f1)"
+trailer_line="$(echo "$msg" | grep -n '^Independence: model$' | head -1 | cut -d: -f1)"
+[ -n "$worker_line" ] || fail "the merge commit has no Worker: line: $(echo "$msg" | tr '\n' ' ')"
+[ -n "$trailer_line" ] || fail "the merge commit has no 'Independence: model' trailer: $(echo "$msg" | tr '\n' ' ')"
+[ "$trailer_line" -gt "$worker_line" ] || fail "'Independence: model' doesn't come after the Worker: line: $(echo "$msg" | tr '\n' ' ')"
+
+pass "the fallback merge was refused with the hidden scenario failing, without naming it, and went through with 'Independence: model' after Worker: once it passed"

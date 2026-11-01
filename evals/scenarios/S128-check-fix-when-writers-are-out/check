@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# S128: a fixes_checks task whose writers' family has no candidate runs on any available family
+# with independence = "model", and starts nothing without it. Decision 029.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+install_stub claude
+config() { # independence line (or nothing), implement candidates
+  workers_toml <<T
+planner_family = "claude"
+[defaults]
+$1
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = [$2]
+standard = [$2]
+deep = [$2]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+}
+for model in sonnet opus gpt-6.1-sol; do
+  stub_worker "$model" <<'B'
+work() { printf '\ndef fixer_helper():\n    return 1\n' >>shop/pricing.py; }
+B
+done
+
+# S001's checks were written by GPT.
+scenario_with_check S001 pricing J1 "S001 ok"
+check="evals/scenarios/S001-pricing/check"
+worker_commit t001 pi:openai-codex/gpt-6.1-sol@high "Write S001's check" "$check" evals/scenarios/S001-pricing/scenario.md
+fix_task() { # id
+  write_spec "$1" "Fix S001's check" "Fix S001's check." "evals/run S001"
+  sed -i '1a fixes_checks: S001' "${OUT##*$'\n'}"
+}
+CLAUDE='"claude:sonnet@high", "claude:opus@high"'
+
+# 1. With "model" and no GPT candidate, the fix runs on Claude, with a warning.
+config 'independence = "model"' "$CLAUDE"
+fix_task t004
+d run t004
+[ "$RC" -eq 0 ] || fail "t004 did not run on a Claude model although independence = \"model\": $(echo "$OUT" | tr '\n' ' ')"
+[ -n "$(calls_where work sonnet)" ] || fail "t004 did not run on a Claude model: $(for c in $(calls_where work); do call_field "$c" model; done | tr '\n' ' ')"
+warning="$(echo "$OUT" | grep -i 'warning' | grep -i 'gpt' | grep -F 'S001')"
+[ -n "$warning" ] || fail "no warning names S001 and its writer family gpt: $(echo "$OUT" | tr '\n' ' ')"
+
+# 2. Without the setting nothing starts, and the message names GPT, S001 and the setting.
+config '' "$CLAUDE"
+fix_task t005
+before="$(calls | wc -l)"
+d run t005
+[ "$RC" -ne 0 ] || fail "t005 ran without the independence setting although GPT has no candidate: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(calls | wc -l)" = "$before" ] || fail "a worker started for t005 without the independence setting"
+for want in gpt S001 independence; do
+  echo "$OUT" | grep -qi -- "$want" || fail "the message doesn't name '$want': $(echo "$OUT" | tr '\n' ' ')"
+done
+
+# 3. With "model" and a GPT candidate present, the fix still runs on GPT.
+config 'independence = "model"' "$CLAUDE, \"pi:openai-codex/gpt-6.1-sol@high\""
+fix_task t006
+claude_runs="$(calls_where work sonnet | wc -l)"
+d run t006
+[ "$RC" -eq 0 ] || fail "t006 did not run with a GPT candidate present: $(echo "$OUT" | tr '\n' ' ')"
+[ -n "$(calls_where work gpt-6.1-sol)" ] || fail "t006 did not run on GPT although a GPT candidate was present"
+[ "$(calls_where work sonnet | wc -l)" = "$claude_runs" ] || fail "t006 ran on a Claude model although a GPT candidate was present"
+
+pass "the fix ran on Claude with a warning naming S001 and gpt under \"model\", nothing started without the setting, and a present GPT candidate still ran the fix"

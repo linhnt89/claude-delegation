@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# S124: with no `independence` setting, a task whose every candidate is excluded by 023 starts
+# no worker and the message says how to unblock it. Decision 029.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+install_stub claude
+# Only GPT and Claude candidates; no `independence` key anywhere.
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["pi:openai-codex/gpt-6.1-sol@high", "claude:sonnet@high"]
+standard = ["pi:openai-codex/gpt-6.1-sol@high", "claude:sonnet@high"]
+deep = ["pi:openai-codex/gpt-6.1-sol@high", "claude:sonnet@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+# S001's checks were written by GPT and later fixed by Claude Opus.
+scenario_with_check S001 pricing J1 "S001 ok"
+check="evals/scenarios/S001-pricing/check"
+worker_commit t001 pi:openai-codex/gpt-6.1-sol@high "Write S001's check" "$check" evals/scenarios/S001-pricing/scenario.md
+append_check "$PROJ/$check" "fixed by opus"
+worker_commit t002 claude:opus@xhigh "Fix S001's check" "$check"
+write_spec t003 "Add a helper" "Add a helper." "evals/run S001"
+
+d run t003
+[ "$RC" -ne 0 ] || fail "t003 ran although every candidate's family wrote S001's checks (exit $RC)"
+[ -z "$(calls)" ] || fail "a worker was started although no candidate was left: $(calls_where work | tr '\n' ' ')"
+for want in gpt claude S001; do
+  echo "$OUT" | grep -qi -- "$want" || fail "the message doesn't name '$want': $(echo "$OUT" | tr '\n' ' ')"
+done
+echo "$OUT" | grep -qF 'independence = "model"' \
+  || fail "the message doesn't say to set independence = \"model\": $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qF '[defaults]' || fail "the message doesn't name the [defaults] section: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qF 'workers.toml' || fail "the message doesn't name workers.toml: $(echo "$OUT" | tr '\n' ' ')"
+# A block is not a failed round.
+python3 - "$DHOME/t003/STATE.json" <<'PY' || fail "the block was recorded as a round of t003"
+import json, os, sys
+if os.path.exists(sys.argv[1]):
+    assert json.load(open(sys.argv[1])).get("rounds") == []
+PY
+[ ! -f "$DHOME/t003/CHECKS.txt" ] || fail "the block left a failed-checks record for t003"
+d list
+echo "$OUT" | grep -E '^t003[[:space:]]' | grep -qiE 'fail|rejected|error' \
+  && fail "delegate list shows t003 as failed after a block: $(echo "$OUT" | grep -E '^t003 ')"
+
+# An unknown value is refused when workers.toml is read, naming the key and both values.
+sed -i 's/^implement = "standard"$/implement = "standard"\nindependence = "bogus"/' "$HOME/.config/delegate/workers.toml"
+d run t003 --dry-run
+[ "$RC" -ne 0 ] || fail "independence = \"bogus\" was accepted (exit $RC): $(echo "$OUT" | tr '\n' ' ')"
+for want in independence family model; do
+  echo "$OUT" | grep -qF -- "$want" || fail "the refusal of independence = \"bogus\" doesn't name '$want': $(echo "$OUT" | tr '\n' ' ')"
+done
+
+pass "with no independence setting nothing started, the message named gpt, claude, S001 and the setting to add, and a bogus value was refused"

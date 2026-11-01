@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# S126: a fallback never picks the model that wrote the checks, whatever its effort or route.
+# Decision 029.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+install_stub claude
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+independence = "model"
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["claude:opus@xhigh", "pi:github-copilot/claude-opus-5.5@high"]
+standard = ["claude:opus@xhigh", "pi:github-copilot/claude-opus-5.5@high"]
+deep = ["claude:opus@xhigh", "pi:github-copilot/claude-opus-5.5@high"]
+[research]
+fast = ["pi:deepseek-research@medium"]
+[review]
+standard = ["pi:gpt-review@high", "pi:deepseek-review@high"]
+[plan_review]
+standard = ["pi:claude-plan@high", "pi:deepseek-plan@high"]
+T
+
+# S001's checks were written by claude:opus.
+scenario_with_check S001 pricing J1 "S001 ok"
+check="evals/scenarios/S001-pricing/check"
+worker_commit t001 claude:opus@xhigh "Write S001's check" "$check" evals/scenarios/S001-pricing/scenario.md
+write_spec t003 "Add a helper" "Add a helper." "evals/run S001"
+
+d run t003
+[ "$RC" -ne 0 ] || fail "t003 ran although every candidate is the model that wrote S001's checks (exit $RC)"
+[ -z "$(calls)" ] || fail "a worker was started on the model that wrote S001's checks: $(for c in $(calls); do call_field "$c" model; done | tr '\n' ' ')"
+echo "$OUT" | grep -qi 'opus' || fail "the message doesn't name the model opus: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -qF 'S001' || fail "the message doesn't name S001: $(echo "$OUT" | tr '\n' ' ')"
+echo "$OUT" | grep -Eqi 'another model|different model|other model' \
+  || fail "the message doesn't say to add another model: $(echo "$OUT" | tr '\n' ' ')"
+
+pass "no worker started: the effort and route variants of opus count as the model that wrote S001's checks, and the message named opus, S001 and another model"

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# S125: with only Claude accounts and independence = "model", review and plan review use another
+# Claude model than the implementer's and the planner's. Decision 029.
+unset DELEGATE_AUTOPILOT DELEGATE_AUTOPILOT_WAVE
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/check_writers.sh"
+setup_project
+install_stub claude
+config() { # planner_model line (or nothing)
+  workers_toml <<T
+planner_family = "claude"
+$1
+[defaults]
+independence = "model"
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+fast = ["claude:sonnet@high"]
+standard = ["claude:sonnet@high"]
+deep = ["claude:sonnet@high"]
+[research]
+fast = ["claude:haiku@medium"]
+[review]
+standard = ["claude:sonnet@high", "claude:opus@high"]
+[plan_review]
+standard = ["claude:opus@high", "claude:haiku@high"]
+T
+}
+config 'planner_model = "opus"'
+stub_worker sonnet <<'B'
+work() { printf '\ndef claude_helper():\n    return 1\n' >>shop/pricing.py; }
+B
+
+scenario_with_check S001 pricing J1 "S001 ok"
+write_spec t003 "Add a helper" "Add a helper." "evals/run S001"
+d run t003
+[ "$RC" -eq 0 ] || fail "setup: t003 could not be implemented by claude:sonnet: $OUT"
+[ -n "$(calls_where work sonnet)" ] || fail "setup: t003 was not implemented by claude:sonnet: $(calls_where work | tr '\n' ' ')"
+
+fell_back() { echo "$1" | grep -Eqi 'fell back|fall(s|ing)? back|fallback' && echo "$1" | grep -qi 'claude'; }
+
+d review t003
+[ "$RC" -eq 0 ] || fail "review: no review ran for a Claude-only user: $(echo "$OUT" | tr '\n' ' ')"
+[ -n "$(calls_where review opus)" ] || fail "review did not run on claude:opus (ran: $(for c in $(calls_where review); do call_field "$c" model; done | tr '\n' ' '))"
+[ -z "$(calls_where review sonnet)" ] || fail "review ran on claude:sonnet, the implementer's own model"
+fell_back "$OUT" || fail "review didn't say it fell back to another Claude model: $(echo "$OUT" | tr '\n' ' ')"
+
+d plan-review
+[ "$RC" -eq 0 ] || fail "plan review: none ran for a Claude-only user: $(echo "$OUT" | tr '\n' ' ')"
+[ -n "$(calls_where plan haiku)" ] || fail "plan review did not run on claude:haiku (ran: $(for c in $(calls_where plan); do call_field "$c" model; done | tr '\n' ' '))"
+[ -z "$(calls_where plan opus)" ] || fail "plan review ran on claude:opus, the planner's own model"
+fell_back "$OUT" || fail "plan review didn't say it fell back to another Claude model: $(echo "$OUT" | tr '\n' ' ')"
+
+# Without planner_model the plan review can't tell which model to avoid: it stops and says so.
+config ''
+before="$(calls | wc -l)"
+d plan-review
+[ "$RC" -ne 0 ] || fail "plan review ran without planner_model although it had to fall back: $(echo "$OUT" | tr '\n' ' ')"
+[ "$(calls | wc -l)" = "$before" ] || fail "a plan reviewer started without planner_model"
+for want in planner_model planner_family; do
+  echo "$OUT" | grep -qF -- "$want" || fail "the message doesn't name $want: $(echo "$OUT" | tr '\n' ' ')"
+done
+
+pass "review ran on claude:opus and plan review on claude:haiku, each saying it fell back to another Claude model, and without planner_model the plan review stopped and named it"
