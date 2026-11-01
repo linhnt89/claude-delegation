@@ -4,6 +4,11 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- t090 (2026-11-01, user present): one allowlisted child environment for gates, acceptance and
+  checks (`environment.rs`, `.delegate.toml` `[env] allow`, unknown keys refused); unit tests
+  ignore ambient `DELEGATE_*`. By Sol, one round. The user dropped S085 from its regression line
+  (S085 needs `autopilot away`; t095 runs it). S106, S084, S086, S087, S089, hidden P026 and both
+  `scripts/check` lines pass; review 0 high, its lows are under Known, not fixed.
 - t102, t086 (2026-11-01, user present): t102 fixed S098's check (its `evals/lib/helper.sh`
   fixture was outside the test project), by Copilot Sonnet: the user agreed Claude's family fixes
   it while Hyper has no login (exception to decision 024, like t099). t086, by Sol in four rounds
@@ -120,25 +125,19 @@
   Luna (t062). S079–S082 pass, P021 hidden.
 
 ## Handoff (2026-11-01, autopilot wave 1)
-- Merged on `autopilot` (not landed on main yet): t102, t086. Land with the user's approval
+- Merged on `autopilot` (not landed on main yet): t102, t086, t090. Land with the user's approval
   (`delegate autopilot land`).
-- `delegate list`: t090 (round 1, reviewed by claude:sonnet@high: 0 high, 1 medium, 3 low; parked
-  on S085, see Waiting for you), t092 (round 2, `scripts/check` passes; S108 fails on its check's
+- `delegate list`: t092 (round 2, `scripts/check` passes; S108 fails on its check's
   empty-array loop; parked).
-- t090's review lows, for whoever lands it: `ProjectRules::load` now runs `[warm]` validation
-  (git calls) on every check and gate, so a stale `[warm]` path fails `delegate check`; the
-  acceptance and check processes lose `_DELEGATE_AUTOPILOT_GROUP`, so `kill_leftover` can miss
-  them; unit tests cover the helper, not the call sites that pass `[env] allow`.
-  The review also notes `AGENTS.md` (Layout) and the `.delegate.toml` template miss the new
-  `environment.rs` and `[env]`: fix on main after the merge.
+- After landing, on main: `AGENTS.md` Layout and the `.delegate.toml` template miss t090's
+  `environment.rs` and `[env]` (its review's doc note).
 - Plan review (gpt-6.1-sol, wave 1) changes applied: t090's spec keeps the autopilot control
   variables for the lead and detached runs and adds the S084–S089 regression line. The t091/t095
   split and the Goal ids are still open (review finding 4): finish the split and list every piece
   id in the Goal before wave 2 and wave 4 start.
 - t092's round 2 added one product line: `delegate new` writes `REPORT.template.md` into the task
   home, as S108 asks (`commands.rs`, `new` only). It stays on `task/t092`.
-- Next: decide S085 (Waiting for you), then merge t090 with the review's findings noted; then
-  wave 2 (t091's pieces); then fix S108 through `fix-check` (Claude's family wrote it) and rerun t092.
+- Next: wave 2 (t091's pieces); then fix S108 through `fix-check` (Claude's family wrote it) and rerun t092.
 
 ## Waiting for you
 - t092: S108's check is broken, not the kit. Its `gaps` loop (`evals/scenarios/S108-*/check`,
@@ -155,13 +154,6 @@
   Also to decide: a check-writing task whose Acceptance names the scenario it creates is refused
   at merge (its new `check` counts as changing its own check). Today's check tasks keep those as
   review items, so nothing breaks yet.
-- t090: S085 fails in t090's Acceptance line, and it is a check bug, not a product gap. Its
-  `check` runs `delegate autopilot away`, which decision 026 gives to t095 (the S083/S085 move
-  in the t099 entry above), and the CLI exits 2 ("unrecognized subcommand 'away'"). The rest of
-  the line passes (S084, S086, S087, S089). Options: drop S085 from t090's line and let t095 run
-  it, or have a check fix (`fixes_checks: S085`) written for a state that exists after t095.
-  Hidden P026 passes; `scripts/check` passes both ways. Round 1 report is in
-  `t090/REPORT.md` under "Check problems".
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01; renewed the same day after their answers. -->
@@ -205,7 +197,7 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 | review (parked: S085 check bug) | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
+| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 | done | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
 | t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 3 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
 | t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | review (parked: S108 check bug) | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
@@ -226,6 +218,10 @@ Plan review (gpt-6.1-sol, 2026-11-01), for the wave leads who write these specs:
 - t092, t096: kit text.
 
 ## Known, not fixed
+- Accepted at t090's merge (review, low): `ProjectRules::load` runs `[warm]` validation (git
+  calls) on every check and gate, so a stale `[warm]` path fails `delegate check`; acceptance and
+  check processes lose `_DELEGATE_AUTOPILOT_GROUP`, so `kill_leftover` can miss them; unit tests
+  cover the env helper, not the call sites that pass `[env] allow`.
 - Accepted at t086's merge (review, low): hidden checks are read from the first vault project
   folder only, without a pull (`evals/run` pulls first), so a check only in a duplicate folder or
   on the remote isn't counted; a hidden check outside git, or renamed and rewritten by more than
