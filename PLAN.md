@@ -121,13 +121,15 @@
 - `delegate list`: no open tasks.
 
 ## Mandate
-<!-- Agreed with the user on 2026-11-01 before they went away. -->
-- Goal: t086, t087, t089, t090, t091, t092, t094, t095, t096, t097, t098
+<!-- Agreed with the user on 2026-11-01; renewed the same day after their answers. -->
+- Goal: t086, t090, t091, t092, t095, t096 (and the pieces t091, t095 are split into)
 - Gate: `env -u DELEGATE_AUTOPILOT -u DELEGATE_AUTOPILOT_WAVE scripts/check`
 - Merge without asking when: checks, the task's and hidden scenarios, and required reviews pass.
 - Needs the user: new decisions, scope changes, accepting findings, discarding a feature.
 - Not in this run: t025 (needs a design with the user).
-- Waves: 1 = t086, t087, t089, t097, t094, t098; 2 = t090, t092; 3 = t091; 4 = t095, t096.
+- Waves: 1 = t086, t090, t092; 2 = t091's pieces; 3 = t095's pieces, t096.
+- Split t091 and t095 as the plan review below says (new ids from t102), before their wave;
+  splitting them isn't a scope change.
   Start a task early only when its dependencies are merged and it shares no files with a
   running task.
 - Until t090 is merged, every `scripts/check` and `evals/run` line in a spec's Acceptance is
@@ -138,7 +140,7 @@
   about repo history, deterministic order, nothing taken from the ambient environment.
 - Hidden: after t097's merge, `delegate hidden add` P026 (J3); after t098's merge, S116 (J10).
   Note each in `evals/jobs.md` under "Hidden".
-- `checks_by:` lines: t086 t085; t090 t097; t091 t089, t097; t092 t097; t095 t094, t098;
+- `checks_by:` lines: t086 t085, t099; t090 t097; t091 t089, t097; t092 t097; t095 t094, t098;
   t096 t098.
 - Reviews: t086, t090, t091 and t095 merge only after a review on the final commit with no
   high-severity findings.
