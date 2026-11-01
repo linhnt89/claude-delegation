@@ -80,12 +80,10 @@ enum ScenarioVerdict {
 /// never words inside the trailing `: <reason>` text.
 fn parse_verdict_line(line: &str) -> Option<(String, ScenarioVerdict, bool)> {
     let trimmed = line.trim();
-    let verdict = if trimmed.starts_with("FAIL ")
-        || trimmed.starts_with("HUMAN ")
-        || trimmed.starts_with("check error ")
-    {
+    let verdict = if trimmed.starts_with("FAIL ") || trimmed.starts_with("check error ") {
         ScenarioVerdict::Fail
     } else if trimmed.starts_with("pass ")
+        || trimmed.starts_with("HUMAN ")
         || trimmed.starts_with("skip ")
         || trimmed.starts_with("no check ")
     {
@@ -167,19 +165,11 @@ fn failed_scenarios_in_checks_filtered(
         if block.label == "PASS" {
             continue;
         }
-        let cmd_ids = scenarios_in_command(&block.command);
-        let mut saw_verdicts = false;
         for line in &block.body {
-            if let Some((id, verdict, hidden)) = parse_verdict_line(line) {
-                saw_verdicts = true;
-                if verdict == ScenarioVerdict::Fail {
-                    record(id, hidden);
-                }
-            }
-        }
-        if !saw_verdicts {
-            for id in cmd_ids {
-                record(id, false);
+            if let Some((id, verdict, hidden)) = parse_verdict_line(line)
+                && verdict == ScenarioVerdict::Fail
+            {
+                record(id, hidden);
             }
         }
     }
@@ -244,51 +234,24 @@ fn failing_output_for_scenarios_filtered(
                 footer_lines.push(redact_hidden_ids(line, &hidden_ids));
             }
         }
-        if saw_verdicts {
-            if !selected_lines.is_empty() {
-                let mut rendered = format!(
-                    "{}  {}",
-                    block.label,
-                    redact_hidden_ids(&block.command, &hidden_ids)
-                );
-                for line in header_lines
-                    .iter()
-                    .chain(selected_lines.iter())
-                    .chain(footer_lines.iter())
-                {
-                    rendered.push('\n');
-                    rendered.push_str(line);
-                }
-                matched.push(rendered);
+        if saw_verdicts && !selected_lines.is_empty() {
+            let mut rendered = format!(
+                "{}  {}",
+                block.label,
+                redact_hidden_ids(&block.command, &hidden_ids)
+            );
+            for line in header_lines
+                .iter()
+                .chain(selected_lines.iter())
+                .chain(footer_lines.iter())
+            {
+                rendered.push('\n');
+                rendered.push_str(line);
             }
-        } else {
-            let cmd_ids = scenarios_in_command(&block.command);
-            let hits = scenarios.iter().any(|id| {
-                cmd_ids.contains(id)
-                    || block.body.iter().any(|l| {
-                        l.split(|c: char| !c.is_ascii_alphanumeric())
-                            .any(|w| w == id)
-                    })
-            });
-            if hits {
-                let mut rendered = format!(
-                    "{}  {}",
-                    block.label,
-                    redact_hidden_ids(&block.command, &hidden_ids)
-                );
-                for line in &block.body {
-                    rendered.push('\n');
-                    rendered.push_str(&redact_hidden_ids(line, &hidden_ids));
-                }
-                matched.push(rendered);
-            }
+            matched.push(rendered);
         }
     }
-    if matched.is_empty() {
-        redact_hidden_ids(text.trim_end(), &hidden_ids)
-    } else {
-        matched.join("\n")
-    }
+    matched.join("\n")
 }
 
 /// Format acceptance command output for `CHECKS.txt`: keep every failing scenario's output whole,
@@ -780,6 +743,45 @@ mod tests {
         );
         assert!(checks_txt.contains("detail line 25 for S001"));
         assert_eq!(failed_scenarios_in_checks(&checks_txt), vec!["S001"]);
+    }
+
+    #[test]
+    fn review_runner_startup_failure_does_not_fail_named_scenarios() {
+        let checks = "FAIL  evals/run S001 S002\n      evals: delegate where failed; cannot locate tasks or the hidden set\n";
+        assert_eq!(failed_scenarios_in_checks(checks), Vec::<String>::new());
+    }
+
+    #[test]
+    fn review_human_verdict_is_not_a_failed_scenario() {
+        let checks = "FAIL  evals/run S001 S002\n      FAIL     Pricing  (S001)\n      HUMAN    Tax  (S002)\n               what happened: inspect the display\n";
+        assert_eq!(failed_scenarios_in_checks(checks), vec!["S001"]);
+    }
+
+    #[test]
+    fn review_evidence_does_not_include_unrelated_command_mentioning_id() {
+        let checks = "FAIL  evals/run S001\n      FAIL     Pricing  (S001)\n               what happened: pricing mismatch\nFAIL  evals/scenarios/S002-tax/check\n      unrelated S002 failure mentions S001 in a diagnostic\n";
+        let out = failing_output_for_scenarios(checks, &["S001".to_string()]);
+        assert!(!out.contains("unrelated"), "{out}");
+    }
+
+    #[test]
+    fn review_embedded_scenario_acceptance_does_not_replace_task_acceptance() {
+        let checks = vec![(
+            "S001".to_string(),
+            "S001-pricing".to_string(),
+            "# S001 Pricing\n\n## Acceptance\n- [ ] `true`\n\n## Notes\nCheck pricing.\n".to_string(),
+        )];
+        let text = build_fix_spec(
+            "t004",
+            "t003",
+            &["S001".to_string()],
+            &checks,
+            "FAIL  evals/run S001\n      FAIL     Pricing  (S001)",
+            "The check reads the wrong stream.",
+            "the check reads stdout",
+        );
+        assert_eq!(spec::acceptance_commands(&text), vec!["evals/run S001"]);
+        assert_eq!(spec::acceptance_scenarios(&text), vec!["S001"]);
     }
 
     #[test]

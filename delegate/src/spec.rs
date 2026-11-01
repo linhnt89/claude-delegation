@@ -7,17 +7,33 @@ use globset::Glob;
 
 use crate::config::TaskSize;
 
-/// Body of a `## name` section, up to the next `## ` heading.
+/// Body of a `## name` section, up to the next `## ` heading outside fenced code blocks.
 pub fn section<'a>(text: &'a str, name: &str) -> &'a str {
     let heading = format!("## {name}");
     let mut start = None;
     let mut offset = 0;
+    let mut fence_len: Option<usize> = None;
     for line in text.split_inclusive('\n') {
         let trimmed = line.trim_end();
-        match start {
-            None if trimmed == heading => start = Some(offset + line.len()),
-            Some(s) if trimmed.starts_with("## ") => return &text[s..offset],
-            _ => {}
+        let ws_trimmed = trimmed.trim_start();
+        let ticks = ws_trimmed.bytes().take_while(|&b| b == b'`').count();
+        if ticks >= 3 {
+            match fence_len {
+                None => fence_len = Some(ticks),
+                Some(open) if ticks >= open && ws_trimmed[ticks..].trim().is_empty() => {
+                    fence_len = None;
+                }
+                Some(_) => {}
+            }
+            offset += line.len();
+            continue;
+        }
+        if fence_len.is_none() {
+            match start {
+                None if trimmed == heading => start = Some(offset + line.len()),
+                Some(s) if trimmed.starts_with("## ") => return &text[s..offset],
+                _ => {}
+            }
         }
         offset += line.len();
     }
