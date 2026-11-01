@@ -24,7 +24,8 @@ other models doing the implementation.
 - `delegate/src/` — the CLI: `commands.rs` (subcommands), `config.rs`, `harness.rs` (worker
   commands, bwrap), `task.rs` (state), `status.rs` (live state, `status`), `events.rs`
   (worker stream adapters), `watch.rs`, `wait.rs`, `statusline.rs`, `spec.rs`, `prompts.rs`,
-  `init.rs`, `upgrade.rs` (`delegate upgrade`, `.delegate-kit.toml`), `quota.rs` (account
+  `init.rs`, `environment.rs` (the allowlisted child environment for gates, acceptance and
+  checks; `.delegate.toml` `[env] allow` adds names, decision 025), `upgrade.rs` (`delegate upgrade`, `.delegate-kit.toml`), `quota.rs` (account
   quota readers, runway, `delegate quota`), `guard.rs` (the lead guard's hooks, decision 015), `autopilot.rs` (`delegate autopilot`,
   decision 019), `check_writers.rs` (who wrote each check, from `Worker:` trailers, hidden
   included; decisions 023, 024),
