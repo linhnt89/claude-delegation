@@ -4,6 +4,9 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- Landed on main (2026-11-01, user present): t102, t086, t090, t104, t092 from autopilot run
+  4f62f7e2. Then t105 (by Luna): the `.delegate.toml` template shows `[env] allow`; `AGENTS.md`
+  lists `environment.rs`.
 - t104, t092 (2026-11-01, user present): t104 fixed S108's check (with no gaps, its `printf`
   loop read an empty key under `set -u`), by Claude Haiku, S108's writers' family (`--worker`:
   the installed `delegate` predates t086). t092, the kit text for decision 025, by Sol, was landed
@@ -131,11 +134,9 @@
   Luna (t062). S079–S082 pass, P021 hidden.
 
 ## Handoff (2026-11-01, autopilot wave 1)
-- Merged on `autopilot` (not landed on main yet): t102, t086, t090, t104, t092. Land with the user's approval
-  (`delegate autopilot land`).
+- Landed on main: t102, t086, t090, t104, t092. `~/.local/bin/delegate` is still the build from
+  before t086: reinstall it (README) before the next run, or `fixes_checks:` isn't applied.
 - `delegate list`: no open tasks.
-- After landing, on main: `AGENTS.md` Layout and the `.delegate.toml` template miss t090's
-  `environment.rs` and `[env]` (its review's doc note).
 - Plan review (gpt-6.1-sol, wave 1) changes applied: t090's spec keeps the autopilot control
   variables for the lead and detached runs and adds the S084–S089 regression line. The t091/t095
   split and the Goal ids are still open (review finding 4): finish the split and list every piece
