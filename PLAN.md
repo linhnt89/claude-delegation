@@ -110,15 +110,40 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
-## Handoff (2026-11-01, after the user's answers)
-- All "Waiting for you" items are answered (contracts in S083, S085, S086, S106, S115;
-  decision 027 accepted) and the check fixes are merged. Nothing is parked.
-- Exception to decision 024, agreed with the user: Hyper (DeepSeek's only route) was out of
-  quota, so t099 fixed DeepSeek's checks in Claude's family. Those checks' writers now include
-  Claude, so t086 skips claude as well as deepseek (its implementer is GPT).
-- The kit text from t087 already describes t086's writer-family skip; it is true once t086 merges.
-- Next: restart autopilot for t086, t090, t092, then t091, t095, t096 (Mandate below).
-- `delegate list`: no open tasks.
+## Handoff (2026-11-01, autopilot wave 1)
+- Nothing merged. Both wave-1 tasks that ran are parked on check bugs; t090 never started.
+- `delegate list`: t086 (round 1, S096, S097, S099 pass; S098 fails on its fixture; parked),
+  t092 (round 2, `scripts/check` passes; S108 fails on its check's empty-array loop; parked),
+  t090 (not run; waits for t086's merge, since both touch `delegate/src/commands.rs`).
+- Plan review (gpt-6.1-sol, this wave) changes applied: t086 gets `checks_by: t085, t099`;
+  t090 is serialized after t086 (the table and Waves line say so); t090's spec now keeps the
+  autopilot control variables for the lead and detached runs and adds the S084–S089 regression
+  line. The t091/t095 split and the Goal ids are still open (review finding 4): finish the split
+  and list every piece id in the Goal before wave 2 and wave 4 start.
+- t092's round 2 added one product line: `delegate new` writes `REPORT.template.md` into the task
+  home, as S108 asks (`commands.rs`, `new` only). It stays on `task/t092`.
+- Next (for the next wave lead): fix S098 and S108 through `fix-check` once their writer families
+  have quota (or by a fix task with `fixes_checks:` after t091), merge t086, start t090, then
+  t092. Wave 2 (t091's pieces) waits for t086.
+
+## Waiting for you
+- t092: S108's check is broken, not the kit. Its `gaps` loop (`evals/scenarios/S108-*/check`,
+  line 94) reads `${where_missing[$line]}` with `$line` empty when the kit passes everything, so
+  `set -u` stops the check with "bad array subscript" and it fails with the kit fully correct
+  (`_evals/results/logs/S108.log` in the checkout; t092's round 2 in `t092/CHECKS.txt`). The
+  writer is Claude (`Worker: claude:sonnet@high`, t097), so a fix comes from that family via
+  `delegate fix-check S108 --from t092` once t091 exists. t092's work (kit text, the
+  `delegate new` copy of REPORT.template.md, `commands.rs` `new` only) stays on
+  `task/t092`, not merged; t096 waits on it. Parked per the mandate (check bug): the fix goes
+  through `fix-check` once t091 merges, in wave 2.
+
+- t086: S098's check is broken, not the change. Its fixture writes `evals/lib/helper.sh` where
+  the shell isn't in `$PROJ` (t086's implementer found it: `t086/REPORT.md` "Check problems";
+  I did not re-run it). The warning is in place: its unit test passes with a real helper change.
+  S098's writer is DeepSeek (t085), and Hyper, DeepSeek's only route, is out of quota, so no
+  family can fix it yet. Parked per the mandate (check bug). Its other checks pass: S096, S097,
+  S099 and `scripts/check` (310 tests). Hidden P025 still to run at review. Dependents: t090,
+  t091 (wait for t086's merge).
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01; renewed the same day after their answers. -->
@@ -128,7 +153,8 @@
 - Merge without asking when: checks, the task's and hidden scenarios, and required reviews pass.
 - Needs the user: new decisions, scope changes, accepting findings, discarding a feature.
 - Not in this run: t025 (needs a design with the user).
-- Waves: 1 = t086, t090, t092; 2 = t091's pieces; 3 = t095's pieces, t096.
+- Waves: 1 = t086, t090, t092 (t090 starts only after t086 merges, the plan review's
+  serialization for `commands.rs`); 2 = t091's pieces; 3 = t095's pieces, t096.
 - Split t091 and t095 as the plan review below says (new ids from t102), before their wave;
   splitting them isn't a scope change.
   Start a task early only when its dependencies are merged and it shares no files with a
@@ -161,10 +187,10 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 1 | todo | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
-| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 2 | todo | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
+| t086 | Runner: check writers' families from git history (hidden included) plus `checks_by:`; `merge` refuses a task that changes its own Acceptance checks unless `fixes_checks:` names them, warns on `evals/lib/`; a check fix runs only in its writers' families (decision 024) | 1 | review (parked: S098 check bug) | t085 | standard | `evals/run S096 S097 S098 S099`, hidden P025, `scripts/check` | `checks_by: t085` |
+| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 (starts after t086 merges: both touch `commands.rs`) | todo (waits for t086's merge) | t086, t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
 | t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 3 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
-| t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | todo | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
+| t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | review (parked: S108 check bug) | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
 | t096 | Kit text for decision 026: start autopilot at "go", "I'm off"/"back", asking parked questions live, landing summaries | 4 | todo | t092, t098 | fast | `evals/run S118`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs:78`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
