@@ -119,19 +119,26 @@
   account's runway in tier order. Checks by DeepSeek (t060), fixes by Sol (t061, t063) and
   Luna (t062). S079–S082 pass, P021 hidden.
 
-## Handoff (2026-11-01, after wave 1, user present)
-- Merged on `autopilot` (not landed on main yet): t102, t086. The driver is stopped; land with
-  the user's approval (`delegate autopilot land`).
-- `delegate list`: t092 (round 2, `scripts/check` passes; S108 fails on its check's empty-array
-  loop; parked), t090 (not run; unblocked now that t086 is merged).
+## Handoff (2026-11-01, autopilot wave 1)
+- Merged on `autopilot` (not landed on main yet): t102, t086. Land with the user's approval
+  (`delegate autopilot land`).
+- `delegate list`: t090 (round 1, reviewed by claude:sonnet@high: 0 high, 1 medium, 3 low; parked
+  on S085, see Waiting for you), t092 (round 2, `scripts/check` passes; S108 fails on its check's
+  empty-array loop; parked).
+- t090's review lows, for whoever lands it: `ProjectRules::load` now runs `[warm]` validation
+  (git calls) on every check and gate, so a stale `[warm]` path fails `delegate check`; the
+  acceptance and check processes lose `_DELEGATE_AUTOPILOT_GROUP`, so `kill_leftover` can miss
+  them; unit tests cover the helper, not the call sites that pass `[env] allow`.
+  The review also notes `AGENTS.md` (Layout) and the `.delegate.toml` template miss the new
+  `environment.rs` and `[env]`: fix on main after the merge.
 - Plan review (gpt-6.1-sol, wave 1) changes applied: t090's spec keeps the autopilot control
   variables for the lead and detached runs and adds the S084–S089 regression line. The t091/t095
   split and the Goal ids are still open (review finding 4): finish the split and list every piece
   id in the Goal before wave 2 and wave 4 start.
 - t092's round 2 added one product line: `delegate new` writes `REPORT.template.md` into the task
   home, as S108 asks (`commands.rs`, `new` only). It stays on `task/t092`.
-- Next: start t090; then wave 2 (t091's pieces); then fix S108 through `fix-check` (Claude's
-  family wrote it) and rerun t092.
+- Next: decide S085 (Waiting for you), then merge t090 with the review's findings noted; then
+  wave 2 (t091's pieces); then fix S108 through `fix-check` (Claude's family wrote it) and rerun t092.
 
 ## Waiting for you
 - t092: S108's check is broken, not the kit. Its `gaps` loop (`evals/scenarios/S108-*/check`,
@@ -148,6 +155,13 @@
   Also to decide: a check-writing task whose Acceptance names the scenario it creates is refused
   at merge (its new `check` counts as changing its own check). Today's check tasks keep those as
   review items, so nothing breaks yet.
+- t090: S085 fails in t090's Acceptance line, and it is a check bug, not a product gap. Its
+  `check` runs `delegate autopilot away`, which decision 026 gives to t095 (the S083/S085 move
+  in the t099 entry above), and the CLI exits 2 ("unrecognized subcommand 'away'"). The rest of
+  the line passes (S084, S086, S087, S089). Options: drop S085 from t090's line and let t095 run
+  it, or have a check fix (`fixes_checks: S085`) written for a state that exists after t095.
+  Hidden P026 passes; `scripts/check` passes both ways. Round 1 report is in
+  `t090/REPORT.md` under "Check problems".
 
 ## Mandate
 <!-- Agreed with the user on 2026-11-01; renewed the same day after their answers. -->
@@ -191,7 +205,7 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 | todo | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
+| t090 | One allowlisted child environment for gates, acceptance and checks; unit tests ignore ambient `DELEGATE_*` (decision 025) | 1 | review (parked: S085 check bug) | t097 | standard | `evals/run S106 P026`, `scripts/check` with `DELEGATE_AUTOPILOT`, `DELEGATE_AUTOPILOT_WAVE` set | needed before the next autopilot run |
 | t091 | `delegate fix-check`; a task's next round includes check fixes merged into its base (decision 025) | 3 | todo | t086, t089, t097 | standard | `evals/run S101 S102 S103 S104 S105 S107`, `scripts/check` | touches `commands.rs` after t086 |
 | t092 | Kit text for decision 025: pinned contract in `/evaluate`, check-task limit and checklist, question-phase check review, "Check problems" REPORT section, `fix-check` (also for autopilot) | 2 | review (parked: S108 check bug) | t087, t097 | fast | `evals/run S108`, `scripts/check` | root and `templates/project/` together, then `scripts/kit-history` |
 | t095 | Driver and commands for decision 026: `autopilot away`/`here`/`answer`, `wait` on wave ends and parked items, landing green waves while present, gate rerun and revert with a fix task, complete report | 4 | todo | t090, t091, t094, t098 | deep | `evals/run S109 S110 S111 S112 S113 S114 S115 S116 S117`, `scripts/check` | `autopilot.rs`, `wait.rs`; `checks_by: t094, t098` |
