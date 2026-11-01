@@ -106,18 +106,9 @@ fn glob_matches(pattern: &str, path: &str) -> bool {
 
 /// Tasks that wrote the checks, listed on `checks_by:` lines anywhere in the spec.
 pub fn checks_by(text: &str) -> Vec<String> {
-    marker_ids(text, "checks_by:")
-}
-
-/// Scenarios whose checks this task is allowed to fix.
-pub fn fixes_checks(text: &str) -> Vec<String> {
-    marker_ids(text, "fixes_checks:")
-}
-
-fn marker_ids(text: &str, marker: &str) -> Vec<String> {
     let mut ids = Vec::new();
     for line in text.lines() {
-        if let Some(value) = line.trim().strip_prefix(marker) {
+        if let Some(value) = line.trim().strip_prefix("checks_by:") {
             for id in value.split(',').map(str::trim).filter(|id| !id.is_empty()) {
                 if !ids.iter().any(|seen| seen == id) {
                     ids.push(id.to_string());
@@ -126,23 +117,6 @@ fn marker_ids(text: &str, marker: &str) -> Vec<String> {
         }
     }
     ids
-}
-
-/// Scenario ids mentioned in Acceptance, including commands, paths and prose.
-pub fn acceptance_scenarios(text: &str) -> Vec<String> {
-    let mut ids = Vec::new();
-    for word in section(text, "Acceptance").split(|c: char| !c.is_ascii_alphanumeric()) {
-        if scenario_id(word) && !ids.iter().any(|seen| seen == word) {
-            ids.push(word.to_string());
-        }
-    }
-    ids
-}
-
-pub fn scenario_id(word: &str) -> bool {
-    word.len() > 1
-        && matches!(word.as_bytes()[0], b'E' | b'S' | b'P')
-        && word.as_bytes()[1..].iter().all(u8::is_ascii_digit)
 }
 
 /// Task size from a `size:` line anywhere in the spec; medium when absent.
@@ -219,40 +193,6 @@ mod tests {
         assert_eq!(
             checks_by("<!-- checks_by: t001 -->\nprose checks_by: t002"),
             Vec::<String>::new()
-        );
-    }
-
-    #[test]
-    fn reads_fix_markers_and_acceptance_scenarios() {
-        assert_eq!(
-            fixes_checks("fixes_checks: S001, S002\n  fixes_checks: S002, P025, \n"),
-            ["S001", "S002", "P025"]
-        );
-        assert_eq!(
-            fixes_checks("prose fixes_checks: S001"),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            acceptance_scenarios(
-                "S999\n## Acceptance\n- [ ] `env -u X evals/run S001 S002`\n- [ ] `evals/scenarios/S001-pricing/check`\n- [ ] Hidden P025 passes\n## Other\nS003\n"
-            ),
-            ["S001", "S002", "P025"]
-        );
-    }
-
-    #[test]
-    fn scenario_ids_include_e_s_p_forms() {
-        for id in ["E003", "P025", "S001", "E1", "S12", "P1234"] {
-            assert!(scenario_id(id), "{id}");
-        }
-        for id in ["", "E", "E003a", "e003", "J1", "S", "S001-test", "P-1"] {
-            assert!(!scenario_id(id), "{id}");
-        }
-        assert_eq!(
-            acceptance_scenarios(
-                "E999\n## Acceptance\n- [ ] `evals/run E003 S001 P025`\n- [ ] `evals/scenarios/E003-test/check`\n## Other\nE004\n"
-            ),
-            ["E003", "S001", "P025"]
         );
     }
 

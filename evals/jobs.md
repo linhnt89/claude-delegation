@@ -17,8 +17,7 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 | J6 Research and plan review | A read-only research run returns a report and changes no code. Plan review uses a model that isn't Claude and finds real problems before work starts |
 | J7 The repo stays the shared memory | Decisions and scenarios are kept in the repo. After merge or discard, no task state is left behind and none ends up in git history |
 | J8 See what running tasks are doing | I start a run in the background and can see any time, from the terminal or Claude Code, each task's phase, what it is for, which session started it, its worker's steps as they happen, and whether it has stalled or died. Claude can check the same thing to decide what to do next |
-| J9 Claude leads, workers build | Once a plan is agreed, Claude writes neither product code nor checks itself. Its attempts are refused with what to do instead, and workers are never slowed by it. Only I can turn that off. Once a wave is agreed, Claude starts all its ready tasks together and keeps working while workers run |
-| J10 Work goes on while I'm away | Before I leave, Claude asks everything it will need in one go. While I'm away it runs the plan wave after wave, merges what passes on its own branch, parks only what needs me and keeps the rest going. When it stops I get one message, and on return one report says what was merged, what waits for me and why it stopped; one question lands the work |
+| J9 Claude leads, workers build | Once a plan is agreed, Claude delegates product code and checks instead of writing them itself (a habit taught by the kit, not enforced since decision 030). Once a wave is agreed, Claude starts all its ready tasks together and keeps working while workers run |
 
 ## What would make them give up
 - It claims success when it didn't succeed: a merge that went through with broken checks, or a commit that's empty.
@@ -43,9 +42,6 @@ J1 P012 (new feature: fails until built) · J2 S007 · J3 P001 · J4 S014 · J5 
 J8 P010 S028. J6 has none: its one scenario, S017, stays visible.
 Added for decision 007 (new feature: fail until built): J7 P015 P016.
 Added for session-scoped views (new feature: fails until built): J8 P018.
-Added for the lead guard (new feature: fails until built): J9 P017.
 Added for decisions 016, 017 (new feature: fails until built): J5 P021.
-Added for decisions 019, 020 (new feature: fails until built): J10 P022 S088 · J3 S094.
-Added for decisions 023, 024 (new feature: fails until built): J3 P025.
-Added for decision 026 (new feature: fails until built): J10 S116.
-Added for decision 025 (new feature: fails until built): J3 P026.
+Added for decision 020 (new feature: fails until built): J3 S094.
+Retired by decision 030 (in git history, out of the vault): J9 P017 · J10 P022 S088 S116 P027 S127 · J3 P025 P026.

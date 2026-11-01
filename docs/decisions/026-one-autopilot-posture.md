@@ -1,7 +1,7 @@
 # 026: Autopilot is how the lead works on a mandate, present or away
 
 - Date: 2026-10-31
-- Status: accepted
+- Status: superseded by 030
 
 ## Context
 Decision 019 made autonomy a separate mode. The user asks for a prep pass, commits a mandate,

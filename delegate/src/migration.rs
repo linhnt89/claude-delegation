@@ -839,7 +839,7 @@ mod tests {
         }
         let f = Fixture::new()?;
         fs::create_dir(f.old.join("t001/worktree/nested"))?;
-        let output = crate::environment::test_command(std::env::current_exe()?)
+        let output = std::process::Command::new(std::env::current_exe()?)
             .args(["--exact", "migration::tests::first_command_inside_a_legacy_worktree_follows_its_move_and_main_project_id", "--nocapture"])
             .current_dir(f.old.join("t001/worktree/nested"))
             .env(CHILD, "1").env_remove("DELEGATE_HOME").env("XDG_DATA_HOME", &f.base).output()?;
@@ -892,7 +892,7 @@ mod tests {
             let f = Fixture::new()?;
             fs::create_dir(f.home.join("t001"))?;
             fs::write(f.home.join("t001/SPEC.md"), "different")?;
-            let mut child = crate::environment::test_command(std::env::current_exe()?);
+            let mut child = std::process::Command::new(std::env::current_exe()?);
             child.args(["--exact", "migration::tests::override_skips_migration_and_machine_commands_surface_conflicts", "--nocapture"])
                 .current_dir(&f.main).env(CHILD, mode).env_remove("DELEGATE_HOME")
                 .env("XDG_DATA_HOME", &f.base);
@@ -928,7 +928,7 @@ mod tests {
             }
             fs::create_dir_all(f.old.join("unknown/nested"))?;
             fs::write(f.old.join("unknown/nested/keep"), "precious")?;
-            let output = crate::environment::test_command(std::env::current_exe()?)
+            let output = std::process::Command::new(std::env::current_exe()?)
                 .args([
                     "--exact",
                     "migration::tests::unknown_files_are_left_and_reported_once",

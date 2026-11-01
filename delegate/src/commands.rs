@@ -24,7 +24,7 @@ pub const PRUNE_TEMPLATE: &str = include_str!("../templates/PRUNE.md");
 const REPORT_TEMPLATE: &str = include_str!("../templates/REPORT.md");
 const CHECK_TIMEOUT: Duration = Duration::from_mins(15);
 
-pub(crate) fn hidden_homes(ctx: &Ctx) -> Vec<std::path::PathBuf> {
+fn hidden_homes(ctx: &Ctx) -> Vec<std::path::PathBuf> {
     let mut paths = vec![ctx.dhome.clone()];
     // Until t023 migrates old homes, they can still contain private scenarios.
     if let Some(main) = ctx.gitdir.parent() {
@@ -91,7 +91,6 @@ pub fn new(ctx: &Ctx, id: &str, prune: bool) -> Result<()> {
     fs::create_dir_all(&t.dir)?;
     let template = if prune { PRUNE_TEMPLATE } else { SPEC_TEMPLATE };
     fs::write(&t.spec, template.replace("<id>", &t.id))?;
-    fs::write(t.dir.join("REPORT.template.md"), REPORT_TEMPLATE)?;
     claim_owner(ctx, &mut t)?;
     println!("{}", t.spec.display());
     Ok(())
@@ -402,7 +401,7 @@ fn implement_attempt(
     let sb = harness::sandbox(Some(w.harness), &task_bounds(ctx, t)?, &t.wt)?;
     let mut run = |session: Option<&Session>, prompt: &str| -> Result<(i32, bool)> {
         let cmd = [sb.clone(), harness::streaming_command(w, prompt, session)].concat();
-        let rc = harness::run_streamed(&cmd, &t.wt, log, &mut stream, Some(t.id.as_str()))?;
+        let rc = harness::run_streamed(&cmd, &t.wt, log, &mut stream)?;
         Ok((rc, stream.saw_quota()))
     };
     let mut session = harness::new_session(w.harness);
@@ -491,13 +490,40 @@ fn implement_candidates(
     tier: Tier,
     spec_text: &str,
 ) -> Result<Vec<Worker>> {
-    crate::check_writers::candidates(
-        ctx,
-        t,
-        cfg.candidates(Role::Implement, tier, None)?,
-        &tier.to_string(),
-        spec_text,
-    )
+    let mut workers = cfg.candidates(Role::Implement, tier, None)?;
+    let mut excluded = Vec::new();
+    for id in spec::checks_by(spec_text) {
+        let authors = t.check_writers(ctx, &id)?;
+        if authors.is_empty() {
+            println!(
+                "can't tell who wrote {id}'s checks (no Worker trailer on its merge); running without that rule"
+            );
+        }
+        for author in authors {
+            let family = author.family();
+            if !excluded.iter().any(|(seen, _)| seen == &family) {
+                println!("skipping the {family} family: {id} wrote its checks");
+                excluded.push((family, id.clone()));
+            }
+        }
+    }
+    workers.retain(|worker| {
+        !excluded
+            .iter()
+            .any(|(family, _)| *family == worker.family())
+    });
+    if workers.is_empty() {
+        let reasons = excluded
+            .iter()
+            .map(|(family, id)| format!("{family} family ({id} wrote its checks)"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "no [implement].{tier} candidate remains after excluding {reasons}; add a candidate of another family to [implement].{tier} in {}",
+            workers_config_path().display()
+        );
+    }
+    Ok(workers)
 }
 
 /// Best-effort advice only: another task's missing metadata must not block a run.
@@ -534,9 +560,7 @@ fn scope_overlap_warnings(ctx: &Ctx, id: &str, spec_text: &str) -> Vec<String> {
 }
 
 pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
-    let _lead = crate::autopilot::authorize(ctx)?;
     let mut t = Task::load(ctx, &a.id)?;
-    crate::autopilot::before_run(ctx, &t)?;
     status::ensure_idle(&t)?;
     let mut operation = None;
     // The parent already preflighted this detached run. Publish the child's own
@@ -601,15 +625,6 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
         (Some(tier), why, workers)
     };
     let tier_label = tier.map_or_else(|| "custom".into(), |x| x.to_string());
-    // An explicit debug worker must not bypass the check-fix writer requirement.
-    let workers = if a.worker.is_some()
-        && role == Role::Implement
-        && !spec::fixes_checks(&spec_text).is_empty()
-    {
-        crate::check_writers::candidates(ctx, &t, workers, &tier_label, &spec_text)?
-    } else {
-        workers
-    };
     println!(
         "task {}: {} @ {tier_label} ({why}), question phase: {}",
         t.id,
@@ -654,7 +669,7 @@ pub fn run(ctx: &Ctx, a: &RunArgs) -> Result<()> {
     if harness::needs_bwrap(
         workers.iter().map(|w| w.harness),
         a.research,
-        crate::environment::var("DELEGATE_SANDBOX").is_ok_and(|v| v == "0"),
+        std::env::var("DELEGATE_SANDBOX").is_ok_and(|v| v == "0"),
     ) {
         harness::require_bwrap()?;
     }
@@ -1038,12 +1053,12 @@ fn background(a: &RunArgs, t: &Task) -> Result<()> {
 
 // ---------------------------------------------------------------- checks
 
-fn run_with_timeout(cmd: &[String], cwd: &Path, extra: &[String]) -> Result<(i32, String)> {
+fn run_with_timeout(cmd: &[String], cwd: &Path) -> Result<(i32, String)> {
     let (program, args) = cmd.split_first().context("empty command")?;
     let out_path =
         std::env::temp_dir().join(format!("delegate-check-{}.log", uuid::Uuid::new_v4()));
     let out = fs::File::create(&out_path)?;
-    let mut child = crate::environment::judging(&mut Command::new(program), extra)
+    let mut child = Command::new(program)
         .args(args)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
@@ -1091,11 +1106,10 @@ fn run_checks(ctx: &Ctx, t: &Task, operation: &Operation) -> Result<Checks> {
             "no runnable acceptance commands in the spec (lines like: - [ ] `command`)".to_string(),
         );
     }
-    let rules = ProjectRules::load(&ctx.root)?;
     let sb = harness::sandbox(None, &task_bounds(ctx, t)?, &t.wt)?;
     for c in &cmds {
         let full = [sb.clone(), vec!["bash".into(), "-c".into(), c.clone()]].concat();
-        let (rc, out) = run_with_timeout(&full, &t.wt, &rules.env.allow)?;
+        let (rc, out) = run_with_timeout(&full, &t.wt)?;
         let label = match rc {
             0 => "PASS",
             3 => {
@@ -1304,7 +1318,6 @@ pub fn review(
             &t.wt,
             &log,
             None,
-            Some(t.id.as_str()),
         )?;
         if rc == 0 || review_file.exists() {
             used = Some(w.clone());
@@ -1424,13 +1437,7 @@ pub fn plan_review(
             harness::command(w, &prompt, None, true, codex.then_some(out.as_path())),
         ]
         .concat();
-        let rc = harness::run_logged(
-            &cmd,
-            &ctx.root,
-            &log,
-            (!codex).then_some(out.as_path()),
-            None,
-        )?;
+        let rc = harness::run_logged(&cmd, &ctx.root, &log, (!codex).then_some(out.as_path()))?;
         if rc == 0 && first_line(&out).is_some() {
             println!(
                 "\nplan review by {w}: {}\n  {}",
@@ -1459,9 +1466,6 @@ fn failed_checks_problem(t: &Task) -> String {
     message
 }
 
-/// Width of the lead's latest step in the autopilot line of `list`.
-const AUTOPILOT_STEP_WIDTH: usize = 70;
-
 /// `vault_notes`: say what the vault holds that isn't on its remote (off inside the sandbox).
 pub fn list(ctx: &Ctx, vault_notes: bool) -> Result<()> {
     let mut ids: Vec<String> = fs::read_dir(&ctx.dhome)
@@ -1473,9 +1477,6 @@ pub fn list(ctx: &Ctx, vault_notes: bool) -> Result<()> {
         })
         .unwrap_or_default();
     ids.sort();
-    if let Some(autopilot) = status::autopilot(ctx) {
-        println!("{}", autopilot.line(AUTOPILOT_STEP_WIDTH));
-    }
     if ids.is_empty() {
         println!("no tasks");
     }
@@ -1572,18 +1573,6 @@ pub(crate) fn merge_readiness(
             );
         }
 
-        let spec_text = t.spec_text()?;
-        let helpers: Vec<_> = paths
-            .iter()
-            .filter(|path| path.starts_with("evals/lib/"))
-            .cloned()
-            .collect();
-        if !helpers.is_empty() {
-            warnings.push(format!(
-                "warning: shared check helpers changed: {}",
-                helpers.join(", ")
-            ));
-        }
         let head = t.head(ctx)?;
         let mut block = |message: String, command: String| {
             if problems.is_empty() {
@@ -1591,18 +1580,6 @@ pub(crate) fn merge_readiness(
             }
             problems.push(message);
         };
-        let forbidden = crate::check_writers::forbidden_changes(&spec_text, &paths);
-        if !forbidden.is_empty() {
-            block(
-                format!(
-                    "changed own Acceptance checks: {}; undo these changes, report check bugs in REPORT.md, and fix them in a separate task with fixes_checks:",
-                    forbidden.join(", ")
-                ),
-                format!(
-                    "undo the check changes in task {id}; report the bug in REPORT.md for a separate check-fix task"
-                ),
-            );
-        }
         match &implemented.checks {
             Some(c) if c.commit != head => block(
                 "acceptance checks haven't run on the final commit (run: delegate check)".into(),
@@ -1723,7 +1700,6 @@ pub(crate) fn merge_readiness(
 
 #[allow(clippy::too_many_lines)] // Keep the merge transaction and its rollback together.
 pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
-    let _lead = crate::autopilot::authorize(ctx)?;
     let t = Task::load(ctx, id)?;
     let operation = if t.dir.is_dir() {
         Some(Operation::acquire(&t, "merge")?)
@@ -1804,13 +1780,11 @@ pub fn merge(ctx: &Ctx, id: &str, accept_findings: bool) -> Result<()> {
         );
     }
     println!("squash-merged {} into {base}: {title}", t.branch);
-    let gate = crate::autopilot::after_merge(ctx, id);
     remove(ctx, &t).map_err(|error| {
         anyhow::anyhow!(
             "merged, but cleaning up {id} failed: {error:#}; run: delegate discard {id}"
         )
-    })?;
-    gate
+    })
 }
 
 fn remove(ctx: &Ctx, t: &Task) -> Result<()> {
@@ -1830,7 +1804,6 @@ fn remove(ctx: &Ctx, t: &Task) -> Result<()> {
 }
 
 pub fn discard(ctx: &Ctx, id: &str) -> Result<()> {
-    let _lead = crate::autopilot::authorize(ctx)?;
     let t = Task::load(ctx, id)?;
     status::ensure_idle(&t)?;
     let _operation = if t.dir.is_dir() {
@@ -1970,7 +1943,7 @@ mod tests {
     #[test]
     fn acceptance_checks_are_marked_sandboxed_without_bwrap() {
         let cmd = ["sh", "-c", "printf '%s' \"$DELEGATE_SANDBOXED\""].map(str::to_owned);
-        let (rc, output) = run_with_timeout(&cmd, &std::env::temp_dir(), &[]).unwrap();
+        let (rc, output) = run_with_timeout(&cmd, &std::env::temp_dir()).unwrap();
         assert_eq!(rc, 0);
         assert_eq!(output, "1");
     }
@@ -2299,55 +2272,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_warns_for_shared_helpers_without_blocking() -> Result<()> {
-        let (_repo, ctx, mut task) = merge_fixture()?;
-        fs::create_dir_all(task.wt.join("evals/lib"))?;
-        fs::write(task.wt.join("evals/lib/helper.sh"), "# helper\n")?;
-        git(&task.wt, &["add", "evals/lib/helper.sh"])?;
-        git(&task.wt, &["commit", "-qm", "add helper"])?;
-        task.state.rounds[0].checks.as_mut().unwrap().commit = task.head(&ctx)?;
-        let readiness = merge_readiness(&ctx, &task, false, None);
-        assert_eq!(readiness.blockers, Vec::<String>::new());
-        assert_eq!(
-            readiness.warnings,
-            ["warning: shared check helpers changed: evals/lib/helper.sh"]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn merge_refuses_deleted_or_renamed_own_check_but_allows_a_fix() -> Result<()> {
-        let (_repo, ctx, mut task) = merge_fixture()?;
-        let check = "evals/scenarios/S001-pricing/check";
-        fs::create_dir_all(ctx.root.join("evals/scenarios/S001-pricing"))?;
-        fs::write(ctx.root.join(check), "# check\n")?;
-        git(&ctx.root, &["add", "evals"])?;
-        git(&ctx.root, &["commit", "-qm", "base check"])?;
-        git(&task.wt, &["merge", "-q", "main"])?;
-        git(
-            &task.wt,
-            &["mv", check, "evals/scenarios/S001-pricing/renamed"],
-        )?;
-        git(&task.wt, &["commit", "-qm", "rename own check"])?;
-        fs::write(&task.spec, "## Acceptance\n- [ ] `evals/run S001`\n")?;
-        task.state.rounds[0].checks.as_mut().unwrap().commit = task.head(&ctx)?;
-        assert!(task.changed_paths(&ctx)?.contains(&check.to_string()));
-        let readiness = merge_readiness(&ctx, &task, false, None);
-        let refusal = readiness.refusal.context("rename must be refused")?;
-        assert!(refusal.contains(check), "{refusal}");
-        assert!(refusal.contains("REPORT.md"), "{refusal}");
-        fs::write(
-            &task.spec,
-            "fixes_checks: S001\n## Acceptance\n- [ ] `evals/run S001`\n",
-        )?;
-        assert_eq!(
-            merge_readiness(&ctx, &task, false, None).blockers,
-            Vec::<String>::new()
-        );
-        Ok(())
-    }
-
-    #[test]
     fn merge_trailers_include_only_committing_workers_in_round_order() -> Result<()> {
         let (_repo, ctx, mut t) = merge_fixture()?;
         git(&t.wt, &["commit", "--amend", "-qm", "task t001 round 1"])?;
@@ -2602,7 +2526,7 @@ deep = ["claude:sonnet@high"]
         let path = std::env::join_paths(std::iter::once(ctx.root.join("bin")).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))?;
-        let mut command = crate::environment::test_command(std::env::current_exe()?);
+        let mut command = Command::new(std::env::current_exe()?);
         command
             .args([
                 "--exact",
@@ -3362,7 +3286,7 @@ deep = ["claude:sonnet@high"]
         assert!(Command::new("mkfifo").arg(&t.spec).status()?.success());
         // Block the repeated spec preflight indefinitely. The child's live state
         // must be visible even when this takes longer than startup's deadline.
-        let mut child = crate::environment::test_command(std::env::current_exe()?)
+        let mut child = Command::new(std::env::current_exe()?)
             .args([
                 "--exact",
                 "commands::tests::detached_child_publishes_live_before_slow_preflight",

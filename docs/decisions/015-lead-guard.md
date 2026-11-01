@@ -1,7 +1,7 @@
 # 015: A guard of Claude Code hooks keeps the lead out of product files
 
 - Date: 2026-10-28
-- Status: accepted
+- Status: superseded by 030
 
 ## Context
 Decision 004 and the skills tell the lead not to implement, but only as text: when the user

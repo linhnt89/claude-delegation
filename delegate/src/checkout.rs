@@ -475,7 +475,7 @@ mod tests {
         let home = f.home()?;
         f.task(&home)?;
         fs::remove_dir_all(f.main())?;
-        let output = crate::environment::test_command(std::env::current_exe()?)
+        let output = std::process::Command::new(std::env::current_exe()?)
             .args([
                 "--exact",
                 "checkout::tests::list_outside_a_repo_mentions_retained_home_once",

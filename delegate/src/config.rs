@@ -487,13 +487,6 @@ fn deserialize_step_up_after<'de, D: serde::Deserializer<'de>>(
     Ok(value)
 }
 
-/// Machine-local settings for the unattended lead driver.
-#[derive(Debug, Default, Deserialize)]
-pub struct AutopilotConfig {
-    pub quota_floor: Option<String>,
-    pub notify: Option<String>,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct WorkersConfig {
     pub planner_family: Option<String>,
@@ -511,8 +504,6 @@ pub struct WorkersConfig {
     pub accounts: BTreeMap<String, String>,
     #[serde(default)]
     pub quota: QuotaConfig,
-    #[serde(default)]
-    pub autopilot: AutopilotConfig,
 }
 
 impl WorkersConfig {
@@ -620,7 +611,7 @@ impl WorkersConfig {
 
 /// Configuration being read, or the path to create when using built-in defaults.
 pub fn workers_config_path() -> PathBuf {
-    crate::environment::var_os("DELEGATE_WORKERS")
+    std::env::var_os("DELEGATE_WORKERS")
         .map(PathBuf::from)
         .filter(|path| path.is_file())
         .unwrap_or_else(user_config_path)
@@ -685,20 +676,11 @@ pub struct Warm {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Env {
-    #[serde(default)]
-    pub allow: Vec<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
 pub struct ProjectRules {
     #[serde(default)]
     pub rules: Vec<Rule>,
     #[serde(default)]
     pub warm: Warm,
-    #[serde(default)]
-    pub env: Env,
 }
 
 impl ProjectRules {
@@ -708,9 +690,8 @@ impl ProjectRules {
             return Ok(Self::default());
         }
         let text = std::fs::read_to_string(&path)?;
-        let mut rules: Self = toml::from_str(&text).with_context(|| {
-            format!("parsing {}; correct .delegate.toml and retry", path.display())
-        })?;
+        let mut rules: Self =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         for name in rules.warm.share.iter_mut().chain(&mut rules.warm.copy) {
             if !Path::new(name).is_absolute() {
                 *name = name.trim_end_matches('/').to_owned();
@@ -819,40 +800,6 @@ impl ProjectRules {
         }
         Ok(out)
     }
-}
-
-/// `[guard]` in `.delegate.toml`; the rest of the file is read by [`ProjectRules`].
-#[derive(Debug, Default, Deserialize)]
-struct GuardFile {
-    #[serde(default)]
-    guard: GuardSection,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GuardSection {
-    #[serde(default)]
-    lead_files: Vec<String>,
-}
-
-/// The `[guard] lead_files` globs of `.delegate.toml`: files the lead writes itself, beside
-/// the default lead files (decision 015). No file means none.
-pub fn lead_files(root: &Path) -> Result<Vec<globset::GlobMatcher>> {
-    let path = root.join(".delegate.toml");
-    if !path.is_file() {
-        return Ok(vec![]);
-    }
-    let text = std::fs::read_to_string(&path)?;
-    let file: GuardFile =
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    file.guard
-        .lead_files
-        .iter()
-        .map(|pattern| {
-            Glob::new(pattern)
-                .with_context(|| format!("bad glob '{pattern}' in [guard] lead_files"))
-                .map(|glob| glob.compile_matcher())
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -1019,43 +966,6 @@ standard = ["claude:sonnet@high", "pi:github-copilot/claude-opus-5.5@high"]
                 }
             }
         }
-    }
-
-    #[test]
-    fn env_extras_default_parse_and_reject_unknown_keys() {
-        let rules: ProjectRules = toml::from_str("").unwrap();
-        assert_eq!(rules.env.allow, Vec::<String>::new());
-        let rules: ProjectRules =
-            toml::from_str("[env]\nallow = ['EXTRA_ALLOWED', 'OTHER']\n").unwrap();
-        assert_eq!(rules.env.allow, ["EXTRA_ALLOWED", "OTHER"]);
-        for text in [
-            "[env]\nalow = ['EXTRA_ALLOWED']",
-            "[env]\nallow = []\nunknown = true",
-        ] {
-            let error = toml::from_str::<ProjectRules>(text).unwrap_err().to_string();
-            let key = if text.contains("alow") {
-                "alow"
-            } else {
-                "unknown"
-            };
-            assert!(error.contains(key), "{error}");
-        }
-        assert!(toml::from_str::<ProjectRules>("[env]\nallow = 'EXTRA_ALLOWED'").is_err());
-    }
-
-    #[test]
-    fn env_load_error_names_the_key_and_recovery() {
-        let root = std::env::temp_dir().join(format!("delegate-env-config-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&root).unwrap();
-        std::fs::write(
-            root.join(".delegate.toml"),
-            "[env]\nallow = []\nunexpected_setting = true\n",
-        )
-        .unwrap();
-        let error = format!("{:#}", ProjectRules::load(&root).unwrap_err());
-        assert!(error.contains("unexpected_setting"), "{error}");
-        assert!(error.contains("correct .delegate.toml and retry"), "{error}");
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

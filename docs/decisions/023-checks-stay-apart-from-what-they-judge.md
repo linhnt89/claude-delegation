@@ -1,7 +1,7 @@
 # 023: Checks stay delegated and apart from the code they judge
 
 - Date: 2026-10-31
-- Status: accepted
+- Status: superseded by 030
 
 ## Context
 Workers write the checks (J9; the lead guard refuses `check` and `evals/lib/` edits) and the

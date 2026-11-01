@@ -17,49 +17,6 @@ keeps tasks; copying starts a separate task home. Task state is deleted on merge
 Which model does the work is decided by **role × tier** in `~/.config/delegate/workers.toml`,
 never per task. Project rules in `.delegate.toml` set minimum tiers and required reviews by path.
 
-## Sessions
-One session covers one phase: discussion (end with `/distill`), planning, or one wave.
-End each phase with a handoff in `PLAN.md`: what's next and what waits for the user.
-Then suggest `/clear` or a new session; do this before the user leaves for long, too.
-Open a new session with a short catch-up brief from `PLAN.md` and the last autopilot run
-report: what merged, what waits for the user, what's ready, and decisions still `proposed`.
-Send wide reading to `--research` tasks or subagents, not the lead's context.
-
-## Autopilot
-Do the prep pass with the user present: walk the plan to its goal, gather open questions,
-scenarios, contracts and likely worker questions and answers. Settle the user's calls up front.
-Write this format in `PLAN.md`; Goal must be non-empty and Gate must name a command:
-
-```markdown
-## Mandate
-- Goal: <tasks or scenarios to finish>
-- Gate: <project gate command>
-- Merge without asking when: checks, the task's and hidden scenarios, and required reviews pass.
-- Needs the user: new decisions, scope changes, accepting findings, discarding a feature.
-```
-
-Commit `PLAN.md` before `delegate autopilot start`. The driver starts a fresh headless lead
-per wave in its own `autopilot` checkout, never merging into the user's checkout.
-Use `delegate autopilot status` to inspect it, `delegate autopilot stop` to stop it, and
-`delegate autopilot land` on return to bring its work to the base branch with the user's approval.
-While the autopilot lock is held, another lead only discusses and writes specs; do not run,
-merge or discard tasks until `delegate autopilot stop` releases it.
-
-A headless lead may run and merge per the mandate, write specs for tasks already in `PLAN.md`,
-and add fix tasks only for breakage it caused. Record small, reversible choices as `proposed`
-decisions for the user to confirm. Park anything else in `PLAN.md` in this format:
-
-```markdown
-## Waiting for you
-- <id>: <question>
-```
-
-Its dependents wait; other ready work continues. At a task's `Max rounds` limit (default 3),
-park it with its failing checks as the question instead of rerunning it.
-After each merge the gate runs (`delegate merge` does it). If it fails, start nothing more
-and end the wave, even if that merge unblocked a task. End each wave with the handoff above;
-the run report includes what merged, parked questions, why it stopped and decisions left `proposed`.
-
 ## 1. Decide whether it should be delegated
 Keep it here if it is ambiguous, defines shared contracts or architecture, is
 security-sensitive, or is a debugging hunt with an unknown cause. Otherwise delegate.
@@ -75,24 +32,10 @@ listed in `Scope In`.
 - Acceptance also names the user scenarios the task must satisfy: ``- [ ] `evals/run S004` ``.
   No agreed scenario for the feature yet → `/evaluate feature` first.
 - Scope In: list paths in backticks; project rules use them to raise the tier up front.
-- A check task covers at most 5 scenarios. Put this checklist in its spec: set up its own
-  data, make no assumptions about repo history, use deterministic order, and take nothing from
-  the ambient environment.
 - Scope Out: name files parallel tasks are touching.
 - When another task wrote the checks, set `checks_by: t001` (comma-separated ids allowed).
-  The runner skips those tasks' worker families and every family that changed the Acceptance
-  scenarios' checks (from git's `Worker:` trailers), including hidden checks, on every implement
-  round, including step-ups. If none remain at that tier, add a candidate of another family
-  to that tier in `workers.toml`.
-- Implementers report check bugs; they don't change or fix the checks judging their work.
-  A check fix goes to its own task with `fixes_checks: S001, S002`, naming only the scenarios
-  whose checks it may change. The runner picks from the families that wrote those checks;
-  if none is available in the tier, add a candidate of a writer family there, not a new family.
-- If a failed check is a check bug, the lead runs `delegate fix-check <S…> --from <task>
-  --reason "…"` (autopilot leads may run it too). The command builds the fix spec from the
-  scenario, failing output in `CHECKS.txt`, the judged implementer's `Check problems` report,
-  and the lead's reason. The check writer may conclude the check is right and change nothing;
-  then return the failure to the implementer as a product bug.
+  The runner skips those tasks' worker families on every implement round, including step-ups.
+  If none remain at that tier, add a candidate of another family to that tier in `workers.toml`.
 - Set `size: small | medium | long` (default medium) when the task is unusually short or long.
   Before running, the runner skips an account whose quota runway is shorter than that size
   needs, so a long task is not handed to a subscription that stops halfway.
@@ -139,24 +82,25 @@ review finished tasks. As soon as a merge unblocks a task, start it at once.
 
 What happens:
 - **Question phase** (first round): the worker reads the spec and code and answers `READY` or
-  asks blocking questions, with no edits. For Acceptance checks, it compares each check with
-  its `scenario.md` and flags any it thinks can't pass; it reports only and does not edit the
-  checks. If it asks, the run stops and prints the questions. Answer in the spec under
-  `## Answers` (ask the user when it's their call), then run again.
+  asks blocking questions, with no edits. If it asks, the run stops and prints them. Answer
+  in the spec under `## Answers` (ask the user when it's their call), then run again.
 - **Work phase** continues in the same session, then the runner commits and runs the
   acceptance commands itself (`CHECKS.txt`).
-- **Fallbacks:** candidates that can't start (quota, auth) fall through in tier order. Accounts
-  out of quota or with too little shared runway for `size:` are skipped; unreadable logins warn
-  but are used. Parallel tasks share runway, divided by running tasks plus the new one.
-  Mid-round quota exhaustion keeps committed work and continues at the same tier with the next
-  candidate; it never counts toward a step-up. Explicit `--worker` only warns on quota.
-  `delegate quota` shows accounts; `workers.toml` `[quota]` sets runway thresholds.
+- **Fallbacks:** if a candidate can't start (quota, auth), the next one in the tier is used.
+  Before each run the runner reads each candidate account's quota. It skips one that is out or
+  whose shared runway is too short for the spec's `size:`; an unreadable login warns and is used
+  anyway. Parallel tasks can share one account: divide its runway by the tasks already running
+  there plus one for the new task, and try accounts in tier order. A busy account is not skipped
+  while that shared runway covers the new task.
+  A worker that hits its quota mid-round has its committed work kept, and the next candidate
+  continues at the same tier; that quota round never counts toward a step-up.
+  An explicit `--worker` is still checked, but only warns and then runs.
+  `delegate quota` shows every account, and `workers.toml` `[quota]` sets the runway thresholds.
 - **Step-up:** after `[defaults] step_up_after` product-failing rounds at the current tier
   (default 1), the next run goes one tier higher, up to deep. A passing round resets the count;
   check errors (exit 3) and unfinished rounds neither count nor reset it. After a check error,
-  delegate the broken check's fix to its own task with `fixes_checks:`, or correct the spec's
-  Acceptance; the next run stays at the same tier. Automatic selection never steps down,
-  even after a pass.
+  fix the broken check or the spec's Acceptance; the next run stays at the same tier. Automatic
+  selection never steps down, even after a pass.
 - `--no-ask` skips the question phase; `--worker harness:model@effort` overrides the config
   for debugging or demos, bypassing family rules; `--dry-run` shows the tier and candidates.
   Do not pin `--worker` for family independence; use `checks_by` instead.
@@ -164,8 +108,10 @@ What happens:
   the worker's `REPORT.md` is the result. Read it, keep what matters, then `delegate discard`.
 - `delegate new <id> --prune` starts from the stale-doc pruning spec.
 
-`delegate status <id> --json` shows `phase`, `outcome`, `stalled` (no recent file activity)
-and `next` (the next action). A stalled run is not automatically stopped.
+Independent tasks with separate files can run in parallel. Check each run with
+`delegate status <id> --json`: `phase` says what is happening, `outcome` says how it
+finished, `stalled` warns of no recent file activity, and `next` gives the next action.
+A stalled run is not automatically stopped. `delegate list` shows the batch at a glance.
 For the user: `delegate watch` in a terminal, and the `/delegate-pane` mod (installed by
 `delegate init`): a row above the prompt with every session's counts, and a side pane that
 opens when they ask. Both show the same status live.
@@ -185,23 +131,18 @@ Read in this order and stop when you can decide:
 3. `REPORT.md`, and `REVIEW.md` if reviewed
 4. `git diff <base>...task/<id> -- <file>` only for files that matter
 
-A check task's `REPORT.md` must list each check with the failure it gives on the current
-product. Before dependent work starts, you as lead confirm each fails for the reason its
-`scenario.md` states: no setup error, no exit 3. Report check bugs and delegate their fixes
-as above; don't fix checks yourself.
-
 You never commit on a task branch, not even a one-line fix or a doc: everything on it is
 the worker's, so the record shows what each model did. Judge by the spec's Acceptance and
 contract, not taste: a choice that works, passes the checks and keeps the contract (a test
 file named differently, other wording) is accepted and mentioned to the user, not reworked.
 
-Outside autopilot, ask one merge question per batch of finished tasks, naming the ids and
-any tasks needing another round: "Merge t061, t062? t063 needs another round."
-Under autopilot, merge without asking only when the mandate allows it.
+Ask one merge question per batch of finished tasks, naming the ids. Include tasks needing
+another round in the same message, for example: "Merge t061, t062? t063 needs another round."
+Do not ask one question per task.
 
 Then:
-- **Accept:** when approved by the user or the mandate, run `delegate merge <id>` for each
-  accepted task. Merge is refused unless checks pass on
+- **Accept:** after the batch question is approved, run `delegate merge <id>` for each accepted
+  task. Merge is refused unless checks pass on
   the final commit, project rules are met, and any review on the final commit has no
   high-severity findings (`--accept-findings` only if the user accepts them). It squash-merges
   with the spec's title and Goal as the message and deletes all task state.
@@ -214,7 +155,7 @@ Then:
   round say to apply it first.
 - **Reject:** `delegate discard <id>`; note in `PLAN.md` why if the task stays open.
 
-Before the handoff, run `delegate list`: resolve tasks within your authority or record what's open.
+Before ending a session, run `delegate list`: merge, discard, or tell the user what's open.
 
 ## 7. Close the loop (part of merging, not later)
 - Did this change make any statement in `AGENTS.md`, a module README or `PLAN.md` false?

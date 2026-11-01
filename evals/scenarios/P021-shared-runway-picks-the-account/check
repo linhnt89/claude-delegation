@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# P021: the new task takes the first candidate whose runway, shared with its running tasks, covers it.
+. "$EVALS_LIB/common.sh"
+setup_project
+install_stub claude
+install_stub codex
+stub_worker claude-worker <<'B'
+work() { wait_flag hold-p021 300 || true; }
+B
+stub_worker codex-worker <<'B'
+work() { wait_flag hold-p021 300 || true; }
+B
+stub_worker copilot-worker <<'B'
+work() { wait_flag hold-p021 300 || true; }
+B
+stub_worker hyper-worker <<'B'
+work() { wait_flag hold-p021 300 || true; }
+B
+trap kill_runs EXIT
+python3 "$EVALS_LIB/wave_checks.py" P021
+rc=$?
+exit "$rc"

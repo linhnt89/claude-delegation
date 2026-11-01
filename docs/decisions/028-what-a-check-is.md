@@ -1,7 +1,7 @@
 # 028: A check is its scenario folder; unattributed and new checks
 
 - Date: 2026-11-01
-- Status: accepted
+- Status: superseded by 030
 
 <!-- Append-only. Never edit an accepted decision's substance: write a new one that
      supersedes it, and update only this Status line. Keep it under a page. -->

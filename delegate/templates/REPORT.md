@@ -8,14 +8,8 @@ done | partial | blocked
 ## Changes
 - `<file>` — <what and why, one line>
 
-## Check problems
-- <check problem found in this work's Acceptance checks, or "none">
-
 ## Acceptance
 - [x] `<command>` — <pass/fail, one-line summary of output>
-
-## Check failures (check tasks only)
-- `<scenario id / check path>` — <failure on the current product and why it matches scenario.md>
 
 ## Deviations from spec
 - <none, or what and why>

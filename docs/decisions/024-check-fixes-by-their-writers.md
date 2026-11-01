@@ -1,7 +1,7 @@
 # 024: A check fix comes from the family that wrote the check
 
 - Date: 2026-10-31
-- Status: accepted
+- Status: superseded by 030
 
 ## Context
 Decision 023 makes a check fix its own task and counts every family that changed a check as

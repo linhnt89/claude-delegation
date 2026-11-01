@@ -16,15 +16,3 @@
 # [[rules]]
 # paths    = ["docs/**"]
 # max_tier = "fast"
-
-# [warm]
-# share = ["target"]
-# copy = [".venv"]
-#
-# Gates, acceptance commands, and checks run with an allowlisted environment.
-# Built-in allowlist: PATH, HOME, USER, LANG, TERM, TMPDIR, CARGO_HOME, RUSTUP_HOME,
-# any variable beginning with LC_ or MISE_, and DELEGATE_HOME.
-# DELEGATE_AUTOPILOT and DELEGATE_AUTOPILOT_WAVE are never allowed.
-# Add project-specific variables by name:
-# [env]
-# allow = ["MY_API_TOKEN"]

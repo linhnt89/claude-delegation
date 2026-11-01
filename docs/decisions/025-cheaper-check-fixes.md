@@ -1,7 +1,7 @@
 # 025: Fewer check bugs, found earlier, fixed by one command
 
 - Date: 2026-10-31
-- Status: accepted
+- Status: accepted; its code parts (fix-check, check flags, child environment) superseded by 030
 
 ## Context
 Decisions 023 and 024 keep checks apart from the work they judge. They don't make check bugs

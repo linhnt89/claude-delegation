@@ -1,7 +1,7 @@
 # 019: Autopilot runs the plan's waves while the user is away
 
 - Date: 2026-10-30
-- Status: accepted
+- Status: superseded by 030
 
 ## Context
 The lead runs a wave without waiting for a yes (decision 016), but stops at every merge
