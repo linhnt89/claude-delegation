@@ -18,15 +18,16 @@
 - `delegate list`: no open tasks.
 - Next: check the kit in `secsw-code` and `trial` with the rebuilt binary (their
   `.delegate-kit.toml` may name kits it doesn't know), then choose the next core task below.
-- 2026-11-02: decision 031 (any model can lead); t116 merged; t115 running.
+- 2026-11-02: decision 031 (any model can lead); t116 merged; t115 waits on how S040 and S082 change (see Waiting for you).
 
 ## Waiting for you
-- None.
+- t115: S040 and S082 check that `CLAUDE.md` holds the lead's rules; moving them to
+  `AGENTS.md` needs those scenarios changed (or the rules put in a kit-owned file instead).
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t115 | Model-neutral kit: lead role from `CLAUDE.md` to `AGENTS.md`, "the lead" in the skills, `--planner` in the delegate skill, README "Leading with another model" (decision 031) | 2 | running | – | fast | `grep -i claude` in the lead texts finds only Claude-specific lines; `scripts/check` passes | root and `delegate/templates/project/` together, then `scripts/kit-history` |
+| t115 | Model-neutral kit: lead role from `CLAUDE.md` to `AGENTS.md`, "the lead" in the skills, `--planner` in the delegate skill, README "Leading with another model" (decision 031) | 2 | todo | – | fast | `grep -i claude` in the lead texts finds only Claude-specific lines; `scripts/check` passes | root and `delegate/templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
