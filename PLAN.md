@@ -25,7 +25,9 @@
 - Next: check the kit in `secsw-code` and `trial` with the rebuilt binary (their
   `.delegate-kit.toml` may name kits it doesn't know), then choose the next core task below.
 - 2026-11-03: decisions 031–033 done (t116, t118, t117, t115 merged). Next: upgrade
-  `secsw-code` and `trial` with the new binary (trial's kit files are uncommitted).
+  `trial` with the new binary (trial's kit files are uncommitted). secsw-code is upgraded.
+- 2026-11-03: decision 034 (skills in `.agents/skills/`, linked from `.claude/skills/`).
+  Next: `/evaluate feature` for it, then t119 (checks), then t120.
 
 ## Waiting for you
 - None.
@@ -33,6 +35,8 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
+| t119 | Checks for decision 034's scenarios, and the existing checks that read `.claude/skills/<name>` paths (S038, S039, S041, S082 and others) | 1 | todo | scenarios | standard | each new check fails for the missing layout, no check errors | `evals/scenarios/*/check`, `evals/lib/**` |
+| t120 | Skills in `.agents/skills/`, linked from `.claude/skills/` (decision 034): symlink kit files in `init`/`upgrade`, migration of old projects, this repo and `delegate/templates/project/` moved, README (Pi trust prompt) | 2 | todo | t119 | deep | the 034 scenarios, `checks_by: t119` | `init.rs`, `upgrade.rs`, `scripts/kit-history`, kit paths |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
