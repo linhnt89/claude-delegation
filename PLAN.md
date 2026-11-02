@@ -4,6 +4,8 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- Any model can lead (2026-11-03, t115, decision 031): skills and README say "the lead";
+  README "Leading with another model"; this repo's lead role is the `AGENTS.md` `lead` block.
 - Managed blocks (2026-11-03, t117, decisions 032, 033): upgrade keeps kit blocks in
   `AGENTS.md`/`CLAUDE.md` current; the lead's role is the `lead` block; older projects adopt it.
 - Checks for managed blocks (2026-11-02, t118): S131–S133, P029 (hidden), S040 and S082
@@ -22,8 +24,8 @@
 - `delegate list`: no open tasks.
 - Next: check the kit in `secsw-code` and `trial` with the rebuilt binary (their
   `.delegate-kit.toml` may name kits it doesn't know), then choose the next core task below.
-- 2026-11-02: decisions 031 (any model can lead) and 032 (managed blocks); t116 merged.
-  t118, t117 merged; t115 running.
+- 2026-11-03: decisions 031–033 done (t116, t118, t117, t115 merged). Next: upgrade
+  `secsw-code` and `trial` with the new binary (trial's kit files are uncommitted).
 
 ## Waiting for you
 - None.
@@ -31,7 +33,6 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t115 | Model-neutral kit: "the lead" in the skills, `--planner` in the delegate skill, README "Leading with another model", this repo's own `AGENTS.md`/`CLAUDE.md` (decisions 031, 032) | 3 | running | – | fast | `grep -i claude` in the lead texts finds only Claude-specific lines; `scripts/check` passes | skills at root and in `delegate/templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
