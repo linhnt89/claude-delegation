@@ -2,7 +2,7 @@
 - Job: J1
 - Tier: full
 - Judged by: auto
-- Status: draft
+- Status: agreed
 
 ## Who
 A developer in a project set up with the last kit before managed blocks, where the lead's

@@ -2,7 +2,7 @@
 - Job: J1
 - Tier: full
 - Judged by: auto
-- Status: draft
+- Status: agreed
 
 ## Who
 Anyone upgrading a project with managed blocks. From: S131, S132, S133.

@@ -2,7 +2,7 @@
 - Job: J1
 - Tier: full
 - Judged by: auto
-- Status: draft
+- Status: agreed
 
 ## Who
 A developer in a project set up with a kit that has managed blocks, who has just rebuilt

@@ -2,22 +2,25 @@
 - Job: J1
 - Tier: fast
 - Judged by: auto
-- Status: automated
+- Status: agreed
 
 ## Who
 A developer (or Claude as lead) in a project set up with an older kit, who has just rebuilt `delegate` from a newer kit.
 
 ## Starting state
-As S038. The new kit changed the template `CLAUDE.md` (a new line in the worker exception)
-and `AGENTS.md`; the project's own copies hold its content and were never meant to be replaced.
+As S038. The new kit changed project-owned templates (`PLAN.md`, `AGENTS.md`, `CLAUDE.md`...)
+outside their managed blocks; the project's own copies hold its content and were never meant
+to be replaced.
 
 ## Steps
 1. `delegate upgrade`.
 
 ## Passes when
-- `CLAUDE.md` and `AGENTS.md` are unchanged.
-- The output names each project-owned file whose template changed since the project's kit
-  version and shows what changed in the template, so Claude or the user can carry it over by hand.
+- `PLAN.md`, `evals/jobs.md` and `.delegate.toml` are unchanged, and so is every byte of
+  `AGENTS.md` and `CLAUDE.md` outside managed blocks (blocks follow S131–S133).
+- The output names each project-owned file whose template changed outside managed blocks
+  since the project's kit version and shows what changed, so the lead or the user can carry
+  it over by hand.
 - Templates that did not change are not mentioned.
 
 ## If this fails
