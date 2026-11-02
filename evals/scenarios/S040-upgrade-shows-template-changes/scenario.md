@@ -2,7 +2,7 @@
 - Job: J1
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 A developer (or Claude as lead) in a project set up with an older kit, who has just rebuilt `delegate` from a newer kit.

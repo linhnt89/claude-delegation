@@ -2,7 +2,7 @@
 - Job: J9
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 A developer who just ran `delegate init`; the lead (any model) reads the installed kit.

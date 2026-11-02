@@ -2,7 +2,7 @@
 - Job: J1
 - Tier: full
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 As S131, but the owner changed a line inside a kit block (e.g. `lead`) for their team.

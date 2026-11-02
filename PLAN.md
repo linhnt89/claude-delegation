@@ -4,6 +4,8 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- Checks for managed blocks (2026-11-02, t118): S131–S133, P029 (hidden), S040 and S082
+  reworded; all fail until t117.
 - `plan-review --planner` (2026-11-02, t116, decision 031): the lead names its own family or
   model; scenarios S130, P028 (hidden).
 - Back to the core (2026-11-01, decision 030, with the user): `main` rebuilt from `50103a1`
@@ -19,7 +21,7 @@
 - Next: check the kit in `secsw-code` and `trial` with the rebuilt binary (their
   `.delegate-kit.toml` may name kits it doesn't know), then choose the next core task below.
 - 2026-11-02: decisions 031 (any model can lead) and 032 (managed blocks); t116 merged.
-  Block scenarios agreed; t118 writes their checks, then t117, then t115.
+  t118 merged; t117 running, then t115.
 
 ## Waiting for you
 - None.
@@ -27,8 +29,7 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t118 | Checks for managed blocks (S131–S133, P029) and S040, S082 reworded | 1 | running | – | standard | each fails for the missing feature, no check errors | `evals/scenarios/*/check`, `evals/lib/**` |
-| t117 | Managed blocks in `AGENTS.md`/`CLAUDE.md` (decision 032): upgrade replaces pristine blocks, keeps edited ones, `upgrade <file>#<name>`, adoption of verbatim old sections; first block `lead` in the `AGENTS.md` template, moved from `CLAUDE.md` | 2 | todo | t118 | deep | `evals/run S131 S132 S133 P029 S040 S082` (P029 hidden), `checks_by: t118` | `upgrade.rs`, `init.rs`, `delegate/templates/project/{AGENTS,CLAUDE}.md`, then `scripts/kit-history` |
+| t117 | Managed blocks in `AGENTS.md`/`CLAUDE.md` (decision 032): upgrade replaces pristine blocks, keeps edited ones, `upgrade <file>#<name>`, adoption of verbatim old sections; first block `lead` in the `AGENTS.md` template, moved from `CLAUDE.md` | 2 | running | – | deep | `evals/run S131 S132 S133 P029 S040 S082` (P029 hidden), `checks_by: t118` | `upgrade.rs`, `init.rs`, `delegate/templates/project/{AGENTS,CLAUDE}.md`, then `scripts/kit-history` |
 | t115 | Model-neutral kit: "the lead" in the skills, `--planner` in the delegate skill, README "Leading with another model", this repo's own `AGENTS.md`/`CLAUDE.md` (decisions 031, 032) | 3 | todo | t117 | fast | `grep -i claude` in the lead texts finds only Claude-specific lines; `scripts/check` passes | skills at root and in `delegate/templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
