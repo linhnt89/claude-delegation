@@ -6,7 +6,7 @@ description: Hand well-specified tasks to worker models (Pi, Codex, Claude Code,
 # Delegate tasks
 
 Goal: put every available model to work where it fits (quality, quota, parallel runs, a
-second opinion), while Claude keeps planning, specs and decisions. Trust comes from the same
+second opinion), while the lead keeps planning, specs and decisions. Trust comes from the same
 checks for every model, not from which model did the work.
 Runner: the `delegate` binary on PATH (`delegate --help`). All task state lives outside the
 repo, under `~/.local/share/delegate/checkouts/<checkout-id>-<name>/<id>/`, found by the
@@ -44,6 +44,8 @@ listed in `Scope In`.
 For a multi-task plan, or any task you'd put at `deep`, run
 `delegate plan-review [ids...]` once per wave, before that wave runs.
 A model from a different family than you reviews `PLAN.md` and the specs against the code.
+Pass your own model with `delegate plan-review --planner <your harness:model>` (a family
+name also works) so the reviewer comes from another family.
 Fix the plan for real findings; bring disagreements to the user. Skip it for one small task.
 
 ## 4. Pick a tier and run

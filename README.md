@@ -1,15 +1,15 @@
 # Multi-model cooperation kit
 
-Claude leads: discussion, design, plans, specs, decisions. Worker models do the
+The lead handles discussion, design, plans, specs, decisions. Worker models do the
 implementation loops, checks and reviews, picked by **role × tier** from one config file.
 The repo is the only memory they share.
 
 ```
- discuss with Claude ──/distill──▶ docs/decisions/, PLAN.md
+ discuss with the lead ──/distill──▶ docs/decisions/, PLAN.md
                                         │
-                         delegate new <id>  → Claude writes specs
+                         delegate new <id>  → the lead writes specs
                                         │
-                         delegate plan-review   (other family than Claude; for batches/deep)
+                         delegate plan-review   (other family than the lead; for batches/deep)
                                         │
                          delegate run <id> [--tier]
                            ├─ question phase: READY, or questions → answer in spec → run again
@@ -18,9 +18,21 @@ The repo is the only memory they share.
                                         │
                          delegate review <id>   (other family than the implementer; when risky)
                                         │
-                         Claude decides ──┬── merge   (gates: checks, project rules, review)
+                         The lead decides ──┬── merge   (gates: checks, project rules, review)
                                           ├── another round
                                           └── discard
+```
+
+## Leading with another model
+Any harness that reads `AGENTS.md` can lead when the Claude Code quota runs out.
+Load the skills with your harness's own means; for Pi:
+```bash
+pi --skill .claude/skills/delegate --skill .claude/skills/distill --skill .claude/skills/evaluate
+```
+Follow the same loop; the lead role lives in the `AGENTS.md` `lead` block.
+For plan review, name your own model so the reviewer comes from another family:
+```bash
+delegate plan-review --planner <your harness:model>
 ```
 
 ## Install
@@ -79,10 +91,10 @@ Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
 | `delegate check <id>` | Rerun acceptance checks after a fix committed in the worktree |
 | `delegate review <id>` | Adversarial review; failing tests come back as `REVIEW.patch` |
 | `delegate plan-review [ids] [--planner <family\|model>]` | Review `PLAN.md` and specs against the code before work starts (`--planner` names the lead to skip) |
-| `delegate run --background <id>` | Same, detached: returns at once, keeps going after the shell or Claude turn ends |
+| `delegate run --background <id>` | Same, detached: returns at once, keeps going after the shell or the lead's turn ends |
 | `delegate status [id] [--json]` | Where each task stands now: phase, worker, changed files, latest steps, stalled, next step |
 | `delegate watch [id]` | `status`, refreshing in a terminal |
-| `delegate wait [ids] [--timeout D]` | Block until a task finishes, is interrupted or stalls (Claude runs it in the background) |
+| `delegate wait [ids] [--timeout D]` | Block until a task finishes, is interrupted or stalls (the lead runs it in the background) |
 | `delegate statusline` | One line for a Claude Code status line, if you add it to yours |
 | `delegate quota [--json]` | Each account's windows, runway, reset and login source; `--json` is versioned |
 | `delegate list` | Status of every task: round, tier, checks, review |
@@ -108,8 +120,8 @@ harness's own flag.
 GitHub Copilot is always the last candidate. The picks follow the Artificial Analysis
 intelligence-vs-cost Pareto line; recheck it monthly and edit the lines, nothing else changes.
 
-**Model families:** review skips the implementer's family, plan review skips
-`planner_family` (Claude), and implementation skips the family of any task named on the
+**Model families:** review skips the implementer's family, plan review skips the lead's family
+(`--planner`, default `planner_family`), and implementation skips the family of any task named on the
 spec's `checks_by:` line (read from that task's `Worker:` merge trailer). Family is inferred from the model name (gpt, claude, deepseek,
 gemini, ...).
 
@@ -126,7 +138,7 @@ maps a candidate prefix (for example `"pi:openai-codex/"`) to one of `claude`, `
 `copilot`, `hyper` or `none` when your logins differ from the built-in table; `none` opts a
 prefix out. An explicit `--worker` is still checked, but a warning is printed and it runs.
 
-**Tier choice:** the default comes from `[defaults]`. Claude picks `fast`/`deep` by the table
+**Tier choice:** the default comes from `[defaults]`. The lead picks `fast`/`deep` by the table
 in the delegate skill and tells you before running. After `step_up_after` failed rounds at a
 tier (default 1), the next run steps up one tier automatically; a check that exits 3 is a
 check error and doesn't count. A task never steps down. Project rules can raise it (below).
@@ -226,16 +238,16 @@ other tasks' unmerged `task/*` branches.
 | opencode | `opencode run --auto --session <id>` | yes |
 | gemini | `gemini --approval-mode auto_edit -p` | no (work phase starts fresh) |
 
-The `claude` harness spends Claude quota: it's in the config only where Sonnet/Opus sit on
+The `claude` harness spends Claude Code quota: it's in the config only where Sonnet/Opus sit on
 the Pareto line. Your user settings, hooks, MCP servers and skills are left out, and a
-system prompt plus a line in `CLAUDE.md` keep it in the worker role. Pi workers keep their
+system prompt plus a line in `AGENTS.md` (`lead` block) keep it in the worker role. Pi workers keep their
 sessions in `~/.pi`, Claude workers in `~/.claude/projects/`.
 
 ## What `delegate init` adds to a project
 | File | Lifetime | Purpose |
 |---|---|---|
 | `AGENTS.md` | living, ≤150 lines | Read by every harness: commands, layout, rules, "code wins" |
-| `CLAUDE.md` | living | Imports `AGENTS.md`, adds Claude's lead role (and the worker exception) |
+| `CLAUDE.md` | living | Imports `AGENTS.md`; Claude Code notes only (the lead role lives in `AGENTS.md`) |
 | `PLAN.md` | living, pruned | Current goal, task table, open questions |
 | `docs/decisions/` | append-only | Why X over Y; superseded, never edited |
 | `.delegate.toml` | living | Project rules: minimum tiers and required reviews by path |
