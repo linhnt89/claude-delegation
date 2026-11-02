@@ -2,7 +2,7 @@
 - Job: J1
 - Tier: full
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 A developer in a project set up with the last kit before decision 034, whose skills are real

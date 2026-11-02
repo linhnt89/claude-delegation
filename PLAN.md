@@ -4,6 +4,8 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- Checks for decision 034 (2026-11-03, t119): S134, S135, S136 (hidden), P014 sees symlinks;
+  S038, S039, S041, S042, S082 layout-neutral.
 - Any model can lead (2026-11-03, t115, decision 031): skills and README say "the lead";
   README "Leading with another model"; this repo's lead role is the `AGENTS.md` `lead` block.
 - Managed blocks (2026-11-03, t117, decisions 032, 033): upgrade keeps kit blocks in
@@ -27,7 +29,7 @@
 - 2026-11-03: decisions 031–033 done (t116, t118, t117, t115 merged). Next: upgrade
   `trial` with the new binary (trial's kit files are uncommitted). secsw-code is upgraded.
 - 2026-11-03: decision 034 (skills in `.agents/skills/`, linked from `.claude/skills/`).
-  S134–S136 agreed; t119 writes their checks, then t120.
+  t119 merged; t120 running.
 
 ## Waiting for you
 - None.
@@ -35,8 +37,7 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t119 | Checks for decision 034: S134–S136, P014 sees symlinks | 1 | running | – | standard | each new check fails for the missing layout, no check errors | `evals/scenarios/*/check`, `evals/lib/**` |
-| t120 | Skills in `.agents/skills/`, linked from `.claude/skills/` (decision 034): symlink kit files in `init`/`upgrade`, migration of old projects, this repo and `delegate/templates/project/` moved, README (Pi trust prompt) | 2 | todo | t119 | deep | the 034 scenarios, `checks_by: t119` | `init.rs`, `upgrade.rs`, `scripts/kit-history`, kit paths |
+| t120 | Skills in `.agents/skills/`, linked from `.claude/skills/` (decision 034): symlink kit files in `init`/`upgrade`, migration of old projects, this repo and `delegate/templates/project/` moved, README (Pi trust prompt) | 2 | running | – | deep | the 034 scenarios, `checks_by: t119` | `init.rs`, `upgrade.rs`, `scripts/kit-history`, kit paths |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed

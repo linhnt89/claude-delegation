@@ -2,7 +2,7 @@
 - Job: J1
 - Tier: fast
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 A developer who starts lead sessions by hand with the harness's plain command (`claude`,

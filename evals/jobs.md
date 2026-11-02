@@ -47,3 +47,4 @@ Added for decision 020 (new feature: fails until built): J3 S094.
 Retired by decision 030 (in git history, out of the vault): J9 P017 · J10 P022 S088 S116 P027 S127 · J3 P025 P026.
 Added for decision 031 (new feature: fails until built): J6 P028.
 Added for decisions 032, 033 (new feature: fails until built): J1 P029.
+Added for decision 034 (new feature: fails until built): J1 S136.

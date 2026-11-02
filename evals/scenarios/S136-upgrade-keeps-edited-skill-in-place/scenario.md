@@ -2,7 +2,7 @@
 - Job: J1
 - Tier: full
 - Judged by: auto
-- Status: agreed
+- Status: automated
 
 ## Who
 As S135, but the team tuned `.claude/skills/delegate/SKILL.md`.
