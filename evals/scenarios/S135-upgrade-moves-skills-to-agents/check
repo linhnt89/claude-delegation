@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# S135: upgrade moves an older project's skills to `.agents/skills/`.
+. "$EVALS_LIB/common.sh"
+
+fresh_kit "$EVALS_WORK/current-kit"
+for n in delegate distill evaluate; do
+  [ -f "$EVALS_WORK/current-kit/.agents/skills/$n/SKILL.md" ] ||
+    fail "the current delegate init has no .agents/skills/$n/SKILL.md (skills-in-agents layout not built yet)"
+  [ -L "$EVALS_WORK/current-kit/.claude/skills/$n" ] ||
+    fail "the current delegate init leaves .claude/skills/$n as a real folder instead of a symlink (skills-in-agents layout not built yet)"
+  [ "$(readlink "$EVALS_WORK/current-kit/.claude/skills/$n" 2>/dev/null)" = "../../.agents/skills/$n" ] ||
+    fail "the current delegate init links .claude/skills/$n at the wrong target (skills-in-agents layout not built yet)"
+done
+
+before="$(python3 "$EVALS_LIB/skills.py" kit-before-034 2>"$EVALS_WORK/kit-before.err")" ||
+  { echo "CHECK ERROR: $(cat "$EVALS_WORK/kit-before.err")"; exit 3; }
+[ -n "$before" ] || { echo "CHECK ERROR: no kit before decision 034 was found"; exit 3; }
+
+rm -rf "$PROJ" "$DHOME"
+old_kit_project "$before"
+for n in delegate distill evaluate; do
+  [ -d "$PROJ/.claude/skills/$n" ] && [ ! -L "$PROJ/.claude/skills/$n" ] ||
+    { echo "CHECK ERROR: the kit before 034 has no real folder .claude/skills/$n"; exit 3; }
+done
+cd "$PROJ"
+mkdir -p .claude/skills/team-notes
+printf '# Team notes\nOur own skill.\n' >.claude/skills/team-notes/SKILL.md
+git add -A && git commit -qm "Add our own skill"
+team_notes="$(sha256sum .claude/skills/team-notes/SKILL.md | cut -d' ' -f1)"
+cd "$EVALS_WORK"
+
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+for n in delegate distill evaluate; do
+  cmp -s "$EVALS_WORK/current-kit/.agents/skills/$n/SKILL.md" "$PROJ/.agents/skills/$n/SKILL.md" ||
+    fail "after upgrade .agents/skills/$n/SKILL.md differs from a fresh init"
+  [ -L "$PROJ/.claude/skills/$n" ] ||
+    fail "after upgrade .claude/skills/$n is not a symlink to .agents/skills/$n"
+  [ "$(readlink "$PROJ/.claude/skills/$n" 2>/dev/null)" = "../../.agents/skills/$n" ] ||
+    fail "after upgrade .claude/skills/$n points at the wrong target instead of ../../.agents/skills/$n"
+  cmp -s "$PROJ/.agents/skills/$n/SKILL.md" "$PROJ/.claude/skills/$n/SKILL.md" ||
+    fail "after upgrade .claude/skills/$n reads different bytes than .agents/skills/$n"
+  echo "$OUT" | grep -Ei "moved" | grep -F ".claude/skills/$n" | grep -qF ".agents/skills/$n" ||
+    fail "upgrade's output does not say .claude/skills/$n moved to .agents/skills/$n"
+done
+[ "$(sha256sum "$PROJ/.claude/skills/team-notes/SKILL.md" | cut -d' ' -f1)" = "$team_notes" ] ||
+  fail "upgrade touched the project's own .claude/skills/team-notes/SKILL.md"
+[ ! -L "$PROJ/.claude/skills/team-notes" ] ||
+  fail "upgrade turned the project's own .claude/skills/team-notes/ into a symlink"
+[ -d "$PROJ/.claude/skills/delegate-pane" ] && [ ! -L "$PROJ/.claude/skills/delegate-pane" ] ||
+  fail "upgrade turned .claude/skills/delegate-pane/ into a symlink instead of leaving the real folder"
+(cd "$EVALS_WORK/current-kit" && find .claude/skills/delegate-pane -type f | sort) >"$EVALS_WORK/pane.want"
+(cd "$PROJ" && find .claude/skills/delegate-pane -type f | sort) >"$EVALS_WORK/pane.got"
+[ "$(cat "$EVALS_WORK/pane.want")" = "$(cat "$EVALS_WORK/pane.got")" ] ||
+  fail "upgrade changed the .claude/skills/delegate-pane/ file list instead of updating it like any kit file"
+while IFS= read -r f; do
+  cmp -s "$EVALS_WORK/current-kit/$f" "$PROJ/$f" ||
+    fail "after upgrade $f differs from a fresh init (the pane should update like any kit file)"
+done <"$EVALS_WORK/pane.want"
+echo "$OUT" | tail -n2 | grep -qi "review" || fail "upgrade's output does not end with how to review the upgrade"
+echo "$OUT" | tail -n2 | grep -qi "commit" || fail "upgrade's output does not end with how to commit the upgrade"
+
+# The second upgrade changes nothing.
+sha_before="$(cd "$PROJ" && for n in delegate distill evaluate; do sha256sum ".agents/skills/$n/SKILL.md"; readlink ".claude/skills/$n"; done; sha256sum .claude/skills/team-notes/SKILL.md)"
+d upgrade
+[ "$RC" -eq 0 ] || fail "second upgrade failed: $OUT"
+sha_after="$(cd "$PROJ" && for n in delegate distill evaluate; do sha256sum ".agents/skills/$n/SKILL.md"; readlink ".claude/skills/$n"; done; sha256sum .claude/skills/team-notes/SKILL.md)"
+[ "$sha_before" = "$sha_after" ] || fail "the second upgrade changed files"
+echo "$OUT" | grep -qi "up to date" || fail "the second upgrade did not say the project is up to date"
+pass "upgrade moved every kit skill to .agents/skills with links, kept the project's own skill, and the second upgrade changed nothing"

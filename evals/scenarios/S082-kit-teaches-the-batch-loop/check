@@ -30,7 +30,8 @@ printf '%s\n' "$OUT" >"$upgrade_out"
 [ "$RC" -eq 0 ] || fail "delegate upgrade failed on a project set up by the previous kit: $(printf '%s' "$OUT" | tr '\n' ' ')"
 cmp -s "$PROJ/PLAN.md" "$EVALS_WORK/PLAN.before" \
   || fail "delegate upgrade edited PLAN.md; it must only report its wave-column template change for the user to take in"
-cmp -s "$PROJ/.claude/skills/delegate/SKILL.md" "$EVALS_WORK/current-kit/.claude/skills/delegate/SKILL.md" \
+proj_skill="$(skill_file delegate "$PROJ")"; kit_skill="$(skill_file delegate "$EVALS_WORK/current-kit")"
+cmp -s "$PROJ/$proj_skill" "$EVALS_WORK/current-kit/$kit_skill" \
   || fail "delegate upgrade did not replace the delegate skill with the one teaching the batch loop"
 if [ "$had_old_section" = true ]; then
   grep -q "^## Claude's role in this project" "$PROJ/CLAUDE.md" &&

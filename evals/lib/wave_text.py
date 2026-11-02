@@ -23,7 +23,16 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocks  # noqa: E402
 
-SKILL = ".claude/skills/delegate/SKILL.md"
+CLAUDE_SKILL = ".claude/skills/delegate/SKILL.md"
+AGENTS_SKILL = ".agents/skills/delegate/SKILL.md"
+SKILL = CLAUDE_SKILL  # the pre-034 location; skill_path() picks the live one
+
+
+def skill_path(root: Path) -> Path:
+    """The delegate skill's real file in the project's layout (decision 034)."""
+    if (root / ".claude/skills/delegate").is_symlink():
+        return root / AGENTS_SKILL
+    return root / CLAUDE_SKILL
 PLAN = "PLAN.md"
 AGENTS = "AGENTS.md"
 CLAUDE = "CLAUDE.md"
@@ -118,7 +127,7 @@ def previous_kit() -> str:
 
     for commit in reversed(kits.commits()):
         files = kits.kit(commit)
-        skill = files.get(SKILL, b"").decode("utf-8", errors="replace")
+        skill = files.get(AGENTS_SKILL, files.get(CLAUDE_SKILL, b"")).decode("utf-8", errors="replace")
         if skill and skill_missing(skill):
             print(commit)
             return commit
@@ -150,7 +159,7 @@ def main() -> None:
     plan = read(root / PLAN)
     agents = read(root / AGENTS)
     claude = read(root / CLAUDE)
-    skill = read(root / SKILL)
+    skill = read(skill_path(root))
     missing: list[str] = []
     if upgraded:
         missing.extend(upgrade_missing(upgrade_output))

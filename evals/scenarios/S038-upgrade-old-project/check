@@ -17,8 +17,10 @@ own="$(for f in AGENTS.md CLAUDE.md PLAN.md .delegate.toml evals/jobs.md docs/de
 # The newer kit changes two skills and the runner. (Added and dropped kit files aren't covered
 # here: making them needs a change to init's file list. P014 covers files added since old kits.)
 newer="$(newer_delegate kit2 <<'SH'
-printf '\nNew in kit 2: distill rule.\n' >>.claude/skills/distill/SKILL.md
-printf '\nNew in kit 2: evaluate rule.\n' >>.claude/skills/evaluate/SKILL.md
+for n in distill evaluate; do
+  if [ -L ".claude/skills/$n" ]; then f=".agents/skills/$n/SKILL.md"; else f=".claude/skills/$n/SKILL.md"; fi
+  printf "\nNew in kit 2: $n rule.\n" >>"$f"
+done
 printf '# kit 2\n' >>evals/run
 SH
 )" || exit 1
@@ -27,7 +29,12 @@ DELEGATE="$newer" fresh_kit "$EVALS_WORK/kit2"
 DELEGATE="$newer" d upgrade
 [ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
 cd "$PROJ"
-for f in .claude/skills/distill/SKILL.md .claude/skills/evaluate/SKILL.md evals/run; do
+for n in distill evaluate; do
+  f="$(skill_file "$n")"; k2f="$(cd "$EVALS_WORK/kit2" && skill_file "$n")"
+  cmp -s "$f" "$EVALS_WORK/kit2/$k2f" || fail "upgrade left the old $n skill in place"
+  echo "$OUT" | grep -qF "skills/$n/SKILL.md" || fail "upgrade's output doesn't list the $n skill as updated"
+done
+for f in evals/run; do
   cmp -s "$f" "$EVALS_WORK/kit2/$f" || fail "upgrade left the old $f in place"
   echo "$OUT" | grep -qF "$f" || fail "upgrade's output doesn't list $f as updated"
 done

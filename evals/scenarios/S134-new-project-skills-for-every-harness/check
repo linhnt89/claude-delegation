@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# S134: a new project's skills are found by any lead harness without flags.
+. "$EVALS_LIB/common.sh"
+setup_project
+
+# Product failure until t120: the fresh init must carry the .agents layout.
+for n in delegate distill evaluate; do
+  [ -f "$PROJ/.agents/skills/$n/SKILL.md" ] ||
+    fail "fresh delegate init has no .agents/skills/$n/SKILL.md (skills-in-agents layout not built yet)"
+  [ -s "$PROJ/.agents/skills/$n/SKILL.md" ] ||
+    fail "fresh delegate init left .agents/skills/$n/SKILL.md empty"
+  [ -L "$PROJ/.claude/skills/$n" ] ||
+    fail "fresh delegate init left .claude/skills/$n as a real folder instead of a symlink to .agents/skills/$n"
+  [ "$(readlink "$PROJ/.claude/skills/$n" 2>/dev/null)" = "../../.agents/skills/$n" ] ||
+    fail "fresh delegate init links .claude/skills/$n at the wrong target instead of ../../.agents/skills/$n"
+  cmp -s "$PROJ/.agents/skills/$n/SKILL.md" "$PROJ/.claude/skills/$n/SKILL.md" ||
+    fail "reading SKILL.md through .claude/skills/$n gives different bytes than .agents/skills/$n/SKILL.md"
+  git -C "$PROJ" ls-files -s ".claude/skills/$n" | grep -q "^120000" ||
+    fail "git does not record .claude/skills/$n as a symlink (mode 120000)"
+done
+[ -d "$PROJ/.claude/skills/delegate-pane" ] && [ ! -L "$PROJ/.claude/skills/delegate-pane" ] ||
+  fail ".claude/skills/delegate-pane/ is not a real folder after a fresh init"
+[ -f "$PROJ/.claude/skills/delegate-pane/.claude-plugin/plugin.json" ] ||
+  fail ".claude/skills/delegate-pane/ lost the pane mod in a fresh init"
+
+# Step 2: a clone keeps working links.
+rm -rf "$EVALS_WORK/clone"
+git clone -q "$PROJ" "$EVALS_WORK/clone" ||
+  fail "could not clone the project to check the links travel"
+for n in delegate distill evaluate; do
+  [ -L "$EVALS_WORK/clone/.claude/skills/$n" ] ||
+    fail "in a fresh clone .claude/skills/$n is no longer a symlink to .agents/skills/$n"
+  [ -f "$EVALS_WORK/clone/.claude/skills/$n/SKILL.md" ] ||
+    fail "in a fresh clone .claude/skills/$n/SKILL.md does not resolve"
+  cmp -s "$EVALS_WORK/clone/.agents/skills/$n/SKILL.md" "$EVALS_WORK/clone/.claude/skills/$n/SKILL.md" ||
+    fail "in a fresh clone .claude/skills/$n reads different bytes than .agents/skills/$n"
+done
+
+# Failure path: init leaves the project's own skill alone.
+mkdir -p "$EVALS_WORK/other/.claude/skills/team-notes"
+git -C "$EVALS_WORK/other" init -q 2>/dev/null || { echo "CHECK ERROR: could not init the other repo"; exit 3; }
+printf '# Team notes\nOur own skill.\n' >"$EVALS_WORK/other/.claude/skills/team-notes/SKILL.md"
+ours="$(sha256sum "$EVALS_WORK/other/.claude/skills/team-notes/SKILL.md" | cut -d' ' -f1)"
+OUT="$(cd "$EVALS_WORK/other" && "$DELEGATE" init 2>&1)"; RC=$?
+printf '\n$ delegate init in other/  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
+[ "$RC" -eq 0 ] || fail "delegate init failed in a project with its own skill: $OUT"
+[ "$(sha256sum "$EVALS_WORK/other/.claude/skills/team-notes/SKILL.md" | cut -d' ' -f1)" = "$ours" ] ||
+  fail "delegate init changed the project's own .claude/skills/team-notes/SKILL.md"
+pass "fresh init installs .agents/skills for every harness, links them from .claude/skills through clones, and leaves the project's own skill alone"

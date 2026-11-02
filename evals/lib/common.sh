@@ -397,6 +397,14 @@ kit_files() {
 same_kit_file() {
   [ -f "$3" ] && [ "$(stat -c %a "$3")" = "$1" ] && [ "$(sha256sum "$3" | cut -c1-64)" = "$2" ]
 }
+# skill_file <name> [dir]: the skill's real SKILL.md in the layout at [dir] (default .):
+# `.agents/skills/<name>/SKILL.md` when `.claude/skills/<name>` is a symlink (decision 034),
+# else `.claude/skills/<name>/SKILL.md`. Edit, remove and compare through it; reading through
+# the link gives the same bytes either way.
+skill_file() {
+  if [ -L "${2:-.}/.claude/skills/$1" ]; then echo ".agents/skills/$1/SKILL.md"
+  else echo ".claude/skills/$1/SKILL.md"; fi
+}
 
 # --- Machines, vaults and hidden scenarios (decisions 007, 008) ---
 

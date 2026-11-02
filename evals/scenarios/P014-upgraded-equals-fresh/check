@@ -9,19 +9,23 @@ from kit import *
 import kits
 
 # Every earlier kit, left untouched and upgraded, ends with the same kit files (paths, contents,
-# modes, the version record) as a project set up by the current init.
+# modes, symlink targets, the version record) as a project set up by the current init.
 save_template()
 NOW = os.path.join(W, "now")
 
 def files(root):
-    out = sh(f"find . -path ./.git -prune -o -type f -printf '%m %p\\n' | sort", cwd=root).stdout.split("\n")
+    out = sh(f"find . -path ./.git -prune -o \\( -type f -o -type l \\) -printf '%m %p\\n' | sort", cwd=root).stdout.split("\n")
     res = {}
     for line in filter(None, out):
         m, p = line.split(" ", 1)
         p = p[2:]
         if p in kits.PROJECT_OWNED or p == ".claude/settings.json":
             continue
-        body = open(os.path.join(root, p), "rb").read()
+        full = os.path.join(root, p)
+        if os.path.islink(full):  # a kit symlink counts by its target, not its content
+            body = b"symlink:" + os.readlink(full).encode()
+        else:
+            body = open(full, "rb").read()
         if p == ".delegate-kit.toml":  # each project has its own id (decision 007)
             body = b"".join(l for l in body.splitlines(True) if not l.startswith(b"project"))
         res[p] = (m, body)

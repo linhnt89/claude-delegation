@@ -3,7 +3,8 @@
 . "$EVALS_LIB/common.sh"
 setup_project
 newer="$(newer_delegate kit2 <<'SH'
-printf '\nNew in kit 2: distill rule.\n' >>.claude/skills/distill/SKILL.md
+if [ -L ".claude/skills/distill" ]; then printf '\nNew in kit 2: distill rule.\n' >>.agents/skills/distill/SKILL.md
+else printf '\nNew in kit 2: distill rule.\n' >>.claude/skills/distill/SKILL.md; fi
 SH
 )" || exit 1
 DELEGATE="$newer" d upgrade

@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# S136: upgrade keeps a skill the project edited where it is.
+. "$EVALS_LIB/common.sh"
+
+fresh_kit "$EVALS_WORK/current-kit"
+for n in delegate distill evaluate; do
+  [ -f "$EVALS_WORK/current-kit/.agents/skills/$n/SKILL.md" ] ||
+    fail "the current delegate init has no .agents/skills/$n/SKILL.md (skills-in-agents layout not built yet)"
+  [ -L "$EVALS_WORK/current-kit/.claude/skills/$n" ] ||
+    fail "the current delegate init leaves .claude/skills/$n as a real folder instead of a symlink (skills-in-agents layout not built yet)"
+done
+
+before="$(python3 "$EVALS_LIB/skills.py" kit-before-034 2>"$EVALS_WORK/kit-before.err")" ||
+  { echo "CHECK ERROR: $(cat "$EVALS_WORK/kit-before.err")"; exit 3; }
+[ -n "$before" ] || { echo "CHECK ERROR: no kit before decision 034 was found"; exit 3; }
+
+rm -rf "$PROJ" "$DHOME"
+old_kit_project "$before"
+for n in delegate distill evaluate; do
+  [ -d "$PROJ/.claude/skills/$n" ] && [ ! -L "$PROJ/.claude/skills/$n" ] ||
+    { echo "CHECK ERROR: the kit before 034 has no real folder .claude/skills/$n"; exit 3; }
+done
+cd "$PROJ"
+mkdir -p .claude/skills/team-notes
+printf '# Team notes\nOur own skill.\n' >.claude/skills/team-notes/SKILL.md
+printf '\n## Ours\nTeam tuning for the delegate skill.\n' >>.claude/skills/delegate/SKILL.md
+git add -A && git commit -qm "Add our own skill and tune the delegate skill"
+delegate_files="$(find .claude/skills/delegate -type f | sort)"
+delegate_sha="$(find .claude/skills/delegate -type f | sort | xargs sha256sum)"
+cd "$EVALS_WORK"
+
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+[ "$(cd "$PROJ" && find .claude/skills/delegate -type f | sort)" = "$delegate_files" ] ||
+  fail "upgrade changed the file list of the edited .claude/skills/delegate/ skill"
+[ "$(cd "$PROJ" && find .claude/skills/delegate -type f | sort | xargs sha256sum)" = "$delegate_sha" ] ||
+  fail "upgrade overwrote the edited .claude/skills/delegate/ skill instead of keeping it"
+[ ! -e "$PROJ/.agents/skills/delegate" ] ||
+  fail "upgrade added .agents/skills/delegate/ next to the edited skill, so harnesses read two versions"
+for n in distill evaluate; do
+  cmp -s "$EVALS_WORK/current-kit/.agents/skills/$n/SKILL.md" "$PROJ/.agents/skills/$n/SKILL.md" ||
+    fail "after upgrade .agents/skills/$n/SKILL.md differs from a fresh init"
+  [ -L "$PROJ/.claude/skills/$n" ] ||
+    fail "after upgrade .claude/skills/$n is not a symlink to .agents/skills/$n"
+  [ "$(readlink "$PROJ/.claude/skills/$n" 2>/dev/null)" = "../../.agents/skills/$n" ] ||
+    fail "after upgrade .claude/skills/$n points at the wrong target instead of ../../.agents/skills/$n"
+  echo "$OUT" | grep -Ei "moved" | grep -F ".claude/skills/$n" | grep -qF ".agents/skills/$n" ||
+    fail "upgrade's output does not say .claude/skills/$n moved to .agents/skills/$n"
+done
+echo "$OUT" | grep -Ei "kept" | grep -qF ".claude/skills/delegate" ||
+  fail "upgrade's output does not say it kept the edited .claude/skills/delegate"
+echo "$OUT" | grep -qE "(git )?diff" ||
+  fail "upgrade's output does not say how to compare the kept skill with the kit's"
+take="$(echo "$OUT" | grep -Ei "kept" | grep -oE "delegate upgrade [.A-Za-z0-9_/-]*\.claude/skills/delegate[.A-Za-z0-9_/-]*" | head -1)"
+[ -z "$take" ] && take="$(echo "$OUT" | grep -oE "delegate upgrade [.A-Za-z0-9_/-]*\.claude/skills/delegate[.A-Za-z0-9_/-]*" | head -1)"
+[ -n "$take" ] || fail "upgrade's output gives no 'delegate upgrade ... .claude/skills/delegate' command to take the kit's layout"
+
+# Step 2: take the kit's layout the way the output says.
+rest_before="$(cd "$PROJ" && sha256sum .agents/skills/distill/SKILL.md .agents/skills/evaluate/SKILL.md .claude/skills/team-notes/SKILL.md)"
+# shellcheck disable=SC2086
+d ${take#delegate }
+[ "$RC" -eq 0 ] || fail "'$take' failed: $OUT"
+cmp -s "$EVALS_WORK/current-kit/.agents/skills/delegate/SKILL.md" "$PROJ/.agents/skills/delegate/SKILL.md" ||
+  fail "'$take' did not put the kit's delegate skill in .agents/skills/delegate/"
+[ -L "$PROJ/.claude/skills/delegate" ] ||
+  fail "'$take' left .claude/skills/delegate as a folder instead of a symlink"
+[ "$(readlink "$PROJ/.claude/skills/delegate" 2>/dev/null)" = "../../.agents/skills/delegate" ] ||
+  fail "'$take' linked .claude/skills/delegate at the wrong target"
+cmp -s "$PROJ/.agents/skills/delegate/SKILL.md" "$PROJ/.claude/skills/delegate/SKILL.md" ||
+  fail "'$take' left .claude/skills/delegate reading different bytes than .agents/skills/delegate"
+[ "$(cd "$PROJ" && sha256sum .agents/skills/distill/SKILL.md .agents/skills/evaluate/SKILL.md .claude/skills/team-notes/SKILL.md)" = "$rest_before" ] ||
+  fail "'$take' changed files beyond the delegate skill"
+cd "$PROJ" && git add -A && git commit -qm "Take the kit skills layout" && cd "$EVALS_WORK"
+
+# Failure path: a kit symlink replaced with the project's own folder is kept, never overwritten.
+rm "$PROJ/.claude/skills/distill"
+mkdir "$PROJ/.claude/skills/distill"
+printf '# Ours\nDistill, our way.\n' >"$PROJ/.claude/skills/distill/SKILL.md"
+distill_ours="$(sha256sum "$PROJ/.claude/skills/distill/SKILL.md" | cut -d' ' -f1)"
+agents_distill="$(sha256sum "$PROJ/.agents/skills/distill/SKILL.md" | cut -d' ' -f1)"
+cd "$PROJ" && git add -A && git commit -qm "Replace the distill link with our own folder" && cd "$EVALS_WORK"
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed after replacing a link with a folder: $OUT"
+[ "$(sha256sum "$PROJ/.claude/skills/distill/SKILL.md" | cut -d' ' -f1)" = "$distill_ours" ] ||
+  fail "upgrade overwrote the project's own .claude/skills/distill/ folder"
+[ "$(sha256sum "$PROJ/.agents/skills/distill/SKILL.md" | cut -d' ' -f1)" = "$agents_distill" ] ||
+  fail "upgrade changed .agents/skills/distill/ behind the project's own folder"
+echo "$OUT" | grep -Ei "kept" | grep -qF ".claude/skills/distill" ||
+  fail "upgrade's output does not say it kept the replaced .claude/skills/distill"
+
+# Failure path: a deleted kit symlink is reported missing, not re-added.
+git -C "$PROJ" rm -q .claude/skills/evaluate || { echo "CHECK ERROR: could not remove the evaluate link"; exit 3; }
+git -C "$PROJ" commit -qm "Drop the evaluate link" || { echo "CHECK ERROR: could not commit dropping the evaluate link"; exit 3; }
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed after deleting a link: $OUT"
+[ ! -L "$PROJ/.claude/skills/evaluate" ] && [ ! -e "$PROJ/.claude/skills/evaluate" ] ||
+  fail "upgrade silently re-added the deleted .claude/skills/evaluate link"
+echo "$OUT" | grep -F ".claude/skills/evaluate" | grep -qiE "missing|deleted|removed" ||
+  fail "upgrade's output does not say the .claude/skills/evaluate link is missing"
+echo "$OUT" | grep -F ".claude/skills/evaluate" | grep -qiE "delegate upgrade|restor" ||
+  fail "upgrade's output does not say how to restore the missing .claude/skills/evaluate link"
+pass "upgrade kept the edited skill, took the kit layout on request, kept a replaced link and reported a deleted one"
