@@ -67,7 +67,7 @@ Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
 | `delegate run <id> --research` | Read-only research; the report is the result |
 | `delegate check <id>` | Rerun acceptance checks after a fix committed in the worktree |
 | `delegate review <id>` | Adversarial review; failing tests come back as `REVIEW.patch` |
-| `delegate plan-review [ids]` | Review `PLAN.md` and specs against the code before work starts |
+| `delegate plan-review [ids] [--planner <family\|model>]` | Review `PLAN.md` and specs against the code before work starts (`--planner` names the lead to skip) |
 | `delegate run --background <id>` | Same, detached: returns at once, keeps going after the shell or Claude turn ends |
 | `delegate status [id] [--json]` | Where each task stands now: phase, worker, changed files, latest steps, stalled, next step |
 | `delegate watch [id]` | `status`, refreshing in a terminal |

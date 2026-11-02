@@ -1368,14 +1368,15 @@ pub fn plan_review(
     ids: &[String],
     tier: Option<Tier>,
     worker: Option<&str>,
+    planner: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
     let cfg = WorkersConfig::load()?;
     let tier = tier.unwrap_or(cfg.default_tier(Role::PlanReview));
-    let planner = cfg.planner_family.clone();
+    let skipped = crate::config::planner_skip_family(planner, cfg.planner_family.as_deref())?;
     let workers = match worker {
         Some(w) => vec![w.parse()?],
-        None => cfg.candidates(Role::PlanReview, tier, planner.as_deref())?,
+        None => cfg.candidates(Role::PlanReview, tier, skipped.as_deref())?,
     };
     let ids: Vec<String> = if ids.is_empty() {
         let mut found: Vec<String> = fs::read_dir(&ctx.dhome)
@@ -1400,7 +1401,7 @@ pub fn plan_review(
     println!(
         "plan review @ {tier} of PLAN.md + {} spec(s), skipping the {} family",
         ids.len(),
-        planner.as_deref().unwrap_or("(none)")
+        skipped.as_deref().unwrap_or("(none)")
     );
     if dry_run {
         for w in &workers {

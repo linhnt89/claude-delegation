@@ -601,11 +601,26 @@ impl WorkersConfig {
         if kept.is_empty() {
             let family = skip_family.unwrap_or_default();
             bail!(
-                "every [{}].{tier} candidate is in the {family} family",
+                "every [{}].{tier} candidate is in the {family} family; add a candidate of another family to [{}].{tier} in workers.toml",
+                role.name(),
                 role.name()
             );
         }
         Ok(kept)
+    }
+}
+
+/// Family plan review must skip: `--planner` wins over `planner_family`.
+/// A value containing `:` is a worker (`harness:model[@effort]`), resolved with
+/// `Worker::family()`; otherwise it is a family name, lowercased.
+pub fn planner_skip_family(
+    planner: Option<&str>,
+    planner_family: Option<&str>,
+) -> Result<Option<String>> {
+    match planner {
+        Some(p) if p.contains(':') => Ok(Some(p.parse::<Worker>()?.family())),
+        Some(p) => Ok(Some(p.to_lowercase())),
+        None => Ok(planner_family.map(str::to_string)),
     }
 }
 
@@ -948,8 +963,29 @@ standard = ["claude:sonnet@high", "pi:github-copilot/claude-opus-5.5@high"]
             .to_string();
         assert_eq!(
             err,
-            "every [review].standard candidate is in the claude family"
+            "every [review].standard candidate is in the claude family; add a candidate of another family to [review].standard in workers.toml"
         );
+    }
+
+    #[test]
+    fn planner_flag_beats_planner_family() {
+        // A model and its family name resolve to the same skipped family.
+        let from_model =
+            planner_skip_family(Some("pi:openai-codex/gpt-6.1-sol@high"), Some("claude"))
+                .unwrap();
+        let from_family = planner_skip_family(Some("gpt"), Some("claude")).unwrap();
+        assert_eq!(from_model, from_family);
+        assert_eq!(from_model.as_deref(), Some("gpt"));
+        assert_eq!(
+            planner_skip_family(Some("GPT"), Some("claude")).unwrap().as_deref(),
+            Some("gpt")
+        );
+        // No flag falls back to planner_family, or to none.
+        assert_eq!(
+            planner_skip_family(None, Some("claude")).unwrap().as_deref(),
+            Some("claude")
+        );
+        assert_eq!(planner_skip_family(None, None).unwrap(), None);
     }
 
     #[test]

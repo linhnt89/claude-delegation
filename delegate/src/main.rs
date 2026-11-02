@@ -124,6 +124,9 @@ enum Cmd {
         worker: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        /// The lead's own family or model, skipped so another family reviews
+        #[arg(long)]
+        planner: Option<String>,
     },
     /// Read the current phase, progress, outcome and next action
     Status {
@@ -301,7 +304,15 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
             tier,
             worker,
             dry_run,
-        } => commands::plan_review(&ctx, &ids, tier, worker.as_deref(), dry_run),
+            planner,
+        } => commands::plan_review(
+            &ctx,
+            &ids,
+            tier,
+            worker.as_deref(),
+            planner.as_deref(),
+            dry_run,
+        ),
         Cmd::Status { id, json } => status::run(&ctx, id.as_deref(), json),
         Cmd::Watch { id, interval } => watch::run(&ctx, id.as_deref(), interval),
         Cmd::List => commands::list(&ctx, !sandboxed),
