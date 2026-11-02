@@ -64,5 +64,8 @@
 - Muse models have no family in `config.rs`: a Muse worker's family is its whole model name,
   so it never matches `--planner muse` or another Muse model.
 
+- A running plan review shows nowhere (`list`, `status`, `watch`, the pane): it isn't a
+  task, and `pi -p` writes `PLAN_REVIEW.md` only at the end, so it looks the same as a hung one.
+
 ## Open questions
 - None.
