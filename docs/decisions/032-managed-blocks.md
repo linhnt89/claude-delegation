@@ -1,7 +1,7 @@
 # 032: Managed blocks in project-owned markdown
 
 - Date: 2026-11-02
-- Status: accepted
+- Status: accepted; adoption amended by 033
 
 <!-- Append-only. Never edit an accepted decision's substance: write a new one that
      supersedes it, and update only this Status line. Keep it under a page. -->
