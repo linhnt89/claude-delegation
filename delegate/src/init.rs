@@ -125,12 +125,18 @@ pub fn init(dir: &Path) -> Result<()> {
     };
     let root = Path::new(&root);
     let mut record = crate::upgrade::Record::new();
+    let blocks = crate::upgrade::installed_blocks()?;
     for (rel, content) in PROJECT_FILES {
         let path = root.join(rel);
         if !path.exists() {
             record
                 .files
                 .insert((*rel).into(), crate::sha256::hex(content.as_bytes()));
+            for (key, hash) in &blocks {
+                if key.split_once('#').is_some_and(|(file, _)| file == *rel) {
+                    record.blocks.insert(key.clone(), hash.clone());
+                }
+            }
         }
         write_new(&path, content, rel)?;
     }

@@ -1,5 +1,8 @@
 //! Content-addressed kit upgrades and cleanup of the legacy kit status line.
-//! Project-owned templates are advice, never write targets.
+//! Project-owned text is advice; only explicitly marked kit blocks are write targets.
+
+#[path = "blocks.rs"]
+mod blocks;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -33,6 +36,8 @@ pub(crate) struct Record {
     pub project: Option<String>,
     pub kit: String,
     pub files: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub blocks: BTreeMap<String, String>,
 }
 
 impl Record {
@@ -41,6 +46,7 @@ impl Record {
             project: Some(uuid::Uuid::new_v4().to_string()),
             kit: current().id,
             files: BTreeMap::new(),
+            blocks: BTreeMap::new(),
         }
     }
 }
@@ -204,14 +210,233 @@ fn kept(kit: &str, path: &str, body: &[u8]) -> Result<String> {
     ))
 }
 
+const BLOCK_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
+
+fn outside_blocks(file: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+    if BLOCK_FILES.contains(&file) {
+        blocks::outside(file, bytes)
+    } else {
+        Ok(bytes.to_vec())
+    }
+}
+
+fn template_blocks(kit: &Kit, file: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut result = BTreeMap::new();
+    if BLOCK_FILES.contains(&file)
+        && let Some(body) = kit.templates.get(file)
+    {
+        for block in blocks::parse(file, body.as_bytes())? {
+            result.insert(block.name, body.as_bytes()[block.range].to_vec());
+        }
+    }
+    Ok(result)
+}
+
+pub(crate) fn installed_blocks() -> Result<BTreeMap<String, String>> {
+    let mut hashes = BTreeMap::new();
+    for file in BLOCK_FILES {
+        for (name, body) in template_blocks(&current(), file)? {
+            hashes.insert(format!("{file}#{name}"), sha256::hex(&body));
+        }
+    }
+    Ok(hashes)
+}
+
+fn git_had_block(root: &Path, file: &str, name: &str) -> Result<bool> {
+    let pattern = format!("^<!-- delegate:begin {name} -->$");
+    let history = git(
+        root,
+        &[
+            "log",
+            "--all",
+            "-1",
+            "--format=%H",
+            "-G",
+            &pattern,
+            "--",
+            file,
+        ],
+    )
+    .with_context(|| format!("inspect history of {file}#{name}; check git and retry"))?;
+    Ok(!history.is_empty())
+}
+
+fn old_lead(kit: &Kit) -> Option<&[u8]> {
+    lead_section(kit.templates.get("CLAUDE.md")?)
+}
+
+fn lead_section(body: &str) -> Option<&[u8]> {
+    let heading = "## Claude's role in this project";
+    let mut offset = 0;
+    for line in body.split_inclusive('\n') {
+        if line.strip_suffix('\n').unwrap_or(line) == heading {
+            return Some(&body.as_bytes()[offset..]);
+        }
+        offset += line.len();
+    }
+    None
+}
+
 #[derive(Debug, Default)]
 struct Plan {
     writes: BTreeMap<String, Vec<u8>>,
     removals: Vec<String>,
     output: Vec<String>,
+    adopted_lead: bool,
 }
 
 impl Plan {
+    fn file_bytes(&self, root: &Path, file: &str) -> Result<Vec<u8>> {
+        self.writes.get(file).map_or_else(
+            || Ok(read_optional(&root.join(file))?.unwrap_or_default()),
+            |body| Ok(body.clone()),
+        )
+    }
+
+    fn take_block(
+        &mut self,
+        root: &Path,
+        now: &Kit,
+        record: &mut Record,
+        file: &str,
+        name: &str,
+    ) -> Result<()> {
+        let templates = template_blocks(now, file)?;
+        let body = templates
+            .get(name)
+            .context("unknown block; choose a current kit block")?;
+        let mut bytes = self.file_bytes(root, file)?;
+        if let Some(block) = blocks::parse(file, &bytes)?
+            .into_iter()
+            .find(|block| block.name == name)
+        {
+            if bytes[block.range.clone()] == *body {
+                record
+                    .blocks
+                    .insert(format!("{file}#{name}"), sha256::hex(body));
+                return Ok(());
+            }
+            bytes.splice(block.range, body.iter().copied());
+        } else {
+            blocks::append(&mut bytes, body);
+        }
+        self.writes.insert(file.into(), bytes);
+        record
+            .blocks
+            .insert(format!("{file}#{name}"), sha256::hex(body));
+        self.output.push(format!("updated  {file}#{name}"));
+        Ok(())
+    }
+
+    /// Owned files can lag the record. Prefer the fullest matching historical
+    /// section, with later history entries breaking ties.
+    fn adopt_lead(&mut self, root: &Path, kits: &[Kit], now: &Kit, block: &[u8]) -> Result<bool> {
+        let source = self.file_bytes(root, "CLAUDE.md")?;
+        if !source
+            .split(|b| *b == b'\n')
+            .any(|line| line == b"## Claude's role in this project")
+        {
+            return Ok(false);
+        }
+        let mut candidates: Vec<_> = kits
+            .iter()
+            .enumerate()
+            .filter_map(|(index, kit)| old_lead(kit).map(|section| (index, section)))
+            .collect();
+        candidates.sort_by_key(|(index, section)| {
+            (section.split_inclusive(|b| *b == b'\n').count(), *index)
+        });
+        for (_, section) in candidates.into_iter().rev() {
+            if let Some((kept, moved)) = blocks::adopt(&source, section) {
+                self.adopted_lead = true;
+                let mut dest = self.file_bytes(root, "AGENTS.md")?;
+                blocks::append(&mut dest, block);
+                if !moved.is_empty() {
+                    if !dest.ends_with(b"\n") {
+                        dest.push(b'\n');
+                    }
+                    dest.extend_from_slice(&moved);
+                }
+                self.writes.insert("CLAUDE.md".into(), kept);
+                self.writes.insert("AGENTS.md".into(), dest);
+                self.output
+                    .push("moved    CLAUDE.md#lead -> AGENTS.md#lead".into());
+                if !moved.is_empty() {
+                    self.output.push(format!(
+                        "moved project lines after AGENTS.md#lead:\n{}",
+                        String::from_utf8_lossy(&moved)
+                    ));
+                }
+                return Ok(true);
+            }
+        }
+        let comparison = comparison(&now.id, "current-block", "AGENTS.md", block)?;
+        self.output.push(format!("kept     CLAUDE.md#lead (old section did not match; remove the old section from CLAUDE.md, then run delegate upgrade again or delegate upgrade AGENTS.md#lead; to add the lead block to AGENTS.md by hand, use '{}')", comparison.display()));
+        // Handled, but deliberately without writing either file.
+        Ok(true)
+    }
+
+    fn managed(&mut self, root: &Path, kits: &[Kit], now: &Kit, record: &mut Record) -> Result<()> {
+        for file in BLOCK_FILES {
+            for (name, body) in template_blocks(now, file)? {
+                let key = format!("{file}#{name}");
+                let hash = sha256::hex(&body);
+                let mut bytes = self.file_bytes(root, file)?;
+                if let Some(block) = blocks::parse(file, &bytes)?
+                    .into_iter()
+                    .find(|block| block.name == name)
+                {
+                    let actual = &bytes[block.range.clone()];
+                    let mut pristine = false;
+                    for kit in kits {
+                        if template_blocks(kit, file)?
+                            .get(&name)
+                            .is_some_and(|old| old == actual)
+                        {
+                            pristine = true;
+                            break;
+                        }
+                    }
+                    if pristine {
+                        if actual != body {
+                            bytes.splice(block.range, body.iter().copied());
+                            self.writes.insert((*file).into(), bytes);
+                            self.output.push(format!("updated  {key}"));
+                        }
+                        record.blocks.insert(key, hash);
+                    } else {
+                        let old = comparison(&now.id, "project-block", file, actual)?;
+                        let new = comparison(&now.id, "current-block", file, &body)?;
+                        self.output.push(format!("kept     {key} (edited; compare with git diff --no-index '{}' '{}'; take it with delegate upgrade {key})", old.display(), new.display()));
+                        // Even an edited, previously unrecorded block was installed.
+                        record
+                            .blocks
+                            .entry(key)
+                            .or_insert_with(|| sha256::hex(actual));
+                    }
+                } else if record.blocks.contains_key(&key) || git_had_block(root, file, &name)? {
+                    self.output.push(format!(
+                        "missing  {key}; restore with delegate upgrade {key}"
+                    ));
+                    record.blocks.entry(key).or_insert(hash);
+                } else if *file == "AGENTS.md"
+                    && name == "lead"
+                    && self.adopt_lead(root, kits, now, &body)?
+                {
+                    if self.writes.contains_key("AGENTS.md") {
+                        record.blocks.insert(key, hash);
+                    }
+                } else {
+                    blocks::append(&mut bytes, &body);
+                    self.writes.insert((*file).into(), bytes);
+                    record.blocks.insert(key.clone(), hash);
+                    self.output.push(format!("added    {key}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn full(
         &mut self,
         root: &Path,
@@ -282,16 +507,37 @@ impl Plan {
                 .get(path)
                 .and_then(|hash| kits.iter().find(|k| k.files.get(path) == Some(hash)))
                 .and_then(|k| k.templates.get(path));
-            let previous = if let Some(old) = old {
+            let mut previous = if let Some(old) = old {
                 old.as_bytes().to_vec()
             } else {
-                self.output.push(format!("template {path}: couldn't tell what's new; comparing the project file with the current template"));
-                read_optional(&root.join(path))?.unwrap_or_default()
+                self.file_bytes(root, path)?
             };
-            self.output.push(format!(
-                "template {path}\n{}",
-                template_diff(&now.id, path, &previous, body.as_bytes())?
-            ));
+            if path == "CLAUDE.md"
+                && self.adopted_lead
+                && let Some(section) = old.and_then(|body| lead_section(body))
+            {
+                // The template recorded as seen may differ from the section
+                // actually adopted. Neither removal is an outstanding hand merge.
+                previous.truncate(previous.len() - section.len());
+            }
+            let previous = outside_blocks(path, &previous)?;
+            let next = outside_blocks(path, body.as_bytes())?;
+            let nonblank = |bytes: &[u8]| -> Vec<Vec<u8>> {
+                bytes
+                    .split(|b| *b == b'\n')
+                    .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+                    .map(<[u8]>::to_vec)
+                    .collect()
+            };
+            if nonblank(&previous) != nonblank(&next) {
+                if old.is_none() {
+                    self.output.push(format!("template {path}: couldn't tell what's new; comparing the project file with the current template"));
+                }
+                self.output.push(format!(
+                    "template {path}\n{}",
+                    template_diff(&now.id, path, &previous, &next)?
+                ));
+            }
             record.files.insert(path.clone(), hash.clone());
         }
         record.kit.clone_from(&now.id);
@@ -365,6 +611,11 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
     if !kits.iter().any(|k| k.id == now.id) {
         kits.push(now.clone());
     }
+    // Validate both managed files before planning any writes, including targeted
+    // upgrades of unrelated files and the settings migration.
+    for file in BLOCK_FILES {
+        blocks::parse(file, &read_optional(&root.join(file))?.unwrap_or_default())?;
+    }
     let existing = read_optional(&root.join(RECORD))?;
     let saved: Option<Record> = existing
         .as_deref()
@@ -388,7 +639,15 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
         .map(|p| p.as_str())
         .collect();
     for path in paths {
-        if path != CLAUDE_SETTINGS && !valid.contains(&path.as_str()) {
+        if let Some((file, name)) = path.split_once('#') {
+            let available = template_blocks(&now, file)?;
+            if !available.contains_key(name) {
+                bail!(
+                    "unknown block {path}; {file} blocks: {}; choose one of these blocks",
+                    available.keys().cloned().collect::<Vec<_>>().join(", ")
+                );
+            }
+        } else if path != CLAUDE_SETTINGS && !valid.contains(&path.as_str()) {
             bail!("{path} is not a kit file; kit paths: {}", valid.join(", "));
         }
     }
@@ -432,6 +691,7 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
         project: None,
         kit: baseline.map_or_else(|| now.id.clone(), |kit| kit.id.clone()),
         files: BTreeMap::new(),
+        blocks: BTreeMap::new(),
     });
     let mut plan = Plan::default();
     if paths.is_empty() {
@@ -451,10 +711,17 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
                     .or_insert_with(|| hash.clone());
             }
         }
+        plan.managed(&root, &kits, &now, &mut record)?;
         plan.full(&root, &kits, &now, &mut record, &hashes)?;
     } else {
         // A targeted upgrade has no side effects on other record entries.
-        plan.take(paths, &now, &mut record);
+        for path in paths {
+            if let Some((file, name)) = path.split_once('#') {
+                plan.take_block(&root, &now, &mut record, file, name)?;
+            } else {
+                plan.take(std::slice::from_ref(path), &now, &mut record);
+            }
+        }
     }
     if paths.is_empty() || paths.iter().any(|path| path == CLAUDE_SETTINGS) {
         plan.remove_status_line(&root)?;
@@ -534,6 +801,7 @@ mod tests {
                 project: Some(uuid::Uuid::new_v4().to_string()),
                 kit: current().id,
                 files: current().files,
+                blocks: installed_blocks().unwrap(),
             };
             write_file(
                 &self.0.join(RECORD),
@@ -855,6 +1123,7 @@ mod tests {
             project: None,
             kit: old.id.clone(),
             files: old.files.clone(),
+            blocks: BTreeMap::new(),
         };
         write_file(&project.0.join("evals/run"), b"unused").unwrap();
         hashes.remove("evals/run");
@@ -907,6 +1176,377 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[test]
+    fn malformed_blocks_refuse_before_any_file_or_record_is_written() {
+        let malformed = [
+            "<!-- delegate:begin x -->\n<!-- delegate:end x -->\n<!-- delegate:begin x -->\n<!-- delegate:end x -->\n",
+            "<!-- delegate:begin x -->\n<!-- delegate:begin y -->\n<!-- delegate:end y -->\n<!-- delegate:end x -->\n",
+            "<!-- delegate:end x -->\n",
+            "<!-- delegate:begin x -->\n",
+            "<!-- delegate:begin x -->\n<!-- delegate:end y -->\n",
+        ];
+        for file in BLOCK_FILES {
+            for text in malformed {
+                for targeted in [false, true] {
+                    let project = Project::new();
+                    project.install();
+                    fs::write(project.0.join(file), text).unwrap();
+                    fs::write(
+                        project.0.join(CLAUDE_SETTINGS),
+                        b"{\"statusLine\":{\"command\":\"delegate statusline\"}}",
+                    )
+                    .unwrap();
+                    fs::remove_file(project.0.join("evals/run")).unwrap();
+                    let before = project.snapshot();
+                    let paths = if targeted {
+                        vec!["evals/run".into()]
+                    } else {
+                        vec![]
+                    };
+                    let error = upgrade(&project.0, &paths).unwrap_err().to_string();
+                    assert!(error.contains(&format!("{file}:")), "{error}");
+                    assert_eq!(project.snapshot(), before);
+                }
+            }
+        }
+    }
+
+    fn legacy_project(kit: &Kit) -> Project {
+        let project = Project::new();
+        let mut record = project.install();
+        for (file, template) in &kit.templates {
+            fs::write(project.0.join(file), template).unwrap();
+        }
+        record.kit.clone_from(&kit.id);
+        record.files.clone_from(&kit.files);
+        record.blocks.clear();
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        project
+    }
+
+    #[test]
+    fn adoption_moves_project_lines_and_is_idempotent() {
+        let kits = history().unwrap();
+        let old = kits
+            .iter()
+            .rev()
+            .find(|kit| old_lead(kit).is_some())
+            .unwrap();
+        let project = legacy_project(old);
+        let before = fs::read(project.0.join("AGENTS.md")).unwrap();
+        let source = old.templates["CLAUDE.md"].replace(
+            "- End a design discussion",
+            "- Our project rule.\n- End a design discussion",
+        ) + "\nProject suffix.\n";
+        fs::write(project.0.join("CLAUDE.md"), source).unwrap();
+        upgrade(&project.0, &[]).unwrap();
+        let agents = fs::read(project.0.join("AGENTS.md")).unwrap();
+        let mut expected = before;
+        blocks::append(
+            &mut expected,
+            &template_blocks(&current(), "AGENTS.md").unwrap()["lead"],
+        );
+        expected.extend_from_slice(b"- Our project rule.\n");
+        assert_eq!(agents, expected);
+        let prefix = old.templates["CLAUDE.md"]
+            .split("## Claude's role in this project")
+            .next()
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(project.0.join("CLAUDE.md")).unwrap(),
+            format!("{prefix}\nProject suffix.\n")
+        );
+        let before = project.snapshot();
+        upgrade(&project.0, &[]).unwrap();
+        assert_eq!(project.snapshot(), before);
+    }
+
+    #[test]
+    fn changed_shared_kit_line_refuses_adoption() {
+        let kits = history().unwrap();
+        let old = kits
+            .iter()
+            .rev()
+            .find(|kit| old_lead(kit).is_some())
+            .unwrap();
+        {
+            let line = "- End a design discussion with `/distill`: record decisions, update `PLAN.md`, nothing else.";
+            assert!(old.templates["CLAUDE.md"].contains(line));
+            let project = legacy_project(old);
+            fs::write(
+                project.0.join("CLAUDE.md"),
+                old.templates["CLAUDE.md"].replace(line, &format!("{line} edited")),
+            )
+            .unwrap();
+            let agents = fs::read(project.0.join("AGENTS.md")).unwrap();
+            let claude = fs::read(project.0.join("CLAUDE.md")).unwrap();
+            upgrade(&project.0, &[]).unwrap();
+            assert_eq!(fs::read(project.0.join("AGENTS.md")).unwrap(), agents);
+            assert_eq!(fs::read(project.0.join("CLAUDE.md")).unwrap(), claude);
+            let before = project.snapshot();
+            upgrade(&project.0, &[]).unwrap();
+            assert_eq!(project.snapshot(), before);
+        }
+    }
+
+    #[test]
+    fn edited_wave_line_moves_as_project_text_even_with_newest_record() {
+        let kits = history().unwrap();
+        let line = "- Split plans into waves of tasks touching different files, and start each wave together.";
+        let old = kits
+            .iter()
+            .find(|kit| {
+                kit.templates
+                    .get("CLAUDE.md")
+                    .is_some_and(|body| body.contains(line))
+            })
+            .unwrap();
+        let project = legacy_project(old);
+        let mut record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        record.kit = current().id;
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        let edited = format!("{line} edited\n");
+        fs::write(
+            project.0.join("CLAUDE.md"),
+            old.templates["CLAUDE.md"].replace(&format!("{line}\n"), &edited),
+        )
+        .unwrap();
+        let mut plan = Plan::default();
+        plan.managed(&project.0, &kits, &current(), &mut record)
+            .unwrap();
+        assert!(plan.writes["AGENTS.md"].ends_with(edited.as_bytes()));
+        assert!(plan.output.iter().any(|line| line.contains(&edited)));
+        assert!(
+            !String::from_utf8_lossy(&plan.writes["CLAUDE.md"])
+                .contains("## Claude's role in this project")
+        );
+    }
+
+    #[test]
+    fn adoption_prefers_most_lines_then_later_history_entry() {
+        let project = Project::new();
+        let heading = "## Claude's role in this project\n";
+        let sections = [
+            format!("{heading}one\ntwo\n"),
+            format!("{heading}one\n"),
+            format!("{heading}one\nthree\n"),
+        ];
+        let kits: Vec<_> = sections
+            .iter()
+            .enumerate()
+            .map(|(index, section)| Kit {
+                id: index.to_string(),
+                files: BTreeMap::new(),
+                templates: BTreeMap::from([("CLAUDE.md".into(), section.clone())]),
+            })
+            .collect();
+        fs::write(
+            project.0.join("CLAUDE.md"),
+            format!("{heading}one\ntwo\nthree\n"),
+        )
+        .unwrap();
+        let mut plan = Plan::default();
+        let body = &template_blocks(&current(), "AGENTS.md").unwrap()["lead"];
+        assert!(
+            plan.adopt_lead(&project.0, &kits, &current(), body)
+                .unwrap()
+        );
+        // The last section ties for longest: 'two' is the only project line.
+        let mut expected = body.clone();
+        expected.extend_from_slice(b"two\n");
+        assert_eq!(plan.writes["AGENTS.md"], expected);
+    }
+
+    #[test]
+    fn adoption_diffs_exclude_the_moved_section_and_blank_separators() {
+        let kits = history().unwrap();
+        let old = kits
+            .iter()
+            .rev()
+            .find(|kit| old_lead(kit).is_some())
+            .unwrap();
+        for recorded in [true, false] {
+            let project = legacy_project(old);
+            let mut record = if recorded {
+                toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap()
+            } else {
+                Record::new()
+            };
+            let mut plan = Plan::default();
+            plan.managed(&project.0, &kits, &current(), &mut record)
+                .unwrap();
+            plan.full(&project.0, &kits, &current(), &mut record, &old.files)
+                .unwrap();
+            assert!(
+                !plan
+                    .output
+                    .iter()
+                    .any(|line| line.starts_with("template AGENTS.md")
+                        || line.starts_with("template CLAUDE.md")),
+                "{:?}",
+                plan.output
+            );
+        }
+    }
+
+    #[test]
+    fn adoption_does_not_report_a_different_recorded_section_as_stale() {
+        let kits = history().unwrap();
+        let shorter = kits.iter().find(|kit| old_lead(kit).is_some()).unwrap();
+        let fuller = kits
+            .iter()
+            .max_by_key(|kit| old_lead(kit).map_or(0, <[u8]>::len))
+            .unwrap();
+        let project = legacy_project(fuller);
+        let mut record = Record::new();
+        record.files.clone_from(&shorter.files);
+        let mut plan = Plan::default();
+        plan.managed(&project.0, &kits, &current(), &mut record)
+            .unwrap();
+        plan.full(&project.0, &kits, &current(), &mut record, &fuller.files)
+            .unwrap();
+        assert!(
+            !plan
+                .output
+                .iter()
+                .any(|line| line.starts_with("template CLAUDE.md")),
+            "{:?}",
+            plan.output
+        );
+    }
+
+    #[test]
+    fn equal_targeted_block_is_silent_and_does_not_write() {
+        let project = Project::new();
+        let mut record = project.install();
+        let before = project.snapshot();
+        let mut plan = Plan::default();
+        plan.take_block(&project.0, &current(), &mut record, "AGENTS.md", "lead")
+            .unwrap();
+        assert_eq!(plan.output, Vec::<String>::new());
+        assert!(plan.writes.is_empty());
+        upgrade(&project.0, &["AGENTS.md#lead".into()]).unwrap();
+        assert_eq!(project.snapshot(), before);
+    }
+
+    #[test]
+    fn appended_block_starts_empty_or_missing_file_without_separator() {
+        for missing in [true, false] {
+            let project = Project::new();
+            let mut record = project.install();
+            if missing {
+                fs::remove_file(project.0.join("AGENTS.md")).unwrap();
+            } else {
+                fs::write(project.0.join("AGENTS.md"), "").unwrap();
+            }
+            let mut plan = Plan::default();
+            plan.take_block(&project.0, &current(), &mut record, "AGENTS.md", "lead")
+                .unwrap();
+            assert_eq!(
+                plan.writes["AGENTS.md"],
+                template_blocks(&current(), "AGENTS.md").unwrap()["lead"]
+            );
+        }
+    }
+
+    #[test]
+    fn deleted_block_stays_deleted_even_without_recorded_hash() {
+        for committed in [false, true] {
+            let project = Project::new();
+            let mut record = project.install();
+            project.commit();
+            record.blocks.clear();
+            fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+            let bytes = fs::read(project.0.join("AGENTS.md")).unwrap();
+            let outside = blocks::outside("AGENTS.md", &bytes).unwrap();
+            fs::write(project.0.join("AGENTS.md"), &outside).unwrap();
+            if committed {
+                project.commit();
+            }
+            upgrade(&project.0, &[]).unwrap();
+            assert_eq!(fs::read(project.0.join("AGENTS.md")).unwrap(), outside);
+            let before = project.snapshot();
+            upgrade(&project.0, &[]).unwrap();
+            assert_eq!(project.snapshot(), before);
+            upgrade(&project.0, &["AGENTS.md#lead".into()]).unwrap();
+            assert_eq!(
+                blocks::parse("AGENTS.md", &fs::read(project.0.join("AGENTS.md")).unwrap())
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn recordless_adoption_tries_newest_matching_section_first() {
+        let kits = history().unwrap();
+        let old = kits
+            .iter()
+            .rev()
+            .find(|kit| old_lead(kit).is_some())
+            .unwrap();
+        let project = legacy_project(old);
+        fs::remove_file(project.0.join(RECORD)).unwrap();
+        let mut plan = Plan::default();
+        let body = &template_blocks(&current(), "AGENTS.md").unwrap()["lead"];
+        assert!(
+            plan.adopt_lead(&project.0, &kits, &current(), body)
+                .unwrap()
+        );
+        assert!(plan.writes.contains_key("AGENTS.md"));
+        assert!(!String::from_utf8_lossy(&plan.writes["AGENTS.md"]).contains("Claude is the lead"));
+    }
+
+    #[test]
+    fn review_adoption_still_possible_after_hand_fix_of_refused_section() {
+        // Review evidence: a refused adoption must stay retryable once the
+        // project restores the old kit lines; the first run rewrote record.kit.
+        let kits = history().unwrap();
+        let old = kits
+            .iter()
+            .rev()
+            .find(|kit| old_lead(kit).is_some())
+            .unwrap();
+        let project = legacy_project(old);
+        let line = "- End a design discussion with `/distill`: record decisions, update `PLAN.md`, nothing else.";
+        fs::write(
+            project.0.join("CLAUDE.md"),
+            old.templates["CLAUDE.md"].replace(line, &format!("{line} edited")),
+        )
+        .unwrap();
+        upgrade(&project.0, &[]).unwrap();
+        fs::write(project.0.join("CLAUDE.md"), &old.templates["CLAUDE.md"]).unwrap();
+        upgrade(&project.0, &[]).unwrap();
+        let agents = fs::read(project.0.join("AGENTS.md")).unwrap();
+        assert_eq!(blocks::parse("AGENTS.md", &agents).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn review_lead_block_added_when_claude_md_never_had_the_section() {
+        // Review evidence: never recorded and absent, with no old section to
+        // adopt (project wrote its own CLAUDE.md before init) -> appended.
+        let project = Project::new();
+        let mut record = project.install();
+        record.blocks.clear();
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        let bytes = fs::read(project.0.join("AGENTS.md")).unwrap();
+        fs::write(
+            project.0.join("AGENTS.md"),
+            blocks::outside("AGENTS.md", &bytes).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            project.0.join("CLAUDE.md"),
+            "@AGENTS.md\n\nOur own notes.\n",
+        )
+        .unwrap();
+        upgrade(&project.0, &[]).unwrap();
+        let agents = fs::read(project.0.join("AGENTS.md")).unwrap();
+        assert_eq!(blocks::parse("AGENTS.md", &agents).unwrap().len(), 1);
     }
 
     #[test]

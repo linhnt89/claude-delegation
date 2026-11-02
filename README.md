@@ -48,8 +48,19 @@ terminal, and opens the pane, which opens only when you ask. `init` adds no stat
 
 After rebuilding `delegate`, run `delegate upgrade` in an existing project to update its
 kit. Edited kit files are kept, deleted files are reported missing, and the output gives
-commands to compare or take the current version with `delegate upgrade <path>`. Project-owned
-files are never overwritten: changed templates are shown as diffs to carry over by hand.
+commands to compare or take the current version with `delegate upgrade <path>`.
+In project-owned `AGENTS.md` and `CLAUDE.md`, only kit-managed blocks are updated:
+pristine blocks are replaced, edited blocks are kept, deleted blocks stay missing, and
+new blocks are appended. Take or restore one with `delegate upgrade AGENTS.md#lead`.
+Text outside blocks is never changed; template changes there (and in `PLAN.md`,
+`evals/jobs.md`, and `.delegate.toml`) are shown as diffs to carry over by hand.
+Older projects adopt the lead's role from `CLAUDE.md` into `AGENTS.md#lead` when the
+lines of any historical version are unchanged, preferring the fullest matching version
+regardless of the recorded kit. Project lines between them move after the block and are
+listed. If none matches, remove the old section by hand, then run `delegate upgrade`
+again (or `delegate upgrade AGENTS.md#lead`). With no old section, the block is added.
+`.delegate-kit.toml` records
+installed block hashes as well as file hashes.
 Review with `git diff`, then commit the changes, including `.delegate-kit.toml`.
 
 Runtime needs: `git`, `bwrap`, and the harnesses you configure. Nothing else.
