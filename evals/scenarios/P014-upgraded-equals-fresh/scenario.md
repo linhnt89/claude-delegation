@@ -6,7 +6,7 @@
 
 ## Property
 For any earlier kit version, a project set up by it, left untouched and then upgraded has the
-same kit files (paths, contents, executable bits) and the same recorded version as a new
+same kit files (paths, contents, executable bits, and symlinks with their targets) and the same recorded version as a new
 project set up by the current `delegate init`.
 
 ## If this fails
