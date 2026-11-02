@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# S132: upgrade keeps a kit block the project edited, and restores one it deleted on request.
+. "$EVALS_LIB/common.sh"
+
+fresh_kit "$EVALS_WORK/current-kit"
+python3 "$EVALS_LIB/blocks.py" get "$EVALS_WORK/current-kit/AGENTS.md" lead >/dev/null 2>&1 ||
+  fail "the AGENTS.md template has no managed 'lead' block yet, so an edited block cannot be kept through upgrade (managed blocks not built yet)"
+grep -q "^## Claude's role in this project" "$EVALS_WORK/current-kit/CLAUDE.md" &&
+  fail "the CLAUDE.md template still carries the old lead-role section instead of managed blocks (managed blocks not built yet)"
+
+# A newer kit whose lead block changed; the project never had other new blocks.
+newer="$(newer_delegate s132 <<'SH'
+printf '%s\n' 'New in kit 2: start each wave together.' | python3 "$EVALS_LIB/blocks.py" append-inside AGENTS.md lead
+SH
+)" || fail "CHECK ERROR: could not build a newer delegate (see build-s132.log)"
+DELEGATE="$newer" fresh_kit "$EVALS_WORK/kit2"
+python3 "$EVALS_LIB/blocks.py" get "$EVALS_WORK/kit2/AGENTS.md" lead >"$EVALS_WORK/lead.new" ||
+  fail "CHECK ERROR: the newer kit lost its lead block"
+
+start_project() {
+  rm -rf "$PROJ" "$DHOME"
+  setup_project
+  cd "$PROJ"
+  printf '\n## Shop notes\nPrices are in cents.\n' >>CLAUDE.md
+  git add -A && git commit -qm "Make the project our own"
+  cd "$EVALS_WORK"
+}
+
+# The owner changed a line inside the lead block; the newer kit changed it too.
+start_project
+printf '%s\n' '- T118 team tweak inside the lead block.' |
+  python3 "$EVALS_LIB/blocks.py" edit-after-begin "$PROJ/AGENTS.md" lead ||
+  fail "CHECK ERROR: could not edit inside the lead block"
+cd "$PROJ" && git commit -qam "Tune the lead block for our team" && cd "$EVALS_WORK"
+sha_before="$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)"
+
+DELEGATE="$newer" d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+[ "$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)" = "$sha_before" ] ||
+  fail "upgrade rewrote AGENTS.md even though the project had edited its lead block"
+echo "$OUT" | grep -E "kept" | grep -qF "AGENTS.md#lead" ||
+  fail "upgrade's output does not say the edited AGENTS.md#lead block was kept"
+echo "$OUT" | grep -qF "delegate upgrade AGENTS.md#lead" ||
+  fail "upgrade's output gives no 'delegate upgrade AGENTS.md#lead' command to take the kit's block"
+echo "$OUT" | grep -qiE "diff" || fail "upgrade's output does not say how to compare the kept block with the kit's"
+
+# Take the kit's block the way the output says: only the block changes.
+take="$(echo "$OUT" | grep -o "delegate upgrade AGENTS.md#lead" | head -1)"
+[ -n "$take" ] || fail "upgrade's output gives no 'delegate upgrade AGENTS.md#lead' command to take the kit's block"
+python3 "$EVALS_LIB/blocks.py" outside "$PROJ/AGENTS.md" >"$EVALS_WORK/outside.kept"
+claude_before="$(cd "$PROJ" && sha256sum CLAUDE.md)"
+# shellcheck disable=SC2086
+DELEGATE="$newer" d ${take#delegate }
+[ "$RC" -eq 0 ] || fail "'$take' failed: $OUT"
+python3 "$EVALS_LIB/blocks.py" get "$PROJ/AGENTS.md" lead >"$EVALS_WORK/lead.taken" ||
+  fail "'$take' dropped the lead block instead of taking the kit's text"
+cmp -s "$EVALS_WORK/lead.new" "$EVALS_WORK/lead.taken" ||
+  fail "'$take' did not put the newer kit's text into AGENTS.md#lead"
+python3 "$EVALS_LIB/blocks.py" outside "$PROJ/AGENTS.md" >"$EVALS_WORK/outside.taken"
+cmp -s "$EVALS_WORK/outside.kept" "$EVALS_WORK/outside.taken" ||
+  fail "'$take' changed a byte outside the AGENTS.md#lead block"
+[ "$(cd "$PROJ" && sha256sum CLAUDE.md)" = "$claude_before" ] ||
+  fail "'$take' changed CLAUDE.md when it should only replace the AGENTS.md#lead block"
+
+# An uncommitted edit inside the block counts as edited too.
+start_project
+printf '%s\n' '- T118 uncommitted tweak inside the lead block.' |
+  python3 "$EVALS_LIB/blocks.py" edit-after-begin "$PROJ/AGENTS.md" lead ||
+  fail "CHECK ERROR: could not edit inside the lead block"
+sha_before="$(cd "$PROJ" && sha256sum AGENTS.md)"
+DELEGATE="$newer" d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed on the uncommitted edit: $OUT"
+[ "$(cd "$PROJ" && sha256sum AGENTS.md)" = "$sha_before" ] ||
+  fail "upgrade rewrote AGENTS.md even though the lead block had an uncommitted edit"
+echo "$OUT" | grep -E "kept" | grep -qF "AGENTS.md#lead" ||
+  fail "upgrade did not keep the AGENTS.md#lead block with an uncommitted edit"
+
+# A block the owner deleted stays deleted, even when the newer kit changed it.
+start_project
+python3 "$EVALS_LIB/blocks.py" remove-block "$PROJ/AGENTS.md" lead ||
+  fail "CHECK ERROR: could not delete the lead block"
+cd "$PROJ" && git commit -qam "The team drops the lead block" && cd "$EVALS_WORK"
+python3 "$EVALS_LIB/blocks.py" outside "$PROJ/AGENTS.md" >"$EVALS_WORK/outside.deleted"
+DELEGATE="$newer" d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed on the deleted block: $OUT"
+python3 "$EVALS_LIB/blocks.py" get "$PROJ/AGENTS.md" lead >/dev/null 2>&1 &&
+  fail "upgrade added back the AGENTS.md lead block the project had deleted"
+python3 "$EVALS_LIB/blocks.py" outside "$PROJ/AGENTS.md" >"$EVALS_WORK/outside.deleted-after"
+cmp -s "$EVALS_WORK/outside.deleted" "$EVALS_WORK/outside.deleted-after" ||
+  fail "upgrade changed the project's text while leaving the deleted block alone"
+echo "$OUT" | grep -Ei "missing|deleted|removed" | grep -qF "AGENTS.md#lead" ||
+  fail "upgrade's output does not say the deleted AGENTS.md#lead block is missing"
+echo "$OUT" | grep -qF "delegate upgrade AGENTS.md#lead" ||
+  fail "upgrade's output gives no 'delegate upgrade AGENTS.md#lead' command to restore the deleted block"
+# Restoring brings the kit's text back without touching the project's own lines.
+take="$(echo "$OUT" | grep -o "delegate upgrade AGENTS.md#lead" | head -1)"
+# shellcheck disable=SC2086
+DELEGATE="$newer" d ${take#delegate }
+[ "$RC" -eq 0 ] || fail "'$take' failed: $OUT"
+python3 "$EVALS_LIB/blocks.py" get "$PROJ/AGENTS.md" lead >"$EVALS_WORK/lead.restored" ||
+  fail "'$take' did not restore the deleted lead block"
+cmp -s "$EVALS_WORK/lead.new" "$EVALS_WORK/lead.restored" ||
+  fail "'$take' did not restore the newer kit's text into AGENTS.md#lead"
+python3 - <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+import blocks
+work = os.environ["EVALS_WORK"]
+before = open(work + "/outside.deleted").read().splitlines()
+after_text = open(os.environ["PROJ"] + "/AGENTS.md").read()
+after_outside = blocks.outside(after_text).splitlines()
+# Every outside line from before the restore is still there, in order.
+it = iter(after_outside)
+for line in before:
+    for a in it:
+        if a == line:
+            break
+    else:
+        sys.exit("FAIL: a project line went missing when the block was restored")
+PY
+
+# An unknown block name is refused, naming the blocks the file has.
+DELEGATE="$newer" d upgrade "AGENTS.md#nosuch"
+[ "$RC" -ne 0 ] || fail "upgrade accepted the unknown block AGENTS.md#nosuch"
+echo "$OUT" | grep -qw "lead" || fail "refusing AGENTS.md#nosuch did not name the blocks AGENTS.md has"
+pass "upgrade kept the edited AGENTS.md#lead block, took it on request, left the deleted one alone until restored, and refused the unknown block"

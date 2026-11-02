@@ -1,68 +1,80 @@
 #!/usr/bin/env bash
-# A project from the first kit learns which project-owned templates changed since.
-# The check derives that set by comparing the first kit's templates with the current ones.
+# S040: the project learns which project-owned templates changed outside blocks.
+# The newer kit changes PLAN.md, AGENTS.md and CLAUDE.md outside their managed
+# blocks; .delegate.toml and evals/jobs.md stay as they are.
 . "$EVALS_LIB/common.sh"
-first="$(python3 "$EVALS_LIB/kits.py" commits | head -1)"
-owned_files=(AGENTS.md CLAUDE.md PLAN.md .delegate.toml evals/jobs.md)
-baseline="$EVALS_WORK/first-kit"
-python3 "$EVALS_LIB/kits.py" install "$first" "$baseline"
-changed=()
-for f in "${owned_files[@]}"; do
-  if ! cmp -s "$baseline/$f" "$EVALS_ROOT/delegate/templates/project/$f"; then
-    changed+=("$f")
-  fi
-done
-[ "${#changed[@]}" -gt 0 ] || exit 3
 
-new_line="Never commit on a task branch"
-grep -qF "$new_line" "$EVALS_ROOT/delegate/templates/project/CLAUDE.md" ||
-  fail "this check expects the current CLAUDE.md template to say '$new_line'; pick a new line"
+fresh_kit "$EVALS_WORK/current-kit"
+python3 "$EVALS_LIB/blocks.py" get "$EVALS_WORK/current-kit/AGENTS.md" lead >/dev/null 2>&1 ||
+  fail "the AGENTS.md template has no managed 'lead' block yet, so outside-block template changes cannot be told apart from block changes (managed blocks not built yet)"
+grep -q "^## Claude's role in this project" "$EVALS_WORK/current-kit/CLAUDE.md" &&
+  fail "the CLAUDE.md template still carries the old lead-role section instead of managed blocks (managed blocks not built yet)"
+
+MARK_PLAN="T118-S040-PLAN outside-template line."
+MARK_AGENTS="T118-S040-AGENTS outside-template line."
+MARK_CLAUDE="T118-S040-CLAUDE outside-template line."
+newer="$(newer_delegate s040 <<'SH'
+printf '\nT118-S040-PLAN outside-template line.\n' >>PLAN.md
+printf '\nT118-S040-AGENTS outside-template line.\n' >>AGENTS.md
+printf '\nT118-S040-CLAUDE outside-template line.\n' >>CLAUDE.md
+SH
+)" || fail "CHECK ERROR: could not build a newer delegate (see build-s040.log)"
+DELEGATE="$newer" fresh_kit "$EVALS_WORK/kit2"
 
 own_files() {
   cd "$PROJ"
-  printf '# Shop\n\n## Commands\n- Test: `python3 -m unittest -q`\n' >AGENTS.md
+  printf '\n## Shop notes\nPrices are in cents.\n' >>AGENTS.md
   printf '\n## Shop notes\nPrices are in cents.\n' >>CLAUDE.md
+  printf '\n## Shop plan notes\nExtra context.\n' >>PLAN.md
+  printf '\n# Shop jobs note\n' >>evals/jobs.md
   git add -A && git commit -qm "Make the project our own"
   cd "$EVALS_WORK"
 }
 
-old_kit_project "$first"
+setup_project
 own_files
-mine="$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)"
-d upgrade
+mine="$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md PLAN.md .delegate.toml evals/jobs.md)"
+DELEGATE="$newer" d upgrade
 [ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
-[ "$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)" = "$mine" ] || fail "upgrade changed the project's CLAUDE.md or AGENTS.md"
-echo "$OUT" | grep -qF "CLAUDE.md" || fail "upgrade didn't say the CLAUDE.md template changed"
-echo "$OUT" | grep -qF "$new_line" || fail "upgrade didn't show what changed in the CLAUDE.md template"
-for f in "${owned_files[@]}"; do
-  expected=false
-  for changed_file in "${changed[@]}"; do
-    if [ "$f" = "$changed_file" ]; then
-      expected=true
-      break
-    fi
-  done
-  if [ "$expected" = true ]; then
-    echo "$OUT" | grep -qF -- "$f" || fail "upgrade didn't name $f, whose template changed"
-  else
-    echo "$OUT" | grep -qF -- "$f" && fail "upgrade mentioned $f, whose template didn't change"
-  fi
+[ "$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md PLAN.md .delegate.toml evals/jobs.md)" = "$mine" ] ||
+  fail "upgrade changed a project-owned file it must only report"
+for f in PLAN.md AGENTS.md CLAUDE.md; do
+  echo "$OUT" | grep -E "template" | grep -qF -- "$f" ||
+    fail "upgrade didn't name $f, whose template changed outside managed blocks"
 done
+for mark in "$MARK_PLAN" "$MARK_AGENTS" "$MARK_CLAUDE"; do
+  echo "$OUT" | grep -qF -- "$mark" || fail "upgrade didn't show what changed in the project-owned templates"
+done
+# Templates that did not change are not mentioned: block lines (<file>#<name>)
+# report block actions, not template changes, so they don't count here.
+filtered="$(echo "$OUT" | grep -vE '(AGENTS\.md|CLAUDE\.md|PLAN\.md|evals/jobs\.md|\.delegate\.toml)#[a-z0-9-]+')"
+echo "$filtered" | grep -qF -- "evals/jobs.md" && fail "upgrade mentioned evals/jobs.md, whose template didn't change"
+echo "$filtered" | grep -qF -- ".delegate.toml" && fail "upgrade mentioned .delegate.toml, whose template didn't change"
 
-# Without a way to tell the kit version (every kit file edited), it shows the difference
-# from the current template and says it couldn't tell what's new.
+# Without a way to tell the kit version (every kit file edited), it shows the
+# current template's difference from the project file and says it couldn't tell
+# what's new. The old role section still adopts (S133); only the reporting is asserted.
+first="$(python3 "$EVALS_LIB/kits.py" commits | head -1)"
+[ -n "$first" ] || { echo "CHECK ERROR: kits.py listed no kit commits"; exit 3; }
 rm -rf "$PROJ" "$DHOME"
 old_kit_project "$first"
 own_files
 cd "$PROJ"
 python3 "$EVALS_LIB/kits.py" install "$first" "$EVALS_WORK/k1"
 (cd "$EVALS_WORK/k1" && find . -type f) | while read -r f; do
-  case "${f#./}" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md) ;; *) printf '\n# ours\n' >>"$f" ;; esac
+  case "${f#./}" in AGENTS.md|CLAUDE.md|PLAN.md|.delegate.toml|evals/jobs.md) ;; *) printf '\n# ours\n' >>"$PROJ/$f" ;; esac
 done
 git commit -qam "Edit every kit file"
+cd "$EVALS_WORK"
+mine2="$(cd "$PROJ" && sha256sum PLAN.md evals/jobs.md .delegate.toml)"
 d upgrade
 [ "$RC" -eq 0 ] || fail "upgrade of an unrecognised kit failed: $OUT"
-echo "$OUT" | grep -qF "$new_line" || fail "with no known kit version, upgrade didn't show the CLAUDE.md template's difference"
+echo "$OUT" | grep -E "template" | grep -qE "PLAN.md|CLAUDE.md|AGENTS.md" ||
+  fail "with no known kit version, upgrade didn't show the current templates' difference from the project files"
+echo "$OUT" | grep -qE "@@|diff --" ||
+  fail "with no known kit version, upgrade didn't show what changed in the project-owned templates"
 echo "$OUT" | grep -qiE "(couldn.t|could not|can.t|cannot) tell|unknown" ||
   fail "with no known kit version, upgrade didn't say it couldn't tell what's new"
-pass "upgrade showed the CLAUDE.md template change and left the project's own files alone"
+[ "$(cd "$PROJ" && sha256sum PLAN.md evals/jobs.md .delegate.toml)" = "$mine2" ] ||
+  fail "upgrade of an unrecognised kit changed PLAN.md, evals/jobs.md or .delegate.toml, which it must never write"
+pass "upgrade showed the project-owned template changes outside managed blocks, left the project's own files alone, and said when it couldn't tell what's new"

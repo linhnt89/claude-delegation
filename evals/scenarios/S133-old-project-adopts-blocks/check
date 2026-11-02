@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# S133: a project from before managed blocks gets them on upgrade.
+. "$EVALS_LIB/common.sh"
+
+fresh_kit "$EVALS_WORK/current-kit"
+python3 "$EVALS_LIB/blocks.py" get "$EVALS_WORK/current-kit/AGENTS.md" lead >"$EVALS_WORK/lead.current" 2>/dev/null ||
+  fail "the AGENTS.md template has no managed 'lead' block yet, so older projects cannot adopt blocks on upgrade (managed blocks not built yet)"
+grep -q "^## Claude's role in this project" "$EVALS_WORK/current-kit/CLAUDE.md" &&
+  fail "the CLAUDE.md template still carries the old lead-role section instead of managed blocks (managed blocks not built yet)"
+
+before="$(python3 "$EVALS_LIB/blocks.py" kit-before-blocks 2>"$EVALS_WORK/kit-before.err" )" ||
+  { echo "CHECK ERROR: $(cat "$EVALS_WORK/kit-before.err")"; exit 3; }
+[ -n "$before" ] || { echo "CHECK ERROR: no kit before managed blocks was found"; exit 3; }
+git -C "$EVALS_ROOT" show "$before:delegate/templates/project/CLAUDE.md" >"$EVALS_WORK/CLAUDE.old-template" ||
+  { echo "CHECK ERROR: the kit before blocks has no CLAUDE.md template"; exit 3; }
+grep -q "^## Claude's role in this project" "$EVALS_WORK/CLAUDE.old-template" ||
+  { echo "CHECK ERROR: the kit before blocks has no lead-role section in its CLAUDE.md template"; exit 3; }
+
+start_old_project() {
+  rm -rf "$PROJ" "$DHOME"
+  old_kit_project "$before"
+  cd "$PROJ"
+  printf '\n## Shop\nCheckout pricing service.\n' >>AGENTS.md
+  printf '\n## Project section\nOur on-call rotation.\n' >>CLAUDE.md
+  git add -A && git commit -qm "Make the project our own"
+  cd "$EVALS_WORK"
+}
+
+# The old section is adopted verbatim: gone from CLAUDE.md, lead block ends AGENTS.md.
+start_old_project
+cp "$PROJ/AGENTS.md" "$EVALS_WORK/AGENTS.start"
+cp "$PROJ/CLAUDE.md" "$EVALS_WORK/CLAUDE.start"
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+python3 - <<'PY' || fail "upgrade did not move the lead role from CLAUDE.md into the AGENTS.md lead block, keeping the project's own text"
+import os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+work = os.environ["EVALS_WORK"]
+template = open(work + "/CLAUDE.old-template", "rb").read()
+start = open(work + "/CLAUDE.start", "rb").read()
+got = open(os.environ["PROJ"] + "/CLAUDE.md", "rb").read()
+assert start[:len(template)] == template, "CHECK ERROR: the old project was not built from the old template"
+heading = template.index(b"## Claude's role in this project")
+prefix = template[:template.rfind(b"\n", 0, heading) + 1]
+expected = prefix + start[len(template):]
+if got.splitlines() != expected.splitlines() or got.endswith(b"\n") != expected.endswith(b"\n"):
+    sys.exit("the kit's old section is not gone from CLAUDE.md, or the project's section and @AGENTS.md did not stay byte for byte")
+assert b"@AGENTS.md" in got, "the project's @AGENTS.md line is gone from CLAUDE.md"
+PY
+python3 - "$EVALS_WORK/AGENTS.start" "$PROJ/AGENTS.md" "$EVALS_WORK/lead.current" <<'PY' || fail "AGENTS.md does not end with the current lead block, or a byte before it changed"
+import sys
+sys.path.insert(0, __import__("os").environ["EVALS_LIB"])
+import blocks
+before = open(sys.argv[1], "rb").read()
+after = open(sys.argv[2], "rb").read()
+block = open(sys.argv[3], "rb").read()
+try:
+    blocks.assert_appended(before, after, block)
+except AssertionError as e:
+    sys.exit(f"FAIL: {e}")
+PY
+echo "$OUT" | grep -Ei "moved" | grep -qF "AGENTS.md#lead" ||
+  fail "upgrade's output does not say the lead role moved into the managed AGENTS.md#lead block"
+echo "$OUT" | tail -n2 | grep -qi "review" || fail "upgrade's output does not end with how to review the upgrade"
+echo "$OUT" | tail -n2 | grep -qi "commit" || fail "upgrade's output does not end with how to commit the upgrade"
+
+cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md >"$EVALS_WORK/sha.after-first" && cd "$EVALS_WORK"
+d upgrade
+[ "$RC" -eq 0 ] || fail "second upgrade failed: $OUT"
+[ "$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)" = "$(cat "$EVALS_WORK/sha.after-first")" ] ||
+  fail "the second upgrade changed files"
+echo "$OUT" | grep -qi "up to date" || fail "the second upgrade did not say the project is up to date"
+
+# A project bullet added inside the kit's old section moves to just after the block.
+export BULLET="- T118 project bullet: run the slow suite too."
+start_old_project
+python3 - <<'PY' || { echo "CHECK ERROR: could not add a project bullet inside the old section"; exit 3; }
+import os
+path = os.environ["PROJ"] + "/CLAUDE.md"
+lines = open(path).read().split("\n")
+h = next(i for i, l in enumerate(lines) if l == "## Claude's role in this project")
+i = next(i for i in range(h + 1, len(lines)) if lines[i].startswith("- "))
+lines.insert(i + 1, os.environ["BULLET"])
+open(path, "w").write("\n".join(lines))
+PY
+cd "$PROJ" && git commit -qam "The team adds a bullet inside the kit section" && cd "$EVALS_WORK"
+cp "$PROJ/AGENTS.md" "$EVALS_WORK/AGENTS.bullet-start"
+cp "$PROJ/CLAUDE.md" "$EVALS_WORK/CLAUDE.bullet-start"
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed on the project bullet: $OUT"
+grep -q "^## Claude's role in this project" "$PROJ/CLAUDE.md" &&
+  fail "upgrade left the kit's old section in CLAUDE.md instead of adopting it"
+grep -qF -- "$BULLET" "$PROJ/CLAUDE.md" &&
+  fail "upgrade left the project's bullet in CLAUDE.md instead of moving it after the lead block"
+python3 - <<'PY' || fail "the project bullet did not move to just after the AGENTS.md lead block"
+import os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+work = os.environ["EVALS_WORK"]
+before = open(work + "/AGENTS.bullet-start", "rb").read()
+after = open(os.environ["PROJ"] + "/AGENTS.md", "rb").read()
+block = open(work + "/lead.current", "rb").read()
+head = before if before.endswith(b"\n") or not before else before + b"\n"
+if not after.startswith(head):
+    sys.exit("a byte before the lead block changed")
+rest = after[len(head):].decode("utf-8").split("\n")
+if rest and rest[-1] == "":
+    rest.pop()
+want = block.decode("utf-8").split("\n")
+if want and want[-1] == "":
+    want.pop()
+bullet = os.environ["BULLET"]
+try:
+    at = next(i for i in range(len(rest) - len(want) + 1) if rest[i:i + len(want)] == want)
+except StopIteration:
+    sys.exit("the current lead block is not in AGENTS.md")
+if any(line != "" for line in rest[:at]):
+    sys.exit("more than blank lines were added before the lead block")
+tail = [line for line in rest[at + len(want):] if line != ""]
+if tail != [bullet]:
+    sys.exit("the project bullet is not just after the lead block")
+PY
+echo "$OUT" | grep -Ei "moved" | grep -qF "AGENTS.md#lead" ||
+  fail "upgrade's output does not say the lead role moved into the managed AGENTS.md#lead block"
+echo "$OUT" | grep -qF "T118 project bullet" ||
+  fail "upgrade's output does not list the project bullet it moved after the block"
+
+# A changed kit line refuses adoption: neither file changes and the diff is shown.
+start_old_project
+python3 - <<'PY' || { echo "CHECK ERROR: could not edit a kit line in the old section"; exit 3; }
+import os
+path = os.environ["PROJ"] + "/CLAUDE.md"
+lines = open(path).read().split("\n")
+h = next(i for i, l in enumerate(lines) if l == "## Claude's role in this project")
+i = next(i for i in range(h + 1, len(lines)) if lines[i].startswith("- "))
+lines[i] = lines[i] + " (edited by the project)"
+open(path, "w").write("\n".join(lines))
+PY
+cd "$PROJ" && git commit -qam "The team edits a kit line" && cd "$EVALS_WORK"
+sha_before="$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)"
+d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed on the edited kit line: $OUT"
+[ "$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)" = "$sha_before" ] ||
+  fail "upgrade rewrote AGENTS.md or CLAUDE.md even though a kit line of the old section was changed"
+echo "$OUT" | grep -E "template" | grep -qF "CLAUDE.md" ||
+  fail "upgrade's output does not show the template CLAUDE.md diff for the refused adoption"
+echo "$OUT" | grep -qiE "block|AGENTS\.md" ||
+  fail "upgrade's output does not say how to add the block by hand for the refused adoption"
+pass "old projects adopted the lead block into AGENTS.md, moved their own bullet after it, and a changed kit line refused with the template diff"

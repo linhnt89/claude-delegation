@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# S131: upgrade brings the kit's changed and new blocks and keeps the rest.
+. "$EVALS_LIB/common.sh"
+
+# Product failure until t117: the current kit must carry a managed lead block
+# in AGENTS.md, and its CLAUDE.md must not still hold the old lead-role section.
+fresh_kit "$EVALS_WORK/current-kit"
+python3 "$EVALS_LIB/blocks.py" get "$EVALS_WORK/current-kit/AGENTS.md" lead >/dev/null 2>&1 ||
+  fail "the AGENTS.md template has no managed 'lead' block yet, so the kit's changed and new blocks cannot reach the project (managed blocks not built yet)"
+grep -q "^## Claude's role in this project" "$EVALS_WORK/current-kit/CLAUDE.md" &&
+  fail "the CLAUDE.md template still carries the old lead-role section instead of managed blocks (managed blocks not built yet)"
+
+setup_project
+cd "$PROJ"
+printf '\n## What this is\nShop checkout pricing.\n\n## Commands\n- Test: `python3 -m unittest -q`\n' >>AGENTS.md
+printf '%s\n' '## Project overrides' 'Always run the slow suite too.' |
+  python3 "$EVALS_LIB/blocks.py" insert-after AGENTS.md lead ||
+  fail "CHECK ERROR: could not place the project overrides after the lead block"
+printf '\n## Shop notes\nPrices are in cents.\n' >>CLAUDE.md
+git add -A && git commit -qm "Make the project our own"
+python3 "$EVALS_LIB/blocks.py" outside AGENTS.md >"$EVALS_WORK/AGENTS.outside.before"
+python3 "$EVALS_LIB/blocks.py" outside CLAUDE.md >"$EVALS_WORK/CLAUDE.outside.before"
+cp AGENTS.md "$EVALS_WORK/AGENTS.before"
+cp CLAUDE.md "$EVALS_WORK/CLAUDE.before"
+cd "$EVALS_WORK"
+
+# A newer kit: the lead block changed, plus a block CLAUDE.md never had.
+# The change is derived from the copy's own templates, never hard-coded.
+newer="$(newer_delegate s131 <<'SH'
+printf '%s\n' 'New in kit 2: start each wave together.' | python3 "$EVALS_LIB/blocks.py" append-inside AGENTS.md lead
+printf '%s\n' 'T118 test block: kit-owned text.' 'Second line of the test block.' | python3 "$EVALS_LIB/blocks.py" append-block CLAUDE.md t118-new
+SH
+)" || fail "CHECK ERROR: could not build a newer delegate (see build-s131.log)"
+DELEGATE="$newer" fresh_kit "$EVALS_WORK/kit2"
+
+DELEGATE="$newer" d upgrade
+[ "$RC" -eq 0 ] || fail "upgrade failed: $OUT"
+cd "$PROJ"
+python3 "$EVALS_LIB/blocks.py" get "$EVALS_WORK/kit2/AGENTS.md" lead >"$EVALS_WORK/lead.new" ||
+  fail "CHECK ERROR: the newer kit lost its lead block"
+python3 "$EVALS_LIB/blocks.py" get AGENTS.md lead >"$EVALS_WORK/lead.got" ||
+  fail "upgrade dropped the AGENTS.md lead block instead of updating it"
+cmp -s "$EVALS_WORK/lead.new" "$EVALS_WORK/lead.got" ||
+  fail "upgrade did not put the newer kit's text into the changed AGENTS.md#lead block"
+python3 "$EVALS_LIB/blocks.py" get "$EVALS_WORK/kit2/CLAUDE.md" t118-new >"$EVALS_WORK/testblock.new" ||
+  fail "CHECK ERROR: the newer kit has no t118-new block"
+python3 - "$EVALS_WORK/CLAUDE.before" CLAUDE.md "$EVALS_WORK/testblock.new" <<'PY' || fail "upgrade did not add the new CLAUDE.md#t118-new block at the end, leaving the rest alone"
+import sys
+sys.path.insert(0, __import__("os").environ["EVALS_LIB"])
+import blocks
+before = open(sys.argv[1], "rb").read()
+after = open(sys.argv[2], "rb").read()
+block = open(sys.argv[3], "rb").read()
+try:
+    blocks.assert_appended(before, after, block)
+except AssertionError as e:
+    sys.exit(f"FAIL: {e}")
+PY
+python3 "$EVALS_LIB/blocks.py" outside AGENTS.md >"$EVALS_WORK/AGENTS.outside.after"
+python3 "$EVALS_LIB/blocks.py" outside CLAUDE.md >"$EVALS_WORK/CLAUDE.outside.after"
+cmp -s "$EVALS_WORK/AGENTS.outside.before" "$EVALS_WORK/AGENTS.outside.after" ||
+  fail "upgrade changed a byte outside the blocks in AGENTS.md"
+python3 - <<'PY' || fail "upgrade changed a byte outside the blocks in CLAUDE.md"
+import os, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+import blocks
+work = os.environ["EVALS_WORK"]
+pre = open(work + "/CLAUDE.outside.before").read()
+post = open(work + "/CLAUDE.outside.after").read()
+# The appended block brings its blank separator; nothing else may change.
+if not blocks.outside_allows_append(pre, post):
+    sys.exit("outside text changed beyond the appended block's separator")
+PY
+cd "$EVALS_WORK"
+echo "$OUT" | grep -E "updated" | grep -qF "AGENTS.md#lead" ||
+  fail "upgrade's output does not name the updated AGENTS.md#lead block"
+echo "$OUT" | grep -E "added" | grep -qF "CLAUDE.md#t118-new" ||
+  fail "upgrade's output does not name the added CLAUDE.md#t118-new block"
+echo "$OUT" | tail -n2 | grep -qi "review" || fail "upgrade's output does not end with how to review the upgrade"
+echo "$OUT" | tail -n2 | grep -qi "commit" || fail "upgrade's output does not end with how to commit the upgrade"
+
+# A second upgrade changes nothing and says the project is up to date.
+cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md >"$EVALS_WORK/sha.after-first"
+DELEGATE="$newer" d upgrade
+[ "$RC" -eq 0 ] || fail "second upgrade failed: $OUT"
+[ "$(cd "$PROJ" && sha256sum AGENTS.md CLAUDE.md)" = "$(cat "$EVALS_WORK/sha.after-first")" ] ||
+  fail "the second upgrade changed files"
+echo "$OUT" | grep -qi "up to date" || fail "the second upgrade did not say the project is up to date"
+pass "upgrade updated AGENTS.md#lead, added CLAUDE.md#t118-new, kept every byte outside the blocks, and a second upgrade changed nothing"

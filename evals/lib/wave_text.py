@@ -1,12 +1,16 @@
 """S082's text checks: the kit tells the lead to run a wave's tasks together.
 
-Reads the installed `PLAN.md`, `CLAUDE.md` and delegate skill, and (for an upgraded project)
-what `delegate upgrade` reported. Matches the instructions the scenario names, loosely enough
-that rewording passes, and fails when the skill only teaches `delegate wait <id>`.
+Reads the installed `PLAN.md`, `AGENTS.md` lead block and delegate skill, and (for an
+upgraded project) what `delegate upgrade` reported. Matches the instructions the scenario
+names, loosely enough that rewording passes, and fails when the skill only teaches
+`delegate wait <id>`.
 
-For an upgrade, the skill must carry the batch loop and `delegate upgrade` must report the
-`CLAUDE.md` wave line and the `PLAN.md` wave column; the check itself compares those two
-project-owned files byte-for-byte, since upgrade must not edit them (decision 005).
+The wave line lives in the managed `lead` block of `AGENTS.md` (decisions 032, 033); the
+current `CLAUDE.md` template carries no `## Claude's role in this project` section. For an
+upgrade, the skill must carry the batch loop, `delegate upgrade` must report the `PLAN.md`
+wave column and the `AGENTS.md#lead` block, and the upgraded `AGENTS.md` must hold the wave
+line in its `lead` block; the check itself compares `PLAN.md` byte-for-byte, since upgrade
+must never edit it.
 """
 
 from __future__ import annotations
@@ -16,9 +20,14 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blocks  # noqa: E402
+
 SKILL = ".claude/skills/delegate/SKILL.md"
 PLAN = "PLAN.md"
+AGENTS = "AGENTS.md"
 CLAUDE = "CLAUDE.md"
+OLD_ROLE_HEADING = "## Claude's role in this project"
 
 
 def flat(text: str) -> str:
@@ -44,7 +53,7 @@ def plan_has_wave_column(text: str) -> bool:
     return False
 
 
-def claude_names_waves(text: str) -> bool:
+def lead_block_names_waves(text: str) -> bool:
     low = flat(text)
     return "wave" in low and any(phrase in low for phrase in (
         "different files", "disjoint", "separate files", "don't overlap", "do not overlap",
@@ -89,6 +98,19 @@ def skill_missing(text: str) -> list[str]:
     return missing
 
 
+def lead_block_missing(agents: str) -> str | None:
+    """Why the installed AGENTS.md does not teach waves through its lead block."""
+    try:
+        block = blocks.get_block(agents, "lead")
+    except ValueError as e:
+        return f"AGENTS.md has a malformed lead block ({e})"
+    if block is None:
+        return "AGENTS.md has no managed `lead` block holding the lead's role"
+    if not lead_block_names_waves(block):
+        return "the `lead` block in AGENTS.md does not say plans are split into waves of tasks that touch different files"
+    return None
+
+
 def previous_kit() -> str:
     """The newest kit commit whose skill does not yet teach the batch loop."""
     sys.path.insert(0, os.environ["EVALS_LIB"])
@@ -104,13 +126,13 @@ def previous_kit() -> str:
 
 
 def upgrade_missing(output: str) -> list[str]:
-    """The template changes `delegate upgrade` must report for the user to take in."""
+    """The template and block changes `delegate upgrade` must report for the user to take in."""
     missing: list[str] = []
     low = flat(output)
     if "plan.md" not in low or not plan_has_wave_column(output):
         missing.append("delegate upgrade did not report the `wave` column for PLAN.md")
-    if "claude.md" not in low or not claude_names_waves(output):
-        missing.append("delegate upgrade did not report the wave line for CLAUDE.md")
+    if not blocks.has_action(output, "AGENTS.md#lead", "updated|added|moved|kept|missing"):
+        missing.append("delegate upgrade did not bring the wave line in through the `AGENTS.md#lead` block")
     return missing
 
 
@@ -126,16 +148,23 @@ def main() -> None:
         upgrade_output = read(Path(args[args.index("--upgrade-output") + 1]))
 
     plan = read(root / PLAN)
+    agents = read(root / AGENTS)
     claude = read(root / CLAUDE)
     skill = read(root / SKILL)
     missing: list[str] = []
     if upgraded:
         missing.extend(upgrade_missing(upgrade_output))
+        problem = lead_block_missing(agents)
+        if problem is not None:
+            missing.append(problem + " after upgrade")
     else:
         if not plan_has_wave_column(plan):
             missing.append("PLAN.md has no `wave` column")
-        if not claude_names_waves(claude):
-            missing.append("CLAUDE.md does not say plans are split into waves of tasks that touch different files")
+        problem = lead_block_missing(agents)
+        if problem is not None:
+            missing.append(problem)
+        if OLD_ROLE_HEADING in claude:
+            missing.append("CLAUDE.md still carries the old `## Claude's role in this project` section instead of the managed `lead` block in AGENTS.md")
     missing.extend(skill_missing(skill))
     if missing:
         print("; ".join(missing), flush=True)

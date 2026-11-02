@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# S082: a freshly set-up project tells the lead to run a wave's tasks together.
+# S082: a freshly set-up project tells the lead to run a wave's tasks together,
+# and upgrading a project from before the wave text brings the batch loop in.
 . "$EVALS_LIB/common.sh"
 setup_project
+fresh_kit "$EVALS_WORK/current-kit"
 
-# What `delegate init` installs now.
+# What `delegate init` installs now: PLAN.md wave column, the wave line in the
+# AGENTS.md lead block, and the delegate skill teaching the batch loop.
 missing="$(python3 "$EVALS_LIB/wave_text.py" "$PROJ" 2>&1)" || {
   fail "the freshly installed kit does not teach the batch loop: $missing"
 }
@@ -12,22 +15,29 @@ missing="$(python3 "$EVALS_LIB/wave_text.py" "$PROJ" 2>&1)" || {
 prev="$(python3 "$EVALS_LIB/wave_text.py" previous-kit 2>&1)" || {
   echo "CHECK ERROR: $prev"; exit 3
 }
+[ -n "$prev" ] || { echo "CHECK ERROR: no kit before the wave text was found"; exit 3; }
 rm -rf "$PROJ"
 old_kit_project "$prev"
-cp "$PROJ/CLAUDE.md" "$EVALS_WORK/CLAUDE.before"
 cp "$PROJ/PLAN.md" "$EVALS_WORK/PLAN.before"
+cp "$PROJ/CLAUDE.md" "$EVALS_WORK/CLAUDE.before"
+had_old_section=false
+grep -q "^## Claude's role in this project" "$PROJ/CLAUDE.md" && had_old_section=true
 upgrade_out="$EVALS_WORK/upgrade.out"
 OUT="$(cd "$PROJ" && timeout 60 "$DELEGATE" upgrade </dev/null 2>&1)"; RC=$?
 printf '\n$ delegate upgrade  (exit %s)\n%s\n' "$RC" "$OUT" >>"$EVALS_WORK/transcript.log"
 printf '%s\n' "$OUT" >"$upgrade_out"
 [ "$RC" -ne 124 ] || fail "delegate upgrade waited for input on a project set up by the previous kit"
 [ "$RC" -eq 0 ] || fail "delegate upgrade failed on a project set up by the previous kit: $(printf '%s' "$OUT" | tr '\n' ' ')"
-cmp -s "$PROJ/CLAUDE.md" "$EVALS_WORK/CLAUDE.before" \
-  || fail "delegate upgrade edited CLAUDE.md; it must only report its wave-line template change for the user to take in"
 cmp -s "$PROJ/PLAN.md" "$EVALS_WORK/PLAN.before" \
   || fail "delegate upgrade edited PLAN.md; it must only report its wave-column template change for the user to take in"
+cmp -s "$PROJ/.claude/skills/delegate/SKILL.md" "$EVALS_WORK/current-kit/.claude/skills/delegate/SKILL.md" \
+  || fail "delegate upgrade did not replace the delegate skill with the one teaching the batch loop"
+if [ "$had_old_section" = true ]; then
+  grep -q "^## Claude's role in this project" "$PROJ/CLAUDE.md" &&
+    fail "delegate upgrade left the old lead-role section in CLAUDE.md instead of moving it into AGENTS.md#lead (as S133)"
+fi
 missing="$(python3 "$EVALS_LIB/wave_text.py" "$PROJ" --upgrade-output "$upgrade_out" 2>&1)" || {
   fail "delegate upgrade did not bring the batch-loop text and the template changes to a project with the previous kit: $missing"
 }
 
-pass "the installed PLAN.md has a wave column, CLAUDE.md splits plans into waves of different files, the delegate skill teaches the batch loop with an id-less wait, and upgrade replaces the skill while reporting the wave line and column without editing CLAUDE.md or PLAN.md"
+pass "the installed PLAN.md has a wave column, the AGENTS.md lead block splits plans into waves of different files, the delegate skill teaches the batch loop with an id-less wait, and upgrade replaces the skill, brings the wave line in through AGENTS.md#lead and reports the wave column without editing PLAN.md"

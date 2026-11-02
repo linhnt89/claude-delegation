@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+# P029: upgrade changes only pristine kit blocks, whatever surrounds them.
+# Seeded: prints the seed, and the smallest failing case on failure.
+. "$EVALS_LIB/common.sh"
+
+fresh_kit "$EVALS_WORK/current-kit"
+python3 "$EVALS_LIB/blocks.py" get "$EVALS_WORK/current-kit/AGENTS.md" lead >/dev/null 2>&1 ||
+  fail "the AGENTS.md template has no managed 'lead' block yet, so pristine blocks cannot be told from edited ones (managed blocks not built yet)"
+grep -q "^## Claude's role in this project" "$EVALS_WORK/current-kit/CLAUDE.md" &&
+  fail "the CLAUDE.md template still carries the old lead-role section instead of managed blocks (managed blocks not built yet)"
+
+newer="$(newer_delegate p029 <<'SH'
+printf '%s\n' 'New in kit 2: start each wave together.' | python3 "$EVALS_LIB/blocks.py" append-inside AGENTS.md lead
+printf '%s\n' 'T118 test block: kit-owned text.' 'Second line of the test block.' | python3 "$EVALS_LIB/blocks.py" append-block CLAUDE.md t118-new
+SH
+)" || fail "CHECK ERROR: could not build a newer delegate (see build-p029.log)"
+export NEWER_DELEGATE="$newer"
+DELEGATE="$newer" fresh_kit "$EVALS_WORK/kit2"
+
+setup_project
+exec python3 - "$@" <<'PY'
+import os, random, sys
+sys.path.insert(0, os.environ["EVALS_LIB"])
+import blocks
+import kit
+from kit import d, seed, fail
+
+W = os.environ["EVALS_WORK"]
+PROJ = os.environ["PROJ"]
+kit.DELEGATE = os.environ["NEWER_DELEGATE"]
+
+rng, s = seed()
+FILES = ("AGENTS.md", "CLAUDE.md")
+old = {f: open(f"{W}/current-kit/{f}").read() for f in FILES}
+new = {f: open(f"{W}/kit2/{f}").read() for f in FILES}
+old_names = {f: blocks.names(old[f]) for f in FILES}
+new_names = {f: blocks.names(new[f]) for f in FILES}
+added = {f: [n for n in new_names[f] if n not in old_names[f]] for f in FILES}
+changed = {f: [n for n in old_names[f]
+               if n in new_names[f] and blocks.get_block(old[f], n) != blocks.get_block(new[f], n)]
+           for f in FILES}
+removed = [n for f in FILES for n in old_names[f] if n not in new_names[f]]
+if removed:
+    sys.exit(f"CHECK ERROR: the newer kit dropped blocks {removed}; this check expects it to only change and add them")
+
+WORDS = ["shop", "pricing", "checkout", "tax", "discount", "cart", "receipt",
+         "owner", "shift", "refund", "ledger", "queue", "batch", "review"]
+NEAR = [
+    " <!-- delegate:begin lead -->",
+    "<!-- delegate:begin lead --> ",
+    "<!--delegate:begin lead-->",
+    "<!-- delegate:begin Lead -->",
+    "<!-- delegate:begin LEAD -->",
+    "<!-- delegate:begin lead_name -->",
+    "<!-- delegate:begin lead name -->",
+    "<!-- delegate: Begin lead -->",
+    "<!-- delegate:begin  lead -->",
+    "<!-- delegate:end lead --> ",
+    " <!-- delegate:end lead -->",
+    "<!-- delegate:end Lead -->",
+    "<!-- delegate:begin lead -->x",
+    "x<!-- delegate:begin lead -->",
+    "<!-- delegate:finish lead -->",
+    "<!-- delegate:begin-->",
+    "delegate:begin lead",
+    "<!-- delegate:begin t118-new --> ",
+]
+
+
+def word(rng):
+    w = rng.choice(WORDS)
+    return f"{w}-{rng.randrange(100)}" if rng.random() < 0.3 else w
+
+
+def heading(rng):
+    return f"{rng.choice(['#', '##', '###'])} {word(rng).title()} {word(rng)}"
+
+
+def listed(rng):
+    return f"{rng.choice(['-', '-', '*', '1.', '  -'])} {word(rng)} {word(rng)}"
+
+
+def fence(rng):
+    inner = [f"{word(rng)} = {word(rng)}({rng.randrange(9)})",
+             f"# {word(rng)} {word(rng)}",
+             rng.choice(NEAR)]
+    return ["```" + rng.choice(["", "python", "bash"])] + inner + ["```"]
+
+
+def prose(rng):
+    return f"{word(rng).capitalize()} {word(rng)} {word(rng)}."
+
+
+def outside_items(rng):
+    items = [[heading(rng)], [listed(rng), listed(rng)], fence(rng),
+             [rng.choice(NEAR)], [prose(rng)], [heading(rng)],
+             [listed(rng)], [rng.choice(NEAR)]]
+    for _ in range(rng.randrange(0, 6)):
+        items.append([rng.choice([heading, listed, prose])(rng)])
+    rng.shuffle(items)
+    return items
+
+
+def edit_block(block, rng):
+    lines = block.split("\n")
+    for i in range(1, len(lines) - 1):
+        if lines[i].strip():
+            lines[i] = f"{lines[i]} T118-team-{rng.randrange(1000)}"
+            break
+    else:
+        lines.insert(len(lines) - 1, f"T118 team line {rng.randrange(1000)}")
+    return "\n".join(lines)
+
+
+def commit(msg):
+    r = kit.sh(f"git add -A && git commit -qm '{msg}'")
+    if r.returncode != 0:
+        sys.exit(f"CHECK ERROR: git commit failed: {(r.stdout + r.stderr)[-200:]}")
+
+
+def build_files(plan_lines, states, rng_edit):
+    """plan_lines: [(file, gap, line)]; states: {(file, name): state}."""
+    texts = {}
+    for f in FILES:
+        by_gap = {}
+        for (pf, gap, line) in plan_lines:
+            if pf == f:
+                by_gap.setdefault(gap, []).append(line)
+        parts = []
+        for gi, name in enumerate(old_names[f]):
+            parts += by_gap.get(gi, [])
+            blk = blocks.get_block(old[f], name)
+            st = states[(f, name)]
+            if st == "edited":
+                blk = edit_block(blk, rng_edit)
+            if st != "deleted":
+                parts += blk.split("\n")
+        parts += by_gap.get(len(old_names[f]), [])
+        texts[f] = "\n".join(parts) + "\n"
+    return texts
+
+
+def check_texts(texts, states, out):
+    """The property over one upgraded pair; returns an error string or None."""
+    for f in FILES:
+        post = open(f"{PROJ}/{f}").read()
+        if added[f]:
+            # Appended blocks bring their blank separators; nothing else may change.
+            if not blocks.outside_allows_append(blocks.outside(texts[f]), blocks.outside(post)):
+                return f"{f}: a byte outside the blocks changed"
+        elif blocks.outside(post) != blocks.outside(texts[f]):
+            return f"{f}: a byte outside the blocks changed"
+        for name in old_names[f]:
+            st = states[(f, name)]
+            got = blocks.get_block(post, name)
+            if st == "pristine":
+                if name in changed[f]:
+                    if got != blocks.get_block(new[f], name):
+                        return f"{f}#{name}: pristine block was not replaced with the kit's text"
+                    if not blocks.has_action(out, f"{f}#{name}", "updated"):
+                        return f"{f}#{name}: output does not name the updated block"
+                elif got != blocks.get_block(old[f], name):
+                    return f"{f}#{name}: pristine block changed even though the kit did not change it"
+            elif st == "edited":
+                if got != blocks.get_block(texts[f], name):
+                    return f"{f}#{name}: edited block was not left alone"
+                if not blocks.has_action(out, f"{f}#{name}", "kept"):
+                    return f"{f}#{name}: output does not say the edited block was kept"
+                if f"delegate upgrade {f}#{name}" not in out:
+                    return f"{f}#{name}: output gives no 'delegate upgrade {f}#{name}' to take the kit's text"
+            else:
+                if got is not None:
+                    return f"{f}#{name}: deleted block was added back"
+                if not blocks.has_action(out, f"{f}#{name}", "missing"):
+                    return f"{f}#{name}: output does not say the deleted block is missing"
+        for name in added[f]:
+            want = blocks.get_block(new[f], name)
+            if blocks.get_block(post, name) != want:
+                return f"{f}#{name}: new block was not appended"
+            try:
+                blocks.assert_appended(texts[f].encode(), post.encode(), want.encode())
+            except AssertionError as e:
+                return f"{f}#{name}: new block not appended cleanly at the end ({e})"
+            if not blocks.has_action(out, f"{f}#{name}", "added"):
+                return f"{f}#{name}: output does not name the added block"
+    return None
+
+
+def run_case(plan_lines, states, tag):
+    kit.fresh()
+    rng_edit = random.Random(f"{tag}")
+    texts = build_files(plan_lines, states, rng_edit)
+    for f in FILES:
+        open(f"{PROJ}/{f}", "w").write(texts[f])
+    commit("Team writes around the blocks")
+    rc, out = d("upgrade")
+    if rc != 0:
+        return f"upgrade failed: {' '.join(out.split())[-300:]}", texts
+    err = check_texts(texts, states, out)
+    if err is not None:
+        return err, texts
+    before = {f: open(f"{PROJ}/{f}").read() for f in FILES}
+    rc, out = d("upgrade")
+    if rc != 0:
+        return f"second upgrade failed: {' '.join(out.split())[-300:]}", texts
+    for f in FILES:
+        if open(f"{PROJ}/{f}").read() != before[f]:
+            return f"{f}: the second upgrade changed files", texts
+    if "up to date" not in out.lower():
+        return "the second upgrade did not say the project is up to date", texts
+    return None, texts
+
+
+kit.save_template()
+N = 20
+for case in range(N):
+    gaps = {f: len(old_names[f]) + 1 for f in FILES}
+    plan, states = [], {}
+    for f in FILES:
+        for item in outside_items(rng):
+            plan.append((f, rng.randrange(gaps[f]), item))
+    flat_plan = [(f, gap, line) for (f, gap, item) in plan for line in item]
+    for f in FILES:
+        for name in old_names[f]:
+            states[(f, name)] = rng.choice(["pristine", "edited", "deleted", "pristine"])
+    where = f"case {case} (seed {s})"
+    tag = f"{s}-{case}-" + ",".join(f"{f}#{n}={states[(f, n)]}" for f in FILES for n in old_names[f])
+    err, texts = run_case(flat_plan, states, tag)
+    if err is None:
+        continue
+    idxs = list(range(len(flat_plan)))
+
+    def still_fails(keep):
+        keep_set = set(keep)
+        mini = [flat_plan[i] for i in idxs if i in keep_set]
+        err2, _ = run_case(mini, states, tag)
+        return err2 is not None
+
+    smallest = kit.shrink(idxs, still_fails)
+    kept = [flat_plan[i] for i in smallest]
+    detail = (f"{where}: {err}; states "
+              + ", ".join(f"{f}#{n}={states[(f, n)]}" for f in FILES for n in old_names[f])
+              + (f"; new blocks {[f + '#' + n for f in FILES for n in added[f]]} must be appended"
+                 if any(added.values()) else "")
+              + f"; surrounding lines kept: {kept}")
+    fail(err, case=detail, s=s)
+print(f"{N} seeded projects: upgrade replaced only pristine blocks, appended only new ones, left edited and deleted ones alone, and a second upgrade changed nothing")
+PY
