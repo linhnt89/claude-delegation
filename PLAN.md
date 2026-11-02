@@ -16,6 +16,8 @@
 - `delegate list`: no open tasks.
 - Next: check the kit in `secsw-code` and `trial` with the rebuilt binary (their
   `.delegate-kit.toml` may name kits it doesn't know), then choose the next core task below.
+- 2026-11-02: decision 031 (any model can lead); S130 and P028 written, failing until t116.
+  Next: delegate t116 (wave 1), then t115 (wave 2).
 
 ## Waiting for you
 - None.
@@ -23,6 +25,8 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
+| t116 | `delegate plan-review --planner <family\|model>`; falls back to `planner_family` (decision 031) | 1 | todo | – | standard | `evals/run S130 P028` (P028 hidden) | code only: `main.rs`, `commands.rs`, `config.rs`, README command table |
+| t115 | Model-neutral kit: lead role from `CLAUDE.md` to `AGENTS.md`, "the lead" in the skills, `--planner` in the delegate skill, README "Leading with another model" (decision 031) | 2 | todo | t116 | fast | `grep -i claude` in the lead texts finds only Claude-specific lines; `scripts/check` passes | root and `delegate/templates/project/` together, then `scripts/kit-history` |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
@@ -53,6 +57,9 @@
 - `delegate list` says "vault: N commit(s) not pushed" when the vault has no remote at all.
 - A card beside the desktop app's Environment/Context cards isn't possible: the mod API has no
   side-card component. Revisit when it does.
+
+- Muse models have no family in `config.rs`: a Muse worker's family is its whole model name,
+  so it never matches `--planner muse` or another Muse model.
 
 ## Open questions
 - None.

@@ -8,7 +8,7 @@
 Anyone using `delegate`, directly or through Claude as lead. From: S010, S018.
 
 ## Property
-For any worker config and any implementer, `review` uses a model of a different family, and `plan-review` never uses the planner's family (Claude); when none is configured it refuses with a clear message.
+For any worker config and any implementer, `review` uses a model of a different family, and `plan-review` never uses the planner's family; when none is configured it refuses with a clear message.
 
 ## How it is checked
 Random `workers.toml` files mixing families, read through `review --dry-run` and `plan-review --dry-run`. Seeded; prints the seed and the smallest failing case.

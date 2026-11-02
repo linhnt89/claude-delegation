@@ -14,7 +14,7 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 | J3 Trust what comes back | Merge refuses failing checks, missing reviews and high-severity findings. Review comes from a different model family. Workers can't touch my checkout, branches or hidden checks |
 | J4 Keep going when a model fails | A model with no quota or broken auth is skipped for the next one. A failed round retries one tier stronger |
 | J5 Run several tasks at once | Parallel tasks don't step on each other, are told when their files overlap, share an account only while its quota can carry them all, and `delegate list` shows where each one stands |
-| J6 Research and plan review | A read-only research run returns a report and changes no code. Plan review uses a model that isn't Claude and finds real problems before work starts |
+| J6 Research and plan review | A read-only research run returns a report and changes no code. Plan review uses a model that isn't of the lead's family and finds real problems before work starts |
 | J7 The repo stays the shared memory | Decisions and scenarios are kept in the repo. After merge or discard, no task state is left behind and none ends up in git history |
 | J8 See what running tasks are doing | I start a run in the background and can see any time, from the terminal or Claude Code, each task's phase, what it is for, which session started it, its worker's steps as they happen, and whether it has stalled or died. Claude can check the same thing to decide what to do next |
 | J9 Claude leads, workers build | Once a plan is agreed, Claude delegates product code and checks instead of writing them itself (a habit taught by the kit, not enforced since decision 030). Once a wave is agreed, Claude starts all its ready tasks together and keeps working while workers run |
@@ -45,3 +45,4 @@ Added for session-scoped views (new feature: fails until built): J8 P018.
 Added for decisions 016, 017 (new feature: fails until built): J5 P021.
 Added for decision 020 (new feature: fails until built): J3 S094.
 Retired by decision 030 (in git history, out of the vault): J9 P017 · J10 P022 S088 S116 P027 S127 · J3 P025 P026.
+Added for decision 031 (new feature: fails until built): J6 P028.

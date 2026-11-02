@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# A Sol lead on a machine whose workers.toml still names Claude as the planner.
+. "$EVALS_LIB/common.sh"
+setup_project
+workers_toml <<'T'
+planner_family = "claude"
+[defaults]
+implement = "standard"
+research = "fast"
+review = "standard"
+plan_review = "standard"
+[implement]
+standard = ["pi:deepseek-v4.1@high"]
+[review]
+standard = ["pi:deepseek-v4.1@high"]
+[plan_review]
+standard = ["pi:openai-codex/gpt-6.1-sol@high", "claude:opus@medium", "pi:github-copilot/claude-opus-5.5@medium"]
+T
+write_spec t001 "Split a bill" "Add divide_bill." "python3 -m unittest -q"
+CLAUDES="claude:opus@medium pi:github-copilot/claude-opus-5.5@medium"
+listed() { echo "$OUT" | awk '$1 == "candidate:" {print $2}' | xargs; }
+
+for planner in pi:openai-codex/gpt-6.1-sol@high gpt; do
+  d plan-review --planner "$planner" --dry-run
+  [ "$RC" -eq 0 ] || fail "plan-review --planner $planner failed: $OUT"
+  echo "$OUT" | grep -q "skipping the gpt family" || fail "--planner $planner doesn't say it skips the gpt family: $OUT"
+  [ "$(listed)" = "$CLAUDES" ] || fail "--planner $planner listed '$(listed)', expected '$CLAUDES'"
+done
+
+d plan-review --dry-run
+[ "$RC" -eq 0 ] || fail "plan-review without --planner failed: $OUT"
+echo "$OUT" | grep -q "skipping the claude family" || fail "without --planner, the machine's planner_family no longer applies: $OUT"
+[ "$(listed)" = "pi:openai-codex/gpt-6.1-sol@high" ] || fail "without --planner, listed '$(listed)'"
+
+# Only GPT reviewers left for a GPT lead: refuse, name the family, say where to add one.
+sed -i 's|^standard = \["pi:openai-codex/gpt-6.1-sol@high", .*|standard = ["pi:openai-codex/gpt-6.1-sol@high", "pi:github-copilot/gpt-6-luna@max"]|' "$HOME/.config/delegate/workers.toml"
+d plan-review --planner gpt --dry-run
+[ "$RC" -ne 0 ] || fail "plan review offered GPT reviewers to a GPT lead: $OUT"
+echo "$OUT" | grep -q "gpt" || fail "the refusal doesn't name the gpt family: $OUT"
+echo "$OUT" | grep -q "workers.toml" || fail "the refusal doesn't say where to add a reviewer: $OUT"
+
+d plan-review --planner
+[ "$RC" -ne 0 ] || fail "--planner without a value was accepted"
+echo "$OUT" | grep -qi "usage" || fail "--planner without a value gave no usage message: $OUT"
+pass "the lead's --planner picked a reviewer of another family; without it, planner_family still applies"
