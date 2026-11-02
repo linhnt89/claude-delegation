@@ -68,5 +68,9 @@
   show only its tasks as "not started", and `pi -p` writes `PLAN_REVIEW.md` only at the end.
   Fix: a plan-review phase on the reviewed tasks' rows, with the reviewer.
 
+- `delegate wait` returns at once while a task stays stalled (no file changes, e.g. a worker
+  thinking for minutes), so a lead can't wait on it; it should report a stall once, then wait
+  for a change (t118, 2026-11-02).
+
 ## Open questions
 - None.
