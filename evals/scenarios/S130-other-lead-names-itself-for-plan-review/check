@@ -41,5 +41,6 @@ echo "$OUT" | grep -q "workers.toml" || fail "the refusal doesn't say where to a
 
 d plan-review --planner
 [ "$RC" -ne 0 ] || fail "--planner without a value was accepted"
-echo "$OUT" | grep -qi "usage" || fail "--planner without a value gave no usage message: $OUT"
+echo "$OUT" | grep -q -- "--planner" || fail "the refusal of a bare --planner doesn't name the flag: $OUT"
+echo "$OUT" | grep -qi -- "usage\|--help" || fail "the refusal of a bare --planner doesn't point to usage or --help: $OUT"
 pass "the lead's --planner picked a reviewer of another family; without it, planner_family still applies"

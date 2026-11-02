@@ -28,7 +28,7 @@ same model's, or the machine setting stops working for a Claude lead.
 ## Failure paths
 - `--planner gpt` with only GPT candidates refuses, names the gpt family and says how to add
   a reviewer of another family.
-- `--planner` with no value is refused by the CLI with a usage message.
+- `--planner` with no value is refused by the CLI, naming `--planner` and pointing to usage or `--help`.
 
 ## Properties
 - P028.
