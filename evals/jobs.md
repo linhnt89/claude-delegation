@@ -34,6 +34,15 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 - A retry after failed checks gets a stronger model, and the runner hands it the failing
   check output (decision 001). Fails today; planned as t003.
 
+## Herdr observer evaluation (decision 035)
+- User approved S137–S144 for J8 on 2026-11-04: model-neutral conversation attribution,
+  task selection preserving the lead, retries, read-only lifecycle, reconnect, identity
+  boundaries, task-id reuse, and untrusted activity.
+- Their executable checks print human walkthroughs and exit 2. They are not automated
+  product verdicts; an isolated real observer is still needed for validation.
+- User approved derived properties P030–P033 on 2026-11-04. No property checks or hidden
+  observer scenarios exist yet; production identity fallback and retention remain open.
+
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->
 Rebuilt 2026-10-26 after the repo moved and the first hidden set was lost. One or two per job,
