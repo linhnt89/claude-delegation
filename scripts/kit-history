@@ -22,7 +22,10 @@ def git(*args):
 
 def kit(commit=None):
     def read(path):
-        return git("show", f"{commit}:{path}") if commit else (ROOT / path).read_bytes()
+        if commit:
+            return git("show", f"{commit}:{path}")  # git returns a link's target bytes
+        full = ROOT / path
+        return str(full.readlink()).encode() if full.is_symlink() else full.read_bytes()
 
     try:
         source = read("delegate/src/init.rs").decode()
@@ -31,6 +34,9 @@ def kit(commit=None):
     paths = re.findall(r'include_str!\("\.\./templates/project/([^"]+)"\)', source)
     if not paths:
         return None
+    links = re.search(r'const PROJECT_LINKS:.*?= &\[(.*?)\];', source, re.S)
+    if links:
+        paths += re.findall(r'\("([^"]+)",\s*"[^"]+"\)', links[1])
     bodies = {p: read(TEMPLATES + p) for p in sorted(paths)}
     files = {p: hashlib.sha256(b).hexdigest() for p, b in bodies.items()}
     lines = "".join(f"{p} {h}\n" for p, h in files.items())

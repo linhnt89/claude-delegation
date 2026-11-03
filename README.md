@@ -25,10 +25,9 @@ The repo is the only memory they share.
 
 ## Leading with another model
 Any harness that reads `AGENTS.md` can lead when the Claude Code quota runs out.
-Load the skills with your harness's own means; for Pi:
-```bash
-pi --skill .claude/skills/delegate --skill .claude/skills/distill --skill .claude/skills/evaluate
-```
+Start `pi`, `codex`, `opencode` or `claude` normally: the kit's skills live in
+`.agents/skills/<name>/`, with relative symlinks from `.claude/skills/<name>` for Claude Code.
+Pi asks once per project to trust `.agents/skills/`: answer yes, or use `/trust`.
 Follow the same loop; the lead role lives in the `AGENTS.md` `lead` block.
 For plan review, name your own model so the reviewer comes from another family:
 ```bash
@@ -252,9 +251,9 @@ sessions in `~/.pi`, Claude workers in `~/.claude/projects/`.
 | `docs/decisions/` | append-only | Why X over Y; superseded, never edited |
 | `.delegate.toml` | living | Project rules: minimum tiers and required reviews by path |
 | `.delegate-kit.toml` | committed | Project UUID, installed kit id and file hashes, used by `delegate upgrade` |
-| `.claude/skills/delegate` | – | `/delegate`: plan review → spec → run → review → merge or discard |
-| `.claude/skills/distill` | – | `/distill`: end a discussion, save only decisions and plan changes |
-| `.claude/skills/evaluate` | – | `/evaluate`: build and keep runnable user scenarios, before the code they check |
+| `.agents/skills/delegate` | – | `/delegate`: plan review → spec → run → review → merge or discard |
+| `.agents/skills/distill` | – | `/distill`: end a discussion, save only decisions and plan changes |
+| `.agents/skills/evaluate` | – | `/evaluate`: build and keep runnable user scenarios, before the code they check |
 | `evals/` | living | User scenarios and properties, each with an executable check; `evals/run [fast\|full]` |
 
 ## Source layout (`delegate/`)

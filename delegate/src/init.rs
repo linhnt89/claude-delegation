@@ -1,7 +1,7 @@
 //! `delegate init`: add project files; machine configuration belongs to `setup`.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -24,16 +24,16 @@ pub(crate) const PROJECT_FILES: &[(&str, &str)] = &[
         include_str!("../templates/project/docs/decisions/000-template.md"),
     ),
     (
-        ".claude/skills/delegate/SKILL.md",
-        include_str!("../templates/project/.claude/skills/delegate/SKILL.md"),
+        ".agents/skills/delegate/SKILL.md",
+        include_str!("../templates/project/.agents/skills/delegate/SKILL.md"),
     ),
     (
-        ".claude/skills/distill/SKILL.md",
-        include_str!("../templates/project/.claude/skills/distill/SKILL.md"),
+        ".agents/skills/distill/SKILL.md",
+        include_str!("../templates/project/.agents/skills/distill/SKILL.md"),
     ),
     (
-        ".claude/skills/evaluate/SKILL.md",
-        include_str!("../templates/project/.claude/skills/evaluate/SKILL.md"),
+        ".agents/skills/evaluate/SKILL.md",
+        include_str!("../templates/project/.agents/skills/evaluate/SKILL.md"),
     ),
     (
         ".claude/skills/delegate-pane/.claude-plugin/plugin.json",
@@ -68,6 +68,13 @@ pub(crate) const PROJECT_FILES: &[(&str, &str)] = &[
         include_str!("../templates/project/evals/scenarios/_template/scenario.md"),
     ),
     ("evals/run", include_str!("../templates/project/evals/run")),
+];
+
+/// Links are hashed as their literal targets, not the files they resolve to.
+pub(crate) const PROJECT_LINKS: &[(&str, &str)] = &[
+    (".claude/skills/delegate", "../../.agents/skills/delegate"),
+    (".claude/skills/distill", "../../.agents/skills/distill"),
+    (".claude/skills/evaluate", "../../.agents/skills/evaluate"),
 ];
 
 /// Project files that must be executable.
@@ -119,6 +126,33 @@ fn write_new(path: &Path, content: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Inspect from the top down so a team-owned ancestor is never traversed.
+fn canonical_obstruction(root: &Path, canonical: &str) -> Result<Option<String>> {
+    for ancestor in Path::new(canonical)
+        .ancestors()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(root.join(ancestor)) {
+            Ok(meta) if !meta.is_dir() => {
+                return Ok(Some(ancestor.to_string_lossy().into_owned()));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("inspect {}; check permissions and retry", ancestor.display())
+                });
+            }
+        }
+    }
+    Ok(None)
+}
+
 pub fn init(dir: &Path) -> Result<()> {
     let Ok(root) = git(dir, &["rev-parse", "--show-toplevel"]) else {
         bail!("{} is not inside a git repository", dir.display());
@@ -126,7 +160,38 @@ pub fn init(dir: &Path) -> Result<()> {
     let root = Path::new(&root);
     let mut record = crate::upgrade::Record::new();
     let blocks = crate::upgrade::installed_blocks()?;
+    let mut blocked = Vec::new();
+    for (link, target) in PROJECT_LINKS {
+        let name = link.rsplit('/').next().context("kit link has no name")?;
+        let canonical = format!(".agents/skills/{name}");
+        if let Some(obstruction) = canonical_obstruction(root, &canonical)? {
+            println!(
+                "skipped  {link} and {canonical} (obstructed by {obstruction}; move {obstruction} aside and run delegate upgrade)"
+            );
+            blocked.push(canonical);
+            continue;
+        }
+        let old = fs::symlink_metadata(root.join(link)).ok();
+        let canonical_meta = fs::symlink_metadata(root.join(&canonical)).ok();
+        let canonical_exists = canonical_meta.is_some();
+        if canonical_meta.as_ref().is_some_and(|m| !m.is_dir())
+            || old.as_ref().is_some_and(|m| !m.file_type().is_symlink())
+            || (canonical_exists && old.is_none())
+            || (old.is_some()
+                && fs::read_link(root.join(link)).ok().as_deref().map(Path::as_os_str)
+                    != Some(std::ffi::OsStr::new(target)))
+        {
+            println!("skipped  {link} and {canonical} (existing layout; run delegate upgrade)");
+            blocked.push(canonical);
+        }
+    }
     for (rel, content) in PROJECT_FILES {
+        if blocked
+            .iter()
+            .any(|prefix| rel.starts_with(&format!("{prefix}/")))
+        {
+            continue;
+        }
         let path = root.join(rel);
         if !path.exists() {
             record
@@ -139,6 +204,26 @@ pub fn init(dir: &Path) -> Result<()> {
             }
         }
         write_new(&path, content, rel)?;
+    }
+    for (link, target) in PROJECT_LINKS {
+        let name = link.rsplit('/').next().context("kit link has no name")?;
+        if blocked.contains(&format!(".agents/skills/{name}")) {
+            continue;
+        }
+        let path = root.join(link);
+        if fs::symlink_metadata(&path).is_ok() {
+            println!("skipped  {link} (exists)");
+        } else {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            symlink(target, &path)
+                .with_context(|| format!("create {link}; check permissions and retry"))?;
+            record
+                .files
+                .insert((*link).into(), crate::sha256::hex(target.as_bytes()));
+            println!("added    {link}");
+        }
     }
     // Like every other init file, an existing record is never overwritten.
     write_new(

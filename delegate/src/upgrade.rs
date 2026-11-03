@@ -7,7 +7,7 @@ mod blocks;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink as create_symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::init::{CLAUDE_SETTINGS, EXECUTABLE, PROJECT_FILES, STATUS_LINE};
+use crate::init::{CLAUDE_SETTINGS, EXECUTABLE, PROJECT_FILES, PROJECT_LINKS, STATUS_LINE};
 use crate::sha256;
 use crate::task::git;
 
@@ -66,6 +66,7 @@ fn current() -> Kit {
         .get_or_init(|| {
             let files: BTreeMap<_, _> = PROJECT_FILES
                 .iter()
+                .chain(PROJECT_LINKS.iter())
                 .map(|(path, body)| ((*path).to_owned(), sha256::hex(body.as_bytes())))
                 .collect();
             let mut lines = String::new();
@@ -107,6 +108,35 @@ fn identify<'a>(kits: &'a [Kit], hashes: &BTreeMap<String, String>) -> Option<&'
     }
     kits.iter()
         .find(|kit| evidence.iter().all(|(p, h)| kit.files.get(*p) == Some(*h)))
+}
+
+/// Read a kit entry without following links or treating directories as files.
+fn entry_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            use std::os::unix::ffi::OsStrExt;
+            Ok(Some(fs::read_link(path)?.as_os_str().as_bytes().to_vec()))
+        }
+        Ok(meta) if meta.is_dir() => Ok(None),
+        Ok(_) => read_optional(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("inspect {}; check permissions and retry", path.display())),
+    }
+}
+
+fn tree_hashes(root: &Path, path: &str) -> Result<BTreeMap<String, String>> {
+    let mut hashes = BTreeMap::new();
+    for entry in fs::read_dir(root.join(path))? {
+        let entry = entry?;
+        let rel = format!("{path}/{}", entry.file_name().to_string_lossy());
+        if entry.file_type()?.is_dir() {
+            hashes.extend(tree_hashes(root, &rel)?);
+        } else if let Some(bytes) = entry_bytes(&entry.path())? {
+            hashes.insert(rel, sha256::hex(&bytes));
+        }
+    }
+    Ok(hashes)
 }
 
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -277,15 +307,377 @@ fn lead_section(body: &str) -> Option<&[u8]> {
     None
 }
 
+/// Explain only differences, never suggest taking unchanged files to fix extras.
+fn collision_advice(
+    root: &Path,
+    directory: &str,
+    expected: &BTreeMap<String, String>,
+    now: &Kit,
+) -> Result<Vec<String>> {
+    let actual = tree_hashes(root, directory)?;
+    let mut advice = Vec::new();
+    for (path, hash) in expected {
+        if actual.get(path) == Some(hash) {
+            continue;
+        }
+        let body = PROJECT_FILES
+            .iter()
+            .find(|(p, _)| *p == path)
+            .context("missing kit collision file")?
+            .1;
+        let compare = comparison(&now.id, "current", path, body.as_bytes())?;
+        if actual.contains_key(path) {
+            advice.push(format!("edited {path}; compare: git diff --no-index '{path}' '{}'; take with delegate upgrade {path}", compare.display()));
+        } else {
+            advice.push(format!(
+                "missing {path}; compare kit file '{}'; restore with delegate upgrade {path}",
+                compare.display()
+            ));
+        }
+    }
+    for path in actual.keys().filter(|p| !expected.contains_key(*p)) {
+        advice.push(format!(
+            "extra team file {path}; move {path} aside manually before retrying the layout take"
+        ));
+    }
+    Ok(advice)
+}
+
+/// Enforce traversal safety before any planning can hide a symlink ancestor as
+/// an obstruction. Regular-file obstructions are reported by the skill planner.
+fn check_skill_ancestry(root: &Path, path: &str) -> Result<()> {
+    let parent = Path::new(path).parent().context("kit path has no parent")?;
+    for ancestor in parent.ancestors().collect::<Vec<_>>().into_iter().rev() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(root.join(ancestor)) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                // Use the existing refusal and advice, without inspecting children.
+                return check_parents(root, path);
+            }
+            Ok(meta) if !meta.is_dir() => return Ok(()),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "inspect {}; check permissions and retry",
+                        ancestor.display()
+                    )
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Detect a team-owned obstruction before inspecting children or planning writes.
+fn skill_obstruction(root: &Path, directory: &str) -> Result<Option<String>> {
+    for ancestor in Path::new(directory)
+        .ancestors()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(root.join(ancestor)) {
+            Ok(meta) if !meta.is_dir() => {
+                return Ok(Some(ancestor.to_string_lossy().into_owned()));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "inspect {}; check permissions and retry",
+                        ancestor.display()
+                    )
+                });
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn established_skill_layout(
+    root: &Path,
+    record: Option<&Record>,
+    link: &str,
+    target: &str,
+) -> bool {
+    record.is_some_and(|r| r.files.contains_key(link))
+        || fs::read_link(root.join(link)).ok().as_deref().map(Path::as_os_str)
+            == Some(std::ffi::OsStr::new(target))
+}
+
+fn kept_skill_link(root: &Path, link: &str, target: &str) -> Result<String> {
+    let meta = fs::symlink_metadata(root.join(link))
+        .with_context(|| format!("inspect {link}; check permissions and retry"))?;
+    let actual = if meta.file_type().is_symlink() {
+        format!(
+            "symlink target '{}'",
+            fs::read_link(root.join(link))?.display()
+        )
+    } else if meta.is_file() {
+        "regular file, not a symlink (even if its bytes equal the target)".into()
+    } else {
+        "non-symlink entry".into()
+    };
+    Ok(format!(
+        "kept     {link} (edited; actual {actual}; expected symlink target '{target}'; take the kit's layout with delegate upgrade {link})"
+    ))
+}
+
 #[derive(Debug, Default)]
 struct Plan {
     writes: BTreeMap<String, Vec<u8>>,
     removals: Vec<String>,
     output: Vec<String>,
     adopted_lead: bool,
+    links: BTreeMap<String, String>,
+    folders: Vec<String>,
+    skill_paths: BTreeSet<String>,
 }
 
 impl Plan {
+    /// Plan each skill as a unit before the ordinary per-file upgrade.
+    fn skills(
+        &mut self,
+        root: &Path,
+        kits: &[Kit],
+        now: &Kit,
+        record: &mut Record,
+        take: Option<&str>,
+    ) -> Result<()> {
+        for (link, target) in PROJECT_LINKS {
+            if take.is_some_and(|path| path != *link) {
+                continue;
+            }
+            let name = link.rsplit('/').next().context("kit link has no name")?;
+            let canonical = format!(".agents/skills/{name}");
+            let old_prefix = format!("{link}/");
+            let new_prefix = format!("{canonical}/");
+            if let Some(obstruction) = skill_obstruction(root, &canonical)? {
+                self.skill_paths.extend(
+                    now.files
+                        .keys()
+                        .filter(|p| p.starts_with(&new_prefix) || *p == link)
+                        .cloned(),
+                );
+                self.output.push(format!("kept     {link} and {canonical} (collision; {obstruction} is not a directory; move {obstruction} aside manually before retrying delegate upgrade {link})"));
+                continue;
+            }
+            let parent = Path::new(link).parent().context("kit link has no parent")?;
+            if let Some(obstruction) = skill_obstruction(root, &parent.to_string_lossy())? {
+                self.skill_paths.extend(
+                    kits.iter()
+                        .flat_map(|kit| kit.files.keys())
+                        .filter(|p| {
+                            p.starts_with(&old_prefix) || p.starts_with(&new_prefix) || *p == link
+                        })
+                        .cloned(),
+                );
+                self.output.push(format!("kept     {link} ({obstruction} is not a directory; move {obstruction} aside manually before retrying delegate upgrade {link})"));
+                continue;
+            }
+            let metadata = fs::symlink_metadata(root.join(link));
+            let old_folder = metadata.as_ref().is_ok_and(fs::Metadata::is_dir);
+            let established = established_skill_layout(root, Some(record), link, target);
+            if !established && metadata.as_ref().is_ok_and(|m| !m.is_dir()) && take.is_none() {
+                // Do not introduce a competing canonical tree. An already-existing
+                // canonical tree still receives normal per-file edit/deletion handling.
+                let canonical_absent = fs::symlink_metadata(root.join(&canonical)).is_err();
+                self.skill_paths.extend(
+                    kits.iter()
+                        .flat_map(|kit| kit.files.keys())
+                        .filter(|p| {
+                            p.starts_with(&old_prefix)
+                                || (canonical_absent && p.starts_with(&new_prefix))
+                                || *p == link
+                        })
+                        .cloned(),
+                );
+                self.output.push(kept_skill_link(root, link, target)?);
+                continue;
+            }
+            if old_folder && record.files.contains_key(*link) && take.is_none() {
+                // Comparing a directory to a link target file is not useful advice.
+                self.skill_paths.insert((*link).into());
+                self.output.push(format!("kept     {link} (link replaced by a folder; inspect {link} and {canonical}; take the kit's layout with delegate upgrade {link})"));
+                continue;
+            }
+            let deleted_legacy = !established
+                && fs::symlink_metadata(root.join(link)).is_err()
+                && (record.files.keys().any(|p| p.starts_with(&old_prefix))
+                    // A partial record need not contain the deleted skill. Git
+                    // history of its children still proves the old installation;
+                    // the trailing slash excludes the new-layout leaf link.
+                    || git_knows(root, &old_prefix)?);
+            if take.is_some() && !old_folder {
+                // An absent canonical tree needs installation, but an existing one
+                // belongs to the team: restoring a link must not change any byte.
+                if fs::symlink_metadata(root.join(&canonical)).is_err() {
+                    for (path, body) in PROJECT_FILES
+                        .iter()
+                        .filter(|(p, _)| p.starts_with(&new_prefix))
+                    {
+                        self.writes.insert((*path).into(), body.as_bytes().to_vec());
+                        record
+                            .files
+                            .insert((*path).into(), now.files[*path].clone());
+                        self.output.push(format!("added    {path}"));
+                    }
+                } else {
+                    for path in now.files.keys().filter(|p| p.starts_with(&new_prefix)) {
+                        if entry_bytes(&root.join(path))?.is_none() {
+                            self.output.push(format!(
+                                "missing  {path}; restore with delegate upgrade {path}"
+                            ));
+                        }
+                    }
+                }
+                record.files.retain(|p, _| !p.starts_with(&old_prefix));
+                if fs::read_link(root.join(link)).ok().as_deref().map(Path::as_os_str)
+                    != Some(std::ffi::OsStr::new(target))
+                {
+                    self.links.insert((*link).into(), (*target).into());
+                    self.output.push(format!("updated  {link}"));
+                }
+                record
+                    .files
+                    .insert((*link).into(), now.files[*link].clone());
+                continue;
+            }
+            if old_folder || deleted_legacy || take.is_some() {
+                for kit in kits {
+                    self.skill_paths.extend(
+                        kit.files
+                            .keys()
+                            .filter(|p| {
+                                p.starts_with(&old_prefix)
+                                    || p.starts_with(&new_prefix)
+                                    || *p == link
+                            })
+                            .cloned(),
+                    );
+                }
+                if deleted_legacy && take.is_none() {
+                    self.output.push(format!(
+                        "missing  {link}; restore with delegate upgrade {link}"
+                    ));
+                    continue;
+                }
+                // Only a real legacy migration needs to inspect the destination.
+                let expected: BTreeMap<_, _> = now
+                    .files
+                    .iter()
+                    .filter(|(p, _)| p.starts_with(&new_prefix))
+                    .map(|(p, h)| (p.clone(), h.clone()))
+                    .collect();
+                let mut collisions = Vec::new();
+                if let Ok(meta) = fs::symlink_metadata(root.join(&canonical)) {
+                    if meta.is_dir() {
+                        collisions.extend(collision_advice(root, &canonical, &expected, now)?);
+                    } else {
+                        collisions.push(format!("{canonical} is not a directory; move {canonical} aside manually before retrying delegate upgrade {link}"));
+                    }
+                }
+                let mut source_extras = Vec::new();
+                if old_folder {
+                    let actual = tree_hashes(root, link)?;
+                    for path in actual.keys() {
+                        let canonical_path = path.replacen(&old_prefix, &new_prefix, 1);
+                        if !expected.contains_key(&canonical_path) {
+                            source_extras.push(format!("extra team file {path}; move {path} aside manually before retrying delegate upgrade {link}"));
+                        }
+                    }
+                }
+                if !collisions.is_empty() {
+                    collisions.extend(source_extras.iter().cloned());
+                    self.output.push(format!(
+                        "kept     {link} and {canonical} (collision; {})",
+                        collisions.join("; ")
+                    ));
+                    continue;
+                }
+                let pristine = if old_folder {
+                    let actual = tree_hashes(root, link)?;
+                    kits.iter().any(|kit| {
+                        let mut expected: BTreeMap<_, _> = kit
+                            .files
+                            .iter()
+                            .filter(|(p, _)| p.starts_with(&old_prefix))
+                            .map(|(p, h)| (p.clone(), h.clone()))
+                            .collect();
+                        // Recorded ownership wins over historical inference: a team
+                        // may deliberately pin text from a different historical kit.
+                        expected.extend(
+                            record
+                                .files
+                                .iter()
+                                .filter(|(p, _)| p.starts_with(&old_prefix))
+                                .map(|(p, h)| (p.clone(), h.clone())),
+                        );
+                        !expected.is_empty() && actual == expected
+                    })
+                } else {
+                    !deleted_legacy
+                };
+                if (take.is_none() && !pristine) || !source_extras.is_empty() {
+                    let compare = comparison(
+                        &now.id,
+                        "current",
+                        &format!("{canonical}/SKILL.md"),
+                        PROJECT_FILES
+                            .iter()
+                            .find(|(p, _)| *p == format!("{canonical}/SKILL.md"))
+                            .context("missing kit skill")?
+                            .1
+                            .as_bytes(),
+                    )?;
+                    let source = format!("{link}/SKILL.md");
+                    let inspection = if entry_bytes(&root.join(&source))?.is_some() {
+                        format!(
+                            "compare: git diff --no-index '{source}' '{}'",
+                            compare.display()
+                        )
+                    } else {
+                        format!("missing {source}; inspect kit file '{}'", compare.display())
+                    };
+                    let extras = if source_extras.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}; ", source_extras.join("; "))
+                    };
+                    self.output.push(format!("kept     {link} (edited; {extras}{inspection}; take the kit's layout with delegate upgrade {link})"));
+                    continue;
+                }
+                if old_folder {
+                    self.folders.push((*link).into());
+                }
+                for (path, body) in PROJECT_FILES
+                    .iter()
+                    .filter(|(p, _)| p.starts_with(&new_prefix))
+                {
+                    self.writes.insert((*path).into(), body.as_bytes().to_vec());
+                    record
+                        .files
+                        .insert((*path).into(), now.files[*path].clone());
+                }
+                record.files.retain(|p, _| !p.starts_with(&old_prefix));
+                record
+                    .files
+                    .insert((*link).into(), now.files[*link].clone());
+                self.links.insert((*link).into(), (*target).into());
+                self.output.push(format!("moved    {link} -> {canonical}"));
+            }
+        }
+        Ok(())
+    }
+
     fn file_bytes(&self, root: &Path, file: &str) -> Result<Vec<u8>> {
         self.writes.get(file).map_or_else(
             || Ok(read_optional(&root.join(file))?.unwrap_or_default()),
@@ -449,7 +841,34 @@ impl Plan {
         // user's .claude/settings.json must never become write/remove targets.
         let paths: BTreeSet<_> = kits.iter().flat_map(|k| k.files.keys()).collect();
         for path in paths {
-            if OWNED.contains(&path.as_str()) {
+            if OWNED.contains(&path.as_str())
+                || self.skill_paths.contains(path)
+                || PROJECT_LINKS
+                    .iter()
+                    .any(|(link, _)| path.starts_with(&format!("{link}/")))
+            {
+                continue;
+            }
+            if let Some((_, target)) = PROJECT_LINKS.iter().find(|(link, _)| *link == path) {
+                let actual = entry_bytes(&root.join(path))?;
+                let hash = actual.as_deref().map(sha256::hex);
+                if hash.as_ref() == now.files.get(path)
+                    && fs::symlink_metadata(root.join(path))?
+                        .file_type()
+                        .is_symlink()
+                {
+                    record.files.insert(path.clone(), now.files[path].clone());
+                } else if fs::symlink_metadata(root.join(path)).is_ok() {
+                    self.output.push(kept_skill_link(root, path, target)?);
+                } else if record.files.contains_key(path) || git_knows(root, path)? {
+                    self.output.push(format!(
+                        "missing  {path}; restore with delegate upgrade {path}"
+                    ));
+                } else {
+                    self.links.insert(path.clone(), (*target).into());
+                    record.files.insert(path.clone(), now.files[path].clone());
+                    self.output.push(format!("added    {path}"));
+                }
                 continue;
             }
             let installed = record.files.get(path);
@@ -651,9 +1070,59 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
             bail!("{path} is not a kit file; kit paths: {}", valid.join(", "));
         }
     }
+    // Refuse relevant symlink ancestry before hashing, comparison copies, or any
+    // writes. Do not let a symlink masquerade as a regular-file obstruction.
+    if paths.is_empty() {
+        for (link, _) in PROJECT_LINKS {
+            check_skill_ancestry(&root, link)?;
+            let name = link.rsplit('/').next().context("kit link has no name")?;
+            check_skill_ancestry(&root, &format!(".agents/skills/{name}/SKILL.md"))?;
+        }
+    } else {
+        for path in paths {
+            if let Some((link, _)) = PROJECT_LINKS
+                .iter()
+                .find(|(link, _)| *link == path || path.starts_with(&format!("{link}/")))
+            {
+                check_skill_ancestry(&root, link)?;
+                let name = link.rsplit('/').next().context("kit link has no name")?;
+                check_skill_ancestry(&root, &format!(".agents/skills/{name}/SKILL.md"))?;
+            } else if path.starts_with(".agents/skills/") {
+                check_skill_ancestry(&root, path)?;
+            }
+        }
+    }
+    // Historical children of a skill directory no longer exist as kit entries
+    // once that directory is a link. Exclude them from both disk evidence and
+    // HEAD-based inference, or a second upgrade reintroduces retired record keys.
+    let linked_skill_files: BTreeSet<_> = all_paths
+        .iter()
+        .filter(|path| {
+            PROJECT_LINKS.iter().any(|(link, target)| {
+                path.starts_with(&format!("{link}/"))
+                    && established_skill_layout(&root, saved.as_ref(), link, target)
+            })
+        })
+        .map(|path| (*path).clone())
+        .collect();
+    let mut obstructed = BTreeSet::new();
+    for (link, _) in PROJECT_LINKS {
+        let name = link.rsplit('/').next().context("kit link has no name")?;
+        let canonical = format!(".agents/skills/{name}");
+        for directory in [canonical.as_str(), *link] {
+            if let Some(obstruction) = skill_obstruction(&root, directory)? {
+                obstructed.insert(format!("{obstruction}/"));
+            }
+        }
+    }
     let mut hashes = BTreeMap::new();
     for path in all_paths {
-        if let Some(bytes) = read_optional(&root.join(path))? {
+        if linked_skill_files.contains(path)
+            || obstructed.iter().any(|prefix| path.starts_with(prefix))
+        {
+            continue;
+        }
+        if let Some(bytes) = entry_bytes(&root.join(path))? {
             hashes.insert(path.clone(), sha256::hex(&bytes));
         }
     }
@@ -671,7 +1140,9 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
     // disambiguates partial records when the newly changed template is precisely
     // the one the user deleted; do not infer an older kit from unchanged peers.
     for path in &valid {
-        if !hashes.contains_key(*path)
+        if !linked_skill_files.contains(*path)
+            && !obstructed.iter().any(|prefix| path.starts_with(prefix))
+            && !hashes.contains_key(*path)
             && saved
                 .as_ref()
                 .is_none_or(|record| !record.files.contains_key(*path))
@@ -693,10 +1164,21 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
         files: BTreeMap::new(),
         blocks: BTreeMap::new(),
     });
+    record
+        .files
+        .retain(|path, _| !linked_skill_files.contains(path));
     let mut plan = Plan::default();
     if paths.is_empty() {
         if let Some(kit) = baseline {
             for (path, hash) in &kit.files {
+                if linked_skill_files.contains(path)
+                    || PROJECT_LINKS.iter().any(|(link, target)| {
+                        *link == path
+                            && !established_skill_layout(&root, Some(&record), link, target)
+                    })
+                {
+                    continue;
+                }
                 // Identifying a legacy kit does not prove an absent file was
                 // installed: only the project's record or git history can do that.
                 if !OWNED.contains(&path.as_str())
@@ -711,30 +1193,69 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
                     .or_insert_with(|| hash.clone());
             }
         }
+        plan.skills(&root, &kits, &now, &mut record, None)?;
         plan.managed(&root, &kits, &now, &mut record)?;
+        plan.skill_paths.extend(
+            kits.iter()
+                .flat_map(|kit| kit.files.keys())
+                .filter(|path| obstructed.iter().any(|prefix| path.starts_with(prefix)))
+                .cloned(),
+        );
         plan.full(&root, &kits, &now, &mut record, &hashes)?;
     } else {
-        // A targeted upgrade has no side effects on other record entries.
+        // Normalize aliases before planning so each skill is taken only once.
+        let mut planned = BTreeSet::new();
         for path in paths {
+            let normalized = PROJECT_LINKS
+                .iter()
+                .find(|(link, _)| *link == path || path.starts_with(&format!("{link}/")))
+                .map_or(path.as_str(), |(link, _)| *link);
+            if !planned.insert(normalized) {
+                continue;
+            }
             if let Some((file, name)) = path.split_once('#') {
                 plan.take_block(&root, &now, &mut record, file, name)?;
+            } else if let Some((link, _)) = PROJECT_LINKS
+                .iter()
+                .find(|(link, _)| *link == path || path.starts_with(&format!("{link}/")))
+            {
+                // Validated historical skill-file paths take the whole layout,
+                // rather than removing a retired file without its replacement.
+                plan.skills(&root, &kits, &now, &mut record, Some(link))?;
+            } else if let Some(prefix) = obstructed.iter().find(|prefix| {
+                path.starts_with(".agents/skills/") && path.starts_with(*prefix)
+            })
+            {
+                let canonical = prefix.trim_end_matches('/');
+                plan.output.push(format!("kept     {path} ({canonical} is not a directory; move {canonical} aside manually before retrying delegate upgrade {path})"));
             } else {
                 plan.take(std::slice::from_ref(path), &now, &mut record);
             }
         }
     }
-    if paths.is_empty() || paths.iter().any(|path| path == CLAUDE_SETTINGS) {
+    if (paths.is_empty() || paths.iter().any(|path| path == CLAUDE_SETTINGS))
+        && (skill_obstruction(&root, ".claude")?.is_none()
+            || fs::symlink_metadata(root.join(".claude"))
+                .is_ok_and(|meta| meta.file_type().is_symlink()))
+    {
         plan.remove_status_line(&root)?;
     }
     let serialized = toml::to_string(&record)?;
     let record_changed = existing.as_deref() != Some(serialized.as_bytes());
     let mut changed = record_changed;
-    for path in plan.writes.keys().chain(&plan.removals) {
+    for path in plan
+        .writes
+        .keys()
+        .chain(&plan.removals)
+        .chain(plan.links.keys())
+        .chain(&plan.folders)
+    {
         check_parents(&root, path)?;
     }
     if record_changed {
         check_parents(&root, RECORD)?;
     }
+    // Install replacements before removing legacy sources so failed writes are retryable.
     for (path, bytes) in &plan.writes {
         let dest = root.join(path);
         let same = read_optional(&dest)?.as_deref() == Some(bytes);
@@ -749,6 +1270,11 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
             changed = true;
         }
     }
+    for path in &plan.folders {
+        let target = plan.links.get(path).context("missing planned skill link")?;
+        replace_skill_folder(&root, path, target)?;
+        changed = true;
+    }
     for path in &plan.removals {
         let dest = root.join(path);
         if dest.exists() {
@@ -757,6 +1283,9 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
             })?;
             changed = true;
         }
+    }
+    for (path, target) in &plan.links {
+        changed |= install_link(&root, path, target)?;
     }
     if record_changed {
         write_file(&root.join(RECORD), serialized.as_bytes())?;
@@ -771,6 +1300,70 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
         println!("up to date");
     }
     Ok(())
+}
+
+/// Keep the complete source recoverable until its compatibility link is installed.
+fn replace_skill_folder(root: &Path, path: &str, target: &str) -> Result<()> {
+    let source = root.join(path);
+    let backup = loop {
+        let candidate =
+            source.with_file_name(format!(".delegate-skill-backup-{}", uuid::Uuid::new_v4()));
+        match fs::symlink_metadata(&candidate) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break candidate,
+            Err(error) => {
+                return Err(error).context("check skill backup path; check permissions and retry");
+            }
+        }
+    };
+    fs::rename(&source, &backup)
+        .with_context(|| format!("replace {path}; check permissions and retry"))?;
+    if let Err(error) = install_link(root, path, target) {
+        // Never overwrite an entry that appeared while the source was backed up.
+        match fs::symlink_metadata(&source) {
+            Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {
+                if let Err(rollback) = fs::rename(&backup, &source) {
+                    return Err(error).context(format!(
+                        "rollback failed ({rollback}); source preserved at {}; restore it manually to {path}",
+                        backup.display()
+                    ));
+                }
+            }
+            _ => {
+                return Err(error).context(format!(
+                    "cannot safely roll back {path}; source preserved at {}; inspect {path} and restore the backup manually",
+                    backup.display()
+                ));
+            }
+        }
+        return Err(error);
+    }
+    fs::remove_dir_all(&backup).with_context(|| {
+        format!(
+            "installed {path}, but could not clean up source backup {}; remaining source bytes are preserved there; check permissions and remove that backup manually",
+            backup.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Install an exact kit link, returning whether the filesystem changed.
+fn install_link(root: &Path, path: &str, target: &str) -> Result<bool> {
+    let dest = root.join(path);
+    if fs::read_link(&dest).ok().as_deref().map(Path::as_os_str)
+        == Some(std::ffi::OsStr::new(target))
+    {
+        return Ok(false);
+    }
+    if fs::symlink_metadata(&dest).is_ok() {
+        fs::remove_file(&dest)?;
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    create_symlink(target, &dest)
+        .with_context(|| format!("create {path}; check permissions and retry"))?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -1616,6 +2209,288 @@ mod tests {
     }
 
     #[test]
+    fn skill_links_hash_targets_and_retargeting_is_an_edit() {
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        let link = PROJECT_LINKS[0].0;
+        let target = PROJECT_LINKS[0].1;
+        let record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        assert_eq!(record.files[link], sha256::hex(target.as_bytes()));
+        fs::remove_file(project.0.join(link)).unwrap();
+        create_symlink("../../elsewhere", project.0.join(link)).unwrap();
+        let mut after = record.clone();
+        let mut plan = Plan::default();
+        plan.full(&project.0, &history().unwrap(), &current(), &mut after, &BTreeMap::new()).unwrap();
+        assert!(plan.output.iter().any(|line| line.starts_with(&format!("kept     {link}"))));
+        assert!(!plan.links.contains_key(link));
+        assert_eq!(after.files[link], record.files[link]);
+        upgrade(&project.0, &[]).unwrap();
+        assert_eq!(
+            fs::read_link(project.0.join(link)).unwrap(),
+            Path::new("../../elsewhere")
+        );
+        let installed: Record = toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        assert_eq!(installed.files[link], record.files[link]);
+    }
+
+    #[test]
+    fn taking_missing_or_retargeted_links_preserves_canonical_edits() {
+        for retargeted in [false, true] {
+            let project = Project::new();
+            crate::init::init(&project.0).unwrap();
+            let link = ".claude/skills/delegate";
+            let canonical = ".agents/skills/delegate/SKILL.md";
+            fs::write(project.0.join(canonical), "team edit").unwrap();
+            fs::write(project.0.join(".agents/skills/delegate/notes.md"), "team notes").unwrap();
+            fs::remove_file(project.0.join(link)).unwrap();
+            if retargeted {
+                create_symlink("../../elsewhere", project.0.join(link)).unwrap();
+            }
+            let record: Record = toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+            upgrade(&project.0, &[link.into()]).unwrap();
+            assert_eq!(fs::read_link(project.0.join(link)).unwrap(), Path::new("../../.agents/skills/delegate"));
+            assert_eq!(fs::read(project.0.join(canonical)).unwrap(), b"team edit");
+            assert_eq!(fs::read(project.0.join(".agents/skills/delegate/notes.md")).unwrap(), b"team notes");
+            let installed: Record = toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+            assert_eq!(installed, record);
+            let mut plan = Plan::default();
+            plan.skills(&project.0, &history().unwrap(), &current(), &mut record.clone(), Some(link)).unwrap();
+            assert_eq!(plan.output, Vec::<String>::new());
+            assert!(plan.links.is_empty());
+            assert!(plan.writes.is_empty());
+        }
+    }
+
+    fn old_skill(project: &Project, name: &str) {
+        let path = format!(".claude/skills/{name}/SKILL.md");
+        let body = PROJECT_FILES
+            .iter()
+            .find(|(p, _)| *p == format!(".agents/skills/{name}/SKILL.md"))
+            .unwrap()
+            .1;
+        write_file(&project.0.join(path), body.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn migrated_skills_do_not_reinfer_retired_entries_from_head() {
+        for recorded in [false, true] {
+            let project = Project::new();
+            let mut record = project.install();
+            for name in SKILLS {
+                let link = skill_link(name);
+                fs::remove_file(project.0.join(&link)).unwrap();
+                old_skill(&project, name);
+                fs::remove_dir_all(project.0.join(format!(".agents/skills/{name}"))).unwrap();
+                let canonical = skill_path(name);
+                let hash = record.files.remove(&canonical).unwrap();
+                record.files.remove(&link);
+                record.files.insert(format!("{link}/SKILL.md"), hash);
+            }
+            if recorded {
+                fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+            } else {
+                fs::remove_file(project.0.join(RECORD)).unwrap();
+            }
+            project.commit();
+            upgrade(&project.0, &[]).unwrap();
+            let first = project.snapshot();
+            let installed: Record =
+                toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+            for name in SKILLS {
+                assert!(fs::read_link(project.0.join(skill_link(name))).is_ok());
+                assert!(!installed.files.contains_key(&format!("{}/SKILL.md", skill_link(name))));
+            }
+            // HEAD still contains the old directories until the owner commits.
+            upgrade(&project.0, &[]).unwrap();
+            assert_eq!(first, project.snapshot());
+        }
+    }
+
+    #[test]
+    fn skill_ancestry_refusal_names_the_requested_path() {
+        let project = Project::new();
+        fs::create_dir_all(project.0.join("shared")).unwrap();
+        create_symlink("shared", project.0.join(".agents")).unwrap();
+        let requested = ".agents/skills/delegate/SKILL.md";
+        let error = check_skill_ancestry(&project.0, requested).unwrap_err().to_string();
+        assert!(error.contains(&format!("cannot upgrade {requested} through symlink")), "{error}");
+        assert!(!error.contains("/_"), "{error}");
+        assert_eq!(fs::read_dir(project.0.join("shared")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn raw_link_variants_are_repaired_exactly_and_init_keeps_them() {
+        for target in ["../../.agents/skills/delegate/", "../../.agents/skills/./delegate"] {
+            let project = Project::new();
+            let link = ".claude/skills/delegate";
+            fs::create_dir_all(project.0.join(".claude/skills")).unwrap();
+            create_symlink(target, project.0.join(link)).unwrap();
+            assert!(!established_skill_layout(&project.0, None, link, "../../.agents/skills/delegate"));
+            crate::init::init(&project.0).unwrap();
+            assert!(!project.0.join(".agents/skills/delegate").exists());
+            assert_eq!(fs::read_link(project.0.join(link)).unwrap().as_os_str(), std::ffi::OsStr::new(target));
+            upgrade(&project.0, &[link.into()]).unwrap();
+            assert_eq!(fs::read_link(project.0.join(link)).unwrap().as_os_str(), std::ffi::OsStr::new("../../.agents/skills/delegate"));
+            let mut record: Record = toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+            let mut plan = Plan::default();
+            plan.full(&project.0, &history().unwrap(), &current(), &mut record, &BTreeMap::new()).unwrap();
+            assert!(!plan.output.iter().any(|line| line.starts_with(&format!("kept     {link}"))));
+        }
+    }
+
+    #[test]
+    fn init_skips_canonical_ancestor_obstructions_and_finishes_record() {
+        for ancestor in [".agents", ".agents/skills"] {
+            for symlink in [false, true] {
+                let project = Project::new();
+                let path = project.0.join(ancestor);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                if symlink {
+                    fs::create_dir_all(project.0.join("shared")).unwrap();
+                    fs::write(project.0.join("shared/notes"), "team bytes").unwrap();
+                    create_symlink(project.0.join("shared"), &path).unwrap();
+                } else {
+                    fs::write(&path, "team bytes").unwrap();
+                }
+                crate::init::init(&project.0).unwrap();
+                assert!(project.0.join("AGENTS.md").is_file());
+                let record: Record = toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+                assert!(record.files.contains_key("evals/run"));
+                assert!(!record.files.contains_key(".agents/skills/delegate/SKILL.md"));
+                assert!(fs::symlink_metadata(project.0.join(".claude/skills/delegate")).is_err());
+                if symlink {
+                    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+                    assert_eq!(fs::read(project.0.join("shared/notes")).unwrap(), b"team bytes");
+                    assert_eq!(fs::read_dir(project.0.join("shared")).unwrap().count(), 1);
+                } else {
+                    assert_eq!(fs::read(&path).unwrap(), b"team bytes");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn init_does_not_add_a_competing_copy_to_an_old_layout() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        crate::init::init(&project.0).unwrap();
+        assert!(!project.0.join(".agents/skills/delegate").exists());
+        assert!(
+            fs::symlink_metadata(project.0.join(".claude/skills/delegate"))
+                .unwrap()
+                .is_dir()
+        );
+    }
+
+    #[test]
+    fn init_does_not_add_a_link_to_a_mixed_canonical_layout() {
+        let project = Project::new();
+        let canonical = project.0.join(".agents/skills/delegate");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("notes.md"), "team notes").unwrap();
+        crate::init::init(&project.0).unwrap();
+        assert!(fs::symlink_metadata(project.0.join(".claude/skills/delegate")).is_err());
+        assert!(!canonical.join("SKILL.md").exists());
+        assert_eq!(fs::read(canonical.join("notes.md")).unwrap(), b"team notes");
+    }
+
+    #[test]
+    fn deleted_legacy_skill_has_working_restore_advice() {
+        let project = Project::new();
+        let link = ".claude/skills/delegate";
+        let mut record = Record::new();
+        record.files.insert(format!("{link}/SKILL.md"), "old hash".into());
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        let mut plan = Plan::default();
+        plan.skills(&project.0, &history().unwrap(), &current(), &mut record, None).unwrap();
+        assert!(plan.output.contains(&format!("missing  {link}; restore with delegate upgrade {link}")));
+        assert!(!plan.output.iter().any(|line| line.contains("git diff")));
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert!(project.0.join(format!("{link}/SKILL.md")).is_file());
+    }
+
+    #[test]
+    fn recorded_link_replaced_by_folder_is_kept_with_layout_advice() {
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        let link = ".claude/skills/delegate";
+        fs::remove_file(project.0.join(link)).unwrap();
+        old_skill(&project, "delegate");
+        fs::write(project.0.join(".agents/skills/delegate/SKILL.md"), "team edit").unwrap();
+        let mut record: Record = toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        let mut plan = Plan::default();
+        plan.skills(&project.0, &history().unwrap(), &current(), &mut record, None).unwrap();
+        assert!(plan.output.iter().any(|line| line.starts_with(&format!("kept     {link}")) && line.contains(&format!("delegate upgrade {link}"))));
+        assert!(!plan.output.iter().any(|line| line.contains("git diff")));
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert!(fs::symlink_metadata(project.0.join(link)).unwrap().is_dir());
+        assert_eq!(fs::read(project.0.join(".agents/skills/delegate/SKILL.md")).unwrap(), b"team edit");
+    }
+
+    #[test]
+    fn edited_old_skill_is_kept_whole() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        fs::write(
+            project.0.join(".claude/skills/delegate/team.md"),
+            "team addition",
+        )
+        .unwrap();
+        let mut plan = Plan::default();
+        plan.skills(
+            &project.0,
+            &history().unwrap(),
+            &current(),
+            &mut Record::new(),
+            None,
+        )
+        .unwrap();
+        assert!(plan.writes.is_empty());
+        assert!(plan.links.is_empty());
+        assert!(
+            plan.output
+                .iter()
+                .any(|line| line.starts_with("kept     .claude/skills/delegate"))
+        );
+    }
+
+    #[test]
+    fn destination_edits_block_both_automatic_and_targeted_moves() {
+        for committed in [false, true] {
+            let project = Project::new();
+            old_skill(&project, "delegate");
+            write_file(
+                &project.0.join(".agents/skills/delegate/SKILL.md"),
+                b"our edit",
+            )
+            .unwrap();
+            if committed {
+                project.commit();
+            }
+            for take in [None, Some(".claude/skills/delegate")] {
+                let mut plan = Plan::default();
+                plan.skills(
+                    &project.0,
+                    &history().unwrap(),
+                    &current(),
+                    &mut Record::new(),
+                    take,
+                )
+                .unwrap();
+                assert!(plan.writes.is_empty());
+                assert!(plan.links.is_empty());
+                assert_eq!(plan.folders, Vec::<String>::new());
+                assert!(
+                    plan.output
+                        .iter()
+                        .any(|line| line.contains(".agents/skills/delegate"))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn current_kit_is_newest() {
         let kits = history().unwrap();
         assert_eq!(
@@ -1644,5 +2519,1068 @@ mod tests {
             }
         }
         assert!(identify(&kits, &BTreeMap::new()).is_none());
+    }
+
+    // Review t120: following the printed advice must be able to restore a
+    // deleted link when the team keeps its own file in `.agents/skills/<name>/`.
+    #[test]
+    fn review_restoring_a_deleted_link_with_team_files_in_agents() {
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        let link = ".claude/skills/delegate";
+        fs::write(project.0.join(".agents/skills/delegate/notes.md"), "team").unwrap();
+        fs::remove_file(project.0.join(link)).unwrap();
+        project.commit();
+        // `missing  .claude/skills/delegate; restore with delegate upgrade .claude/skills/delegate`
+        upgrade(&project.0, &[]).unwrap();
+        // Collision advice: take the kit's files first, then retry.
+        upgrade(&project.0, &[".agents/skills/delegate/SKILL.md".into()]).unwrap();
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert_eq!(
+            fs::read_link(project.0.join(link)).ok().as_deref(),
+            Some(Path::new("../../.agents/skills/delegate")),
+            "the advised commands never restore the link"
+        );
+        assert!(project.0.join(".agents/skills/delegate/notes.md").exists());
+    }
+
+    // Review t120: a per-file take of a retired old-layout skill path deletes
+    // the team's edited skill and installs the kit's skill nowhere.
+    #[test]
+    fn review_taking_an_old_skill_file_leaves_a_skill_in_place() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        let old = ".claude/skills/delegate/SKILL.md";
+        fs::write(project.0.join(old), "team edit").unwrap();
+        project.commit();
+        upgrade(&project.0, &[old.into()]).unwrap();
+        assert!(
+            project.0.join(old).exists()
+                || project.0.join(".agents/skills/delegate/SKILL.md").exists(),
+            "the delegate skill is gone from both layouts"
+        );
+    }
+
+    #[test]
+    fn layout_take_normalizes_aliases_in_every_order() {
+        let link = ".claude/skills/delegate";
+        let child = format!("{link}/SKILL.md");
+        for paths in [
+            vec![link.into(), child.clone()],
+            vec![child, link.into()],
+            vec![link.into(), link.into()],
+        ] {
+            let project = Project::new();
+            old_skill(&project, "delegate");
+            upgrade(&project.0, &paths).unwrap();
+            assert!(project.0.join(".agents/skills/delegate/SKILL.md").is_file());
+            assert!(fs::read_link(project.0.join(link)).is_ok());
+        }
+    }
+
+    #[test]
+    fn polluted_link_record_is_cleaned_without_taking_canonical_edits() {
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        let link = ".claude/skills/delegate";
+        let canonical = ".agents/skills/delegate/SKILL.md";
+        let mut record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        record
+            .files
+            .insert(format!("{link}/SKILL.md"), "stale".into());
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        fs::remove_file(project.0.join(link)).unwrap();
+        fs::write(project.0.join(canonical), "team edit").unwrap();
+        fs::write(project.0.join(".agents/skills/delegate/notes.md"), "notes").unwrap();
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert_eq!(fs::read(project.0.join(canonical)).unwrap(), b"team edit");
+        assert_eq!(
+            fs::read(project.0.join(".agents/skills/delegate/notes.md")).unwrap(),
+            b"notes"
+        );
+        let record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        assert!(!record.files.contains_key(&format!("{link}/SKILL.md")));
+    }
+
+    #[test]
+    fn link_take_installs_absent_tree_but_preserves_deliberate_missing_files() {
+        for recorded in [false, true] {
+            let project = Project::new();
+            if recorded {
+                crate::init::init(&project.0).unwrap();
+                fs::remove_file(project.0.join(".claude/skills/delegate")).unwrap();
+                fs::remove_dir_all(project.0.join(".agents/skills/delegate")).unwrap();
+            } else {
+                old_skill(&project, "distill");
+            }
+            let link = ".claude/skills/delegate";
+            upgrade(&project.0, &[link.into()]).unwrap();
+            let canonical = ".agents/skills/delegate/SKILL.md";
+            assert!(project.0.join(canonical).is_file());
+            fs::remove_file(project.0.join(canonical)).unwrap();
+            fs::remove_file(project.0.join(link)).unwrap();
+            let mut plan = Plan::default();
+            plan.skills(
+                &project.0,
+                &history().unwrap(),
+                &current(),
+                &mut Record::new(),
+                Some(link),
+            )
+            .unwrap();
+            assert!(plan.writes.is_empty());
+            assert!(plan.output.iter().any(|s| s
+                == &format!("missing  {canonical}; restore with delegate upgrade {canonical}")));
+            upgrade(&project.0, &[link.into()]).unwrap();
+            assert!(!project.0.join(canonical).exists());
+        }
+    }
+
+    #[test]
+    fn layout_take_never_deletes_extra_source_files() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        let extra = ".claude/skills/delegate/notes.md";
+        fs::write(project.0.join(extra), "team").unwrap();
+        let mut plan = Plan::default();
+        plan.skills(
+            &project.0,
+            &history().unwrap(),
+            &current(),
+            &mut Record::new(),
+            Some(".claude/skills/delegate"),
+        )
+        .unwrap();
+        assert!(
+            plan.output
+                .iter()
+                .any(|s| s.contains(extra) && s.contains("manually"))
+        );
+        assert_eq!(plan.folders, Vec::<String>::new());
+        upgrade(&project.0, &[".claude/skills/delegate".into()]).unwrap();
+        assert_eq!(fs::read(project.0.join(extra)).unwrap(), b"team");
+    }
+
+    // Review t120 r5: naming the same skill twice (the link and its old
+    // SKILL.md, both accepted paths) plans the folder removal twice; the
+    // second remove_dir_all fails after the first already deleted the folder,
+    // so the skill ends up in neither layout and upgrade errors out.
+    #[test]
+    fn review_r5_naming_one_skill_twice_keeps_a_skill() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        let old = ".claude/skills/delegate/SKILL.md";
+        fs::write(project.0.join(old), "team edit").unwrap();
+        project.commit();
+        let result = upgrade(&project.0, &[".claude/skills/delegate".into(), old.into()]);
+        assert!(result.is_ok(), "upgrade failed: {result:?}");
+        assert!(
+            project.0.join(".agents/skills/delegate/SKILL.md").is_file(),
+            "the delegate skill is gone from both layouts"
+        );
+    }
+
+    // Review t120 r5: a recorded link replaced by a copy of the kit's folder
+    // makes a full upgrade seed the retired `.claude/skills/<name>/SKILL.md`
+    // key into the record. Once the folder is removed, the link counts as a
+    // "deleted legacy" skill, and restoring it is refused as a collision
+    // unless the team throws away its canonical edits.
+    #[test]
+    fn review_r5_restoring_a_link_after_a_folder_copy_keeps_canonical_edits() {
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        let link = ".claude/skills/evaluate";
+        let canonical = ".agents/skills/evaluate/SKILL.md";
+        fs::remove_file(project.0.join(link)).unwrap();
+        old_skill(&project, "evaluate");
+        fs::write(project.0.join(canonical), "team edit").unwrap();
+        upgrade(&project.0, &[]).unwrap();
+        let record: Record = toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        assert!(
+            !record.files.contains_key(&format!("{link}/SKILL.md")),
+            "a kept folder put a retired legacy key into the record"
+        );
+        fs::remove_dir_all(project.0.join(link)).unwrap();
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert_eq!(
+            fs::read_link(project.0.join(link)).ok().as_deref(),
+            Some(Path::new("../../.agents/skills/evaluate")),
+        );
+        assert_eq!(fs::read(project.0.join(canonical)).unwrap(), b"team edit");
+    }
+
+    // Review t120 r5: a collision caused by a team file in
+    // `.agents/skills/<name>/` lists only kit files to take; following that
+    // advice never completes the move, and the extra file is never named.
+    #[test]
+    fn review_r5_collision_advice_names_the_extra_team_file() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        let body = PROJECT_FILES
+            .iter()
+            .find(|(p, _)| *p == ".agents/skills/delegate/SKILL.md")
+            .unwrap()
+            .1;
+        write_file(
+            &project.0.join(".agents/skills/delegate/SKILL.md"),
+            body.as_bytes(),
+        )
+        .unwrap();
+        fs::write(project.0.join(".agents/skills/delegate/notes.md"), "team").unwrap();
+        let mut plan = Plan::default();
+        plan.skills(
+            &project.0,
+            &history().unwrap(),
+            &current(),
+            &mut Record::new(),
+            None,
+        )
+        .unwrap();
+        assert!(
+            plan.output.iter().any(|line| line.contains("notes.md")),
+            "collision advice doesn't name what blocks the move: {:?}",
+            plan.output
+        );
+    }
+
+    #[test]
+    fn canonical_obstruction_is_kept_for_full_and_targeted_upgrades() {
+        let link = ".claude/skills/delegate";
+        let canonical = ".agents/skills/delegate";
+        for legacy in [false, true] {
+            for targets in [vec![], vec![link.into()], vec![format!("{canonical}/SKILL.md")]] {
+                let project = Project::new();
+                crate::init::init(&project.0).unwrap();
+                fs::remove_file(project.0.join(link)).unwrap();
+                if legacy {
+                    old_skill(&project, "delegate");
+                }
+                fs::remove_dir_all(project.0.join(canonical)).unwrap();
+                fs::write(project.0.join(canonical), "team obstruction").unwrap();
+                upgrade(&project.0, &targets).unwrap();
+                assert_eq!(fs::read(project.0.join(canonical)).unwrap(), b"team obstruction");
+                if legacy {
+                    assert!(project.0.join(format!("{link}/SKILL.md")).is_file());
+                } else {
+                    assert!(fs::symlink_metadata(project.0.join(link)).is_err());
+                }
+                let mut plan = Plan::default();
+                plan.skills(&project.0, &history().unwrap(), &current(), &mut Record::new(), None).unwrap();
+                assert!(plan.output.iter().any(|line| line.contains(canonical) && line.contains("move") && line.contains("aside manually")));
+                assert!(plan.writes.is_empty());
+                assert!(plan.links.is_empty());
+                assert_eq!(plan.folders, Vec::<String>::new());
+            }
+        }
+    }
+
+    #[test]
+    fn source_team_files_survive_targeted_layout_take() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        let link = ".claude/skills/delegate";
+        let team = format!("{link}/team.md");
+        fs::write(project.0.join(&team), "team data").unwrap();
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert_eq!(fs::read(project.0.join(team)).unwrap(), b"team data");
+        assert!(project.0.join(format!("{link}/SKILL.md")).is_file());
+        assert!(!project.0.join(".agents/skills/delegate").exists());
+    }
+
+    #[test]
+    fn regular_file_link_take_preserves_canonical_edits() {
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        let link = ".claude/skills/delegate";
+        let canonical = ".agents/skills/delegate/SKILL.md";
+        fs::remove_file(project.0.join(link)).unwrap();
+        fs::write(project.0.join(link), "../../.agents/skills/delegate").unwrap();
+        fs::write(project.0.join(canonical), "team edit").unwrap();
+        let record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        let mut after = record.clone();
+        let mut plan = Plan::default();
+        plan.full(&project.0, &history().unwrap(), &current(), &mut after, &BTreeMap::new()).unwrap();
+        assert!(plan.output.iter().any(|line| line.starts_with(&format!("kept     {link} ")) && line.contains(&format!("delegate upgrade {link}"))));
+        assert_eq!(after.files[link], record.files[link]);
+        upgrade(&project.0, &[]).unwrap();
+        assert!(fs::symlink_metadata(project.0.join(link)).unwrap().is_file());
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert_eq!(fs::read_link(project.0.join(link)).unwrap(), Path::new("../../.agents/skills/delegate"));
+        assert_eq!(fs::read(project.0.join(canonical)).unwrap(), b"team edit");
+    }
+
+    // Review t120 r6: an old folder whose only change is an added team file
+    // has no `.agents/skills/<name>/` at all, yet it is reported as a
+    // collision with that (nonexistent) folder instead of the contract's
+    // `kept     .claude/skills/<name> (edited; ...)` line.
+    #[test]
+    fn review_r6_extra_file_in_old_folder_is_reported_as_edited() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        fs::write(project.0.join(".claude/skills/delegate/team.md"), "team").unwrap();
+        let mut plan = Plan::default();
+        plan.skills(
+            &project.0,
+            &history().unwrap(),
+            &current(),
+            &mut Record::new(),
+            None,
+        )
+        .unwrap();
+        assert!(!project.0.join(".agents/skills/delegate").exists());
+        assert!(
+            plan.output
+                .iter()
+                .any(|l| l.starts_with("kept     .claude/skills/delegate (edited;")),
+            "{:?}",
+            plan.output
+        );
+    }
+
+    // Review t120 r6: deleting the old SKILL.md by hand leaves an empty
+    // folder; the kept line's compare command names the deleted file, so
+    // running it fails with "Could not access".
+    #[test]
+    fn review_r6_kept_old_folder_compare_command_runs() {
+        let project = Project::new();
+        old_skill(&project, "delegate");
+        fs::remove_file(project.0.join(".claude/skills/delegate/SKILL.md")).unwrap();
+        let mut plan = Plan::default();
+        plan.skills(
+            &project.0,
+            &history().unwrap(),
+            &current(),
+            &mut Record::new(),
+            None,
+        )
+        .unwrap();
+        let line = plan
+            .output
+            .iter()
+            .find(|l| l.starts_with("kept     .claude/skills/delegate"))
+            .expect("kept line");
+        if let Some(rest) = line.split("git diff --no-index '").nth(1) {
+            let path = rest.split('\'').next().unwrap();
+            assert!(
+                project.0.join(path).exists(),
+                "advised compare names a missing file: {line}"
+            );
+        }
+    }
+
+    // Review t120 r6: a plain text file holding the link's target (what git
+    // checks out with core.symlinks=false) hashes like the link and is
+    // treated as the pristine link: nothing is reported, Claude Code finds
+    // no skill.
+    #[test]
+    fn review_r6_text_file_in_place_of_link_is_reported() {
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        let link = ".claude/skills/delegate";
+        fs::remove_file(project.0.join(link)).unwrap();
+        fs::write(project.0.join(link), "../../.agents/skills/delegate").unwrap();
+        let mut record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        let mut plan = Plan::default();
+        plan.full(
+            &project.0,
+            &history().unwrap(),
+            &current(),
+            &mut record,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            plan.output
+                .iter()
+                .any(|l| l.contains(&format!("{link} ")) || l.contains(&format!("{link};"))),
+            "a file replacing the link is silently pristine: {:?}",
+            plan.output
+        );
+    }
+
+    // Review t120 r6: a canonical skill path that is a file, not a folder,
+    // aborts the whole upgrade with a permissions hint instead of being kept.
+    #[test]
+    fn review_r6_canonical_skill_file_does_not_abort_upgrade() {
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        fs::remove_dir_all(project.0.join(".agents/skills/delegate")).unwrap();
+        fs::write(project.0.join(".agents/skills/delegate"), "x").unwrap();
+        let result = upgrade(&project.0, &[]);
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn old_skill_pointers_and_files_preserve_legacy_evidence() {
+        let link = ".claude/skills/delegate";
+        let old = format!("{link}/SKILL.md");
+        for recorded in [false, true] {
+            for replacement in ["file", "shared", "dangling"] {
+                let project = Project::new();
+                for name in SKILLS {
+                    old_skill(&project, name);
+                }
+                let mut record = Record::new();
+                let hash = sha256::hex(&fs::read(project.0.join(&old)).unwrap());
+                record.files.insert(old.clone(), hash.clone());
+                if recorded {
+                    write_file(
+                        &project.0.join(RECORD),
+                        toml::to_string(&record).unwrap().as_bytes(),
+                    )
+                    .unwrap();
+                }
+                if replacement == "shared" {
+                    fs::create_dir_all(project.0.join("shared")).unwrap();
+                    fs::rename(project.0.join(link), project.0.join("shared/delegate")).unwrap();
+                } else {
+                    fs::remove_dir_all(project.0.join(link)).unwrap();
+                }
+                if replacement == "file" {
+                    fs::write(project.0.join(link), "team file").unwrap();
+                } else {
+                    create_symlink("../../shared/delegate", project.0.join(link)).unwrap();
+                }
+                project.commit();
+                let mut plan = Plan::default();
+                plan.skills(
+                    &project.0,
+                    &history().unwrap(),
+                    &current(),
+                    &mut record.clone(),
+                    None,
+                )
+                .unwrap();
+                let kept = plan
+                    .output
+                    .iter()
+                    .find(|line| line.starts_with(&format!("kept     {link} (edited;")))
+                    .unwrap();
+                assert!(kept.contains("delegate upgrade .claude/skills/delegate"));
+                assert!(!kept.contains("git diff"));
+                upgrade(&project.0, &[]).unwrap();
+                assert!(fs::symlink_metadata(project.0.join(".agents/skills/delegate")).is_err());
+                let after: Record =
+                    toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+                if recorded {
+                    assert_eq!(after.files[&old], hash);
+                    assert!(!after.files.contains_key(link));
+                }
+                assert!(fs::read_link(project.0.join(".claude/skills/distill")).is_ok());
+                let before = project.snapshot();
+                upgrade(&project.0, &[]).unwrap();
+                assert_eq!(project.snapshot(), before);
+                upgrade(&project.0, &[link.into()]).unwrap();
+                assert_eq!(
+                    fs::read_link(project.0.join(link)).unwrap(),
+                    Path::new("../../.agents/skills/delegate")
+                );
+                if replacement == "shared" {
+                    assert_eq!(
+                        sha256::hex(&fs::read(project.0.join("shared/delegate/SKILL.md")).unwrap()),
+                        hash
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_retargeted_link_reports_target_and_preserves_canonical() {
+        let project = Project::new();
+        let record = project.install();
+        let link = ".claude/skills/delegate";
+        let canonical = ".agents/skills/delegate/SKILL.md";
+        fs::remove_file(project.0.join(link)).unwrap();
+        create_symlink("../../shared/delegate", project.0.join(link)).unwrap();
+        fs::write(project.0.join(canonical), "team edit").unwrap();
+        let mut plan = Plan::default();
+        plan.full(
+            &project.0,
+            &history().unwrap(),
+            &current(),
+            &mut record.clone(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let message = plan
+            .output
+            .iter()
+            .find(|line| line.starts_with(&format!("kept     {link} ")))
+            .unwrap();
+        assert!(message.contains("actual symlink target '../../shared/delegate'"));
+        assert!(message.contains("expected symlink target '../../.agents/skills/delegate'"));
+        assert!(!message.contains("git diff"));
+        upgrade(&project.0, &[]).unwrap();
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert_eq!(fs::read(project.0.join(canonical)).unwrap(), b"team edit");
+    }
+
+    #[test]
+    fn skill_ancestor_obstructions_are_named_and_never_written_through() {
+        for obstruction in [".agents", ".agents/skills", ".claude", ".claude/skills"] {
+            for target in [
+                None,
+                Some(".claude/skills/delegate"),
+                Some(".agents/skills/delegate/SKILL.md"),
+            ] {
+                let project = Project::new();
+                project.install();
+                fs::remove_dir_all(project.0.join(obstruction)).unwrap();
+                fs::write(project.0.join(obstruction), "team obstruction").unwrap();
+                fs::set_permissions(
+                    project.0.join("evals/run"),
+                    fs::Permissions::from_mode(0o644),
+                )
+                .unwrap();
+                let mut plan = Plan::default();
+                plan.skills(
+                    &project.0,
+                    &history().unwrap(),
+                    &current(),
+                    &mut Record::new(),
+                    None,
+                )
+                .unwrap();
+                assert!(plan.output.iter().any(|line| line.contains(&format!(
+                    "{obstruction} is not a directory; move {obstruction} aside manually"
+                ))));
+                let paths = target.into_iter().map(str::to_owned).collect::<Vec<_>>();
+                upgrade(&project.0, &paths).unwrap();
+                assert_eq!(
+                    fs::read(project.0.join(obstruction)).unwrap(),
+                    b"team obstruction"
+                );
+                if target.is_none() {
+                    assert_ne!(
+                        fs::metadata(project.0.join("evals/run"))
+                            .unwrap()
+                            .permissions()
+                            .mode() & 0o111,
+                        0
+                    );
+                }
+            }
+        }
+    }
+
+    // Review t120 r7: an old-layout skill folder replaced by a regular file
+    // aborts the whole upgrade (ENOTDIR + permissions hint) instead of being
+    // kept while the other skills move.
+    #[test]
+    fn review_r7_old_skill_folder_replaced_by_file_does_not_abort_upgrade() {
+        let project = Project::new();
+        for name in SKILLS {
+            old_skill(&project, name);
+        }
+        fs::remove_dir_all(project.0.join(".claude/skills/delegate")).unwrap();
+        fs::write(project.0.join(".claude/skills/delegate"), "team file").unwrap();
+        project.commit();
+        let result = upgrade(&project.0, &[]);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            fs::read(project.0.join(".claude/skills/delegate")).unwrap(),
+            b"team file"
+        );
+        assert!(fs::read_link(project.0.join(".claude/skills/distill")).is_ok());
+    }
+
+    // Review t120 r7: an old-layout skill reached through the team's own
+    // symlink (e.g. a shared skills folder) is kept, yet the upgrade still
+    // installs a competing .agents/skills/<name>/ copy next to it.
+    #[test]
+    fn review_r7_symlinked_old_skill_folder_gets_no_competing_copy() {
+        let project = Project::new();
+        for name in SKILLS {
+            old_skill(&project, name);
+        }
+        fs::create_dir_all(project.0.join("shared")).unwrap();
+        fs::rename(
+            project.0.join(".claude/skills/delegate"),
+            project.0.join("shared/delegate"),
+        )
+        .unwrap();
+        create_symlink(
+            "../../shared/delegate",
+            project.0.join(".claude/skills/delegate"),
+        )
+        .unwrap();
+        project.commit();
+        upgrade(&project.0, &[]).unwrap();
+        assert_eq!(
+            fs::read_link(project.0.join(".claude/skills/delegate")).unwrap(),
+            Path::new("../../shared/delegate")
+        );
+        assert!(
+            fs::symlink_metadata(project.0.join(".agents/skills/delegate")).is_err(),
+            "a competing .agents/skills/delegate was added while .claude/skills/delegate was kept"
+        );
+    }
+
+    /// Review r8: a recorded old skill whose bytes differ from the record is an
+    /// edit (as for every other kit file), even when they match some kit.
+    #[test]
+    fn review_r8_old_skill_differing_from_its_record_is_kept() {
+        let project = Project::new();
+        let mut record = project.install();
+        for name in SKILLS {
+            let link = skill_link(name);
+            fs::remove_file(project.0.join(&link)).unwrap();
+            old_skill(&project, name);
+            fs::remove_dir_all(project.0.join(format!(".agents/skills/{name}"))).unwrap();
+            let hash = record.files.remove(&skill_path(name)).unwrap();
+            record.files.remove(&link);
+            record.files.insert(format!("{link}/SKILL.md"), hash);
+        }
+        // The record names an older kit's text; the folder holds different text
+        // that happens to be some kit's (a team pinning a version by hand).
+        let older = history()
+            .unwrap()
+            .iter()
+            .filter_map(|kit| kit.files.get(".claude/skills/delegate/SKILL.md").cloned())
+            .find(|hash| *hash != record.files[".claude/skills/delegate/SKILL.md"])
+            .expect("an earlier kit with different delegate skill text");
+        record
+            .files
+            .insert(".claude/skills/delegate/SKILL.md".into(), older);
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        project.commit();
+        let before = fs::read(project.0.join(".claude/skills/delegate/SKILL.md")).unwrap();
+        upgrade(&project.0, &[]).unwrap();
+        assert!(
+            fs::symlink_metadata(project.0.join(".claude/skills/delegate"))
+                .unwrap()
+                .is_dir(),
+            "an old skill that differs from its record was moved as pristine"
+        );
+        assert_eq!(
+            fs::read(project.0.join(".claude/skills/delegate/SKILL.md")).unwrap(),
+            before
+        );
+        assert!(fs::symlink_metadata(project.0.join(".agents/skills/delegate")).is_err());
+    }
+
+    #[test]
+    fn uncommitted_historical_skill_pin_does_not_override_record() {
+        let project = Project::new();
+        let mut record = project.install();
+        let link = ".claude/skills/delegate";
+        let source = format!("{link}/SKILL.md");
+        fs::remove_file(project.0.join(link)).unwrap();
+        old_skill(&project, "delegate");
+        let body = fs::read(project.0.join(&source)).unwrap();
+        let hash = sha256::hex(&body);
+        let older = history()
+            .unwrap()
+            .iter()
+            .filter_map(|kit| kit.files.get(&source).cloned())
+            .find(|candidate| *candidate != hash)
+            .unwrap();
+        record.files.remove(link);
+        record.files.remove(".agents/skills/delegate/SKILL.md");
+        record.files.insert(source.clone(), older);
+        fs::remove_dir_all(project.0.join(".agents/skills/delegate")).unwrap();
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        upgrade(&project.0, &[]).unwrap();
+        assert_eq!(fs::read(project.0.join(source)).unwrap(), body);
+        assert!(project.0.join(link).is_dir());
+        assert!(!project.0.join(".agents/skills/delegate").exists());
+    }
+
+    #[test]
+    fn skill_symlink_ancestors_refuse_before_changes_but_allow_unrelated_take() {
+        for ancestor in [".claude", ".claude/skills", ".agents", ".agents/skills"] {
+            for targeted in [false, true] {
+                let project = Project::new();
+                project.install();
+                let elsewhere = project.0.join("shared");
+                fs::rename(project.0.join(ancestor), &elsewhere).unwrap();
+                create_symlink(&elsewhere, project.0.join(ancestor)).unwrap();
+                fs::write(elsewhere.join("team.txt"), "team content").unwrap();
+                let before = project.snapshot();
+                let paths = if targeted {
+                    vec![".claude/skills/delegate".into()]
+                } else {
+                    vec![]
+                };
+                let error = upgrade(&project.0, &paths).unwrap_err().to_string();
+                assert!(error.contains("through symlink"), "{error}");
+                assert!(error.contains(ancestor), "{error}");
+                assert_eq!(project.snapshot(), before);
+                assert_eq!(
+                    fs::read(elsewhere.join("team.txt")).unwrap(),
+                    b"team content"
+                );
+                upgrade(&project.0, &["evals/run".into()]).unwrap();
+                assert_eq!(project.snapshot(), before);
+            }
+        }
+    }
+
+    #[test]
+    fn init_keeps_canonical_regular_file_with_correct_link() {
+        let project = Project::new();
+        let canonical = project.0.join(".agents/skills/delegate");
+        fs::create_dir_all(canonical.parent().unwrap()).unwrap();
+        fs::write(&canonical, "team content").unwrap();
+        fs::create_dir_all(project.0.join(".claude/skills")).unwrap();
+        create_symlink(
+            "../../.agents/skills/delegate",
+            project.0.join(".claude/skills/delegate"),
+        )
+        .unwrap();
+        crate::init::init(&project.0).unwrap();
+        assert_eq!(fs::read(canonical).unwrap(), b"team content");
+        let record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        assert!(
+            !record
+                .files
+                .contains_key(".agents/skills/delegate/SKILL.md")
+        );
+        assert!(!record.files.contains_key(".claude/skills/delegate"));
+    }
+
+    /// Review r8: a `.claude` that is a symlink to a real directory is not "not a
+    /// directory"; a full upgrade must not silently skip the kit status line.
+    #[test]
+    fn review_r8_symlinked_claude_dir_does_not_silently_skip_status_line() {
+        let project = Project::new();
+        project.install();
+        let elsewhere = project.0.join("shared-claude");
+        fs::rename(project.0.join(".claude"), &elsewhere).unwrap();
+        create_symlink("shared-claude", project.0.join(".claude")).unwrap();
+        let line = b"{\"statusLine\": {\"command\": \"delegate statusline\"}}\n";
+        fs::write(elsewhere.join("settings.json"), line).unwrap();
+        project.commit();
+        let result = upgrade(&project.0, &[]);
+        assert!(
+            result.is_err() || fs::read(elsewhere.join("settings.json")).unwrap() != line,
+            "upgrade succeeded (\"up to date\") but left the kit's status line in place"
+        );
+    }
+
+    /// Review r9: the skill-layout symlink refusal must not spread to unrelated
+    /// kit folders. Before t120 a pristine project whose `evals/` (or `docs/`)
+    /// is a symlink upgraded as "up to date"; nothing needs writing through it.
+    #[test]
+    fn review_r9_symlinked_unrelated_kit_folder_with_nothing_to_write_still_upgrades() {
+        for folder in ["evals", "docs"] {
+            let project = Project::new();
+            project.install();
+            let elsewhere = project.0.join(format!("shared-{folder}"));
+            fs::rename(project.0.join(folder), &elsewhere).unwrap();
+            create_symlink(format!("shared-{folder}"), project.0.join(folder)).unwrap();
+            project.commit();
+            let before = project.snapshot();
+            let result = upgrade(&project.0, &[]);
+            assert!(
+                result.is_ok(),
+                "full upgrade with a symlinked {folder}/ and nothing to write refused: {}",
+                result.unwrap_err()
+            );
+            assert_eq!(project.snapshot(), before);
+        }
+    }
+
+    /// Review r9: a deleted old-layout skill gets no `.agents` copy ("add no
+    /// .agents/skills/<name>/"), even when the record lacks that skill's entry;
+    /// git history alone proved the deletion before t120 ("missing").
+    #[test]
+    fn review_r9_deleted_unrecorded_old_skill_gets_no_canonical_copy() {
+        let project = Project::new();
+        let mut record = project.install();
+        for name in SKILLS {
+            let link = skill_link(name);
+            fs::remove_file(project.0.join(&link)).unwrap();
+            old_skill(&project, name);
+            fs::remove_dir_all(project.0.join(format!(".agents/skills/{name}"))).unwrap();
+            let hash = record.files.remove(&skill_path(name)).unwrap();
+            record.files.remove(&link);
+            if *name != "distill" {
+                record.files.insert(format!("{link}/SKILL.md"), hash);
+            }
+        }
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        project.commit();
+        fs::remove_dir_all(project.0.join(".claude/skills/distill")).unwrap();
+        project.commit();
+        upgrade(&project.0, &[]).unwrap();
+        assert!(
+            fs::symlink_metadata(project.0.join(".agents/skills/distill")).is_err(),
+            "a deliberately deleted skill was re-added under .agents/skills"
+        );
+    }
+
+    /// Review t120 final: a link whose target differs only by a trailing slash
+    /// (shell tab completion) is reported `kept` by a plain upgrade, but the
+    /// advised `delegate upgrade .claude/skills/<name>` compares with `Path`
+    /// equality, sees nothing to do and leaves the link as it was, so the
+    /// advice never clears the report.
+    #[test]
+    fn review_final_trailing_slash_link_take_restores_the_kit_target() {
+        use std::os::unix::ffi::OsStrExt;
+        let project = Project::new();
+        crate::init::init(&project.0).unwrap();
+        let link = ".claude/skills/delegate";
+        fs::remove_file(project.0.join(link)).unwrap();
+        create_symlink("../../.agents/skills/delegate/", project.0.join(link)).unwrap();
+        project.commit();
+        let mut record: Record =
+            toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
+        let mut plan = Plan::default();
+        plan.full(
+            &project.0,
+            &history().unwrap(),
+            &current(),
+            &mut record,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            plan.output.iter().any(|l| l.starts_with(&format!("kept     {link}"))),
+            "plain upgrade treats the trailing-slash link as edited: {:?}",
+            plan.output
+        );
+        upgrade(&project.0, &[link.into()]).unwrap();
+        assert_eq!(
+            fs::read_link(project.0.join(link)).unwrap().as_os_str().as_bytes(),
+            b"../../.agents/skills/delegate",
+            "the advised layout take left the reported link unchanged"
+        );
+    }
+
+    /// Review t120 round 10: a migration removes the pristine old folders
+    /// before the canonical copies are written. When a write then fails (here
+    /// an unwritable `.agents/skills`), the upgrade errors out with the old
+    /// skills already deleted and nothing installed; the next plain upgrade
+    /// reports them as user deletions (`missing`) instead of migrating.
+    #[test]
+    fn review_r10_failed_migration_write_keeps_the_old_skill_folders() {
+        let project = Project::new();
+        let mut record = project.install();
+        for name in SKILLS {
+            let link = skill_link(name);
+            fs::remove_file(project.0.join(&link)).unwrap();
+            old_skill(&project, name);
+            fs::remove_dir_all(project.0.join(format!(".agents/skills/{name}"))).unwrap();
+            let hash = record.files.remove(&skill_path(name)).unwrap();
+            record.files.remove(&link);
+            record.files.insert(format!("{link}/SKILL.md"), hash);
+        }
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        fs::create_dir_all(project.0.join(".agents/skills/team")).unwrap();
+        fs::write(project.0.join(".agents/skills/team/SKILL.md"), "team").unwrap();
+        project.commit();
+        let saved_record = fs::read(project.0.join(RECORD)).unwrap();
+        let sources: Vec<_> = SKILLS.iter().map(|name| {
+            fs::read(project.0.join(format!(".claude/skills/{name}/SKILL.md"))).unwrap()
+        }).collect();
+        let skills = project.0.join(".agents/skills");
+        fs::set_permissions(&skills, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = upgrade(&project.0, &[]);
+        fs::set_permissions(&skills, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err(), "the write into a read-only directory should fail");
+        for name in SKILLS {
+            assert!(
+                project.0.join(format!(".claude/skills/{name}/SKILL.md")).is_file(),
+                "a failed upgrade deleted .claude/skills/{name} without installing its replacement"
+            );
+        }
+        assert_eq!(fs::read(project.0.join(RECORD)).unwrap(), saved_record);
+        for (name, bytes) in SKILLS.iter().zip(sources) {
+            assert_eq!(fs::read(project.0.join(format!(".claude/skills/{name}/SKILL.md"))).unwrap(), bytes);
+        }
+        upgrade(&project.0, &[]).unwrap();
+        for name in SKILLS {
+            assert_eq!(fs::read_link(project.0.join(skill_link(name))).unwrap().as_os_str(),
+                std::ffi::OsStr::new(&format!("../../.agents/skills/{name}")));
+            assert!(project.0.join(skill_path(name)).is_file());
+        }
+    }
+
+    /// Review t120 round 11: canonical writes now precede folder removal, but
+    /// all old folders are still removed before any link is created. When a
+    /// later folder's removal fails (here a read-only `.claude/skills/evaluate`),
+    /// the earlier skills are left with neither folder nor link and the record
+    /// unwritten; the retry then treats them as user deletions (`missing`)
+    /// instead of completing the migration.
+    #[test]
+    fn review_r11_failed_folder_removal_does_not_strand_earlier_skills() {
+        let project = Project::new();
+        let mut record = project.install();
+        for name in SKILLS {
+            let link = skill_link(name);
+            fs::remove_file(project.0.join(&link)).unwrap();
+            old_skill(&project, name);
+            fs::remove_dir_all(project.0.join(format!(".agents/skills/{name}"))).unwrap();
+            let hash = record.files.remove(&skill_path(name)).unwrap();
+            record.files.remove(&link);
+            record.files.insert(format!("{link}/SKILL.md"), hash);
+        }
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        project.commit();
+        let last = project.0.join(skill_link(SKILLS[SKILLS.len() - 1]));
+        fs::set_permissions(&last, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = upgrade(&project.0, &[]);
+        fs::set_permissions(&last, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err(), "removing a read-only skill folder should fail");
+        upgrade(&project.0, &[]).unwrap();
+        for name in SKILLS {
+            assert_eq!(
+                fs::read_link(project.0.join(skill_link(name)))
+                    .ok()
+                    .map(PathBuf::into_os_string),
+                Some(std::ffi::OsString::from(format!("../../.agents/skills/{name}"))),
+                "retry after a failed folder removal left {name} without its link"
+            );
+        }
+        // The successful link leaves the read-only source in a named backup.
+        for backup in skill_backups(&project) {
+            fs::set_permissions(backup, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    fn skill_backups(project: &Project) -> Vec<PathBuf> {
+        fs::read_dir(project.0.join(".claude/skills"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with(".delegate-skill-backup-"))
+            .collect()
+    }
+
+    #[test]
+    fn skill_link_failure_restores_source_without_touching_siblings() {
+        let project = Project::new();
+        let source = project.0.join(skill_link("delegate"));
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), b"source bytes").unwrap();
+        let sibling = source.with_file_name(".delegate-skill-backup-team");
+        fs::create_dir(&sibling).unwrap();
+        fs::write(sibling.join("team"), b"untouched").unwrap();
+        let error = replace_skill_folder(&project.0, &skill_link("delegate"), "invalid\0target")
+            .unwrap_err();
+        assert!(error.to_string().contains("create .claude/skills/delegate"));
+        assert_eq!(fs::read(source.join("SKILL.md")).unwrap(), b"source bytes");
+        assert_eq!(fs::read(sibling.join("team")).unwrap(), b"untouched");
+        assert_eq!(skill_backups(&project), vec![sibling]);
+    }
+
+    #[test]
+    fn skill_backup_cleanup_failure_keeps_link_and_named_source_backup() {
+        let project = Project::new();
+        let source = project.0.join(skill_link("delegate"));
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), b"source bytes").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o555)).unwrap();
+        let error = replace_skill_folder(
+            &project.0, &skill_link("delegate"), "../../.agents/skills/delegate"
+        ).unwrap_err();
+        let backups = skill_backups(&project);
+        assert_eq!(backups.len(), 1);
+        assert!(error.to_string().contains(backups[0].to_str().unwrap()));
+        assert!(error.to_string().contains("remove that backup manually"));
+        assert_eq!(fs::read(backups[0].join("SKILL.md")).unwrap(), b"source bytes");
+        assert_eq!(fs::read_link(&source).unwrap().as_os_str(), "../../.agents/skills/delegate");
+        assert!(!install_link(&project.0, &skill_link("delegate"), "../../.agents/skills/delegate").unwrap());
+        fs::set_permissions(&backups[0], fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn targeted_settings_through_symlink_only_refuses_pending_writes() {
+        let project = Project::new();
+        project.install();
+        let external = project.0.join("external-claude");
+        fs::rename(project.0.join(".claude"), &external).unwrap();
+        create_symlink("external-claude", project.0.join(".claude")).unwrap();
+        let before = fs::read(external.join("settings.json")).unwrap();
+        upgrade(&project.0, &[CLAUDE_SETTINGS.into()]).unwrap();
+        assert_eq!(fs::read(external.join("settings.json")).unwrap(), before);
+        let pending = serde_json::to_vec(&serde_json::json!({
+            "statusLine": {"type": "command", "command": STATUS_LINE}, "team": true
+        })).unwrap();
+        fs::write(external.join("settings.json"), &pending).unwrap();
+        let record = fs::read(project.0.join(RECORD)).unwrap();
+        let error = upgrade(&project.0, &[CLAUDE_SETTINGS.into()]).unwrap_err();
+        assert!(error.to_string().contains("symlink"), "{error:#}");
+        assert_eq!(fs::read(external.join("settings.json")).unwrap(), pending);
+        assert_eq!(fs::read(project.0.join(RECORD)).unwrap(), record);
+    }
+
+    /// Review t120 round 12: `remove_dir_all` is not atomic. With a read-only
+    /// `.claude/skills` (but writable skill folders) it empties the first old
+    /// skill folder, then fails to remove the folder itself. The retry, after
+    /// permissions are restored, sees an empty `.claude/skills/<name>/` and
+    /// reports it as a user-deleted SKILL.md (`kept ... edited`) instead of
+    /// completing the migration.
+    #[test]
+    fn review_r12_partial_folder_removal_is_not_reported_as_a_user_edit() {
+        let project = Project::new();
+        let mut record = project.install();
+        for name in SKILLS {
+            let link = skill_link(name);
+            fs::remove_file(project.0.join(&link)).unwrap();
+            old_skill(&project, name);
+            fs::remove_dir_all(project.0.join(format!(".agents/skills/{name}"))).unwrap();
+            let hash = record.files.remove(&skill_path(name)).unwrap();
+            record.files.remove(&link);
+            record.files.insert(format!("{link}/SKILL.md"), hash);
+        }
+        fs::write(project.0.join(RECORD), toml::to_string(&record).unwrap()).unwrap();
+        project.commit();
+        let skills = project.0.join(".claude/skills");
+        fs::set_permissions(&skills, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = upgrade(&project.0, &[]);
+        fs::set_permissions(&skills, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err(), "removing from a read-only .claude/skills should fail");
+        assert_eq!(fs::read_to_string(project.0.join(RECORD)).unwrap(), toml::to_string(&record).unwrap());
+        for name in SKILLS {
+            let source = project.0.join(format!("{}/SKILL.md", skill_link(name)));
+            let canonical = project.0.join(skill_path(name));
+            assert_eq!(fs::read(source).unwrap(), fs::read(canonical).unwrap());
+        }
+        assert_eq!(skill_backups(&project), Vec::<PathBuf>::new());
+        upgrade(&project.0, &[]).unwrap();
+        for name in SKILLS {
+            assert_eq!(
+                fs::read_link(project.0.join(skill_link(name)))
+                    .ok()
+                    .map(PathBuf::into_os_string),
+                Some(std::ffi::OsString::from(format!("../../.agents/skills/{name}"))),
+                "retry after a partial folder removal left {name} unmigrated"
+            );
+        }
+    }
+
+    /// Review t120 round 13: a targeted take of an edited non-skill kit file
+    /// (the pane) through a symlinked `.claude` or `.claude/skills` must keep
+    /// the pre-t120 explicit symlink refusal from `check_parents`. Instead the
+    /// `obstructed` prefix (built from `skill_obstruction`, which treats any
+    /// symlink as "not a directory") swallows the take, prints false
+    /// "is not a directory" advice, and reports "up to date".
+    #[test]
+    fn review_r13_targeted_pane_take_through_symlinked_claude_refuses() {
+        let pane = ".claude/skills/delegate-pane/hooks/hooks.json";
+        for ancestor in [".claude", ".claude/skills"] {
+            let project = Project::new();
+            project.install();
+            project.commit();
+            let elsewhere = project.0.join("shared");
+            fs::rename(project.0.join(ancestor), &elsewhere).unwrap();
+            create_symlink(&elsewhere, project.0.join(ancestor)).unwrap();
+            let mut edited = fs::read(project.0.join(pane)).unwrap();
+            edited.extend_from_slice(b"\nteam edit\n");
+            fs::write(project.0.join(pane), &edited).unwrap();
+            let result = upgrade(&project.0, &[pane.into()]);
+            assert_eq!(fs::read(project.0.join(pane)).unwrap(), edited);
+            let error = result
+                .expect_err("targeted take through a symlinked ancestor silently did nothing")
+                .to_string();
+            assert!(error.contains("through symlink"), "{error}");
+        }
     }
 }
