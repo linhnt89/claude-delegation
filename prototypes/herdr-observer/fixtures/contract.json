@@ -1,0 +1,26 @@
+{
+  "upstream_commit": "2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01",
+  "sources": {
+    "request": "src/api/schema.rs:Request, Method::PaneGet",
+    "params": "src/api/schema/common.rs:PaneTarget",
+    "response": "src/api/schema/response.rs:SuccessResponse, ResponseResult::PaneInfo",
+    "pane": "src/api/schema/panes.rs:PaneInfo",
+    "identity": "src/api/schema/agents.rs:AgentSessionInfo",
+    "kind": "src/agent_resume.rs:AgentSessionRefKind",
+    "framing": "src/api/client.rs:write_request, read_json_line"
+  },
+  "method": "pane.get",
+  "framing": "one JSON request and response per connection, each newline terminated",
+  "result_type": "pane_info",
+  "PaneInfo_subset": {
+    "pane_id": {"type": "string", "required": true, "nullable": false},
+    "agent_session": {"type": "AgentSessionInfo", "required": false, "nullable": true}
+  },
+  "AgentSessionInfo_subset": {
+    "source": {"type": "string", "required": true, "nullable": false},
+    "agent": {"type": "string", "required": true, "nullable": false},
+    "kind": {"type": "string", "required": true, "nullable": false, "enum": ["id", "path"]},
+    "value": {"type": "string", "required": true, "nullable": false}
+  },
+  "evidence": "Human source inspection only; local subset validation is not machine-verified upstream schema conformance. All fixtures synthetic."
+}

@@ -1,0 +1,10 @@
+{
+  "label": "SYNTHETIC API-shaped PaneInfo subset, no live identities or terminal output",
+  "panes": [
+    {"pane_id": "pane-a", "agent_session": {"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "synthetic-shared-reference"}},
+    {"pane_id": "pane-b", "agent_session": {"source": "herdr:codex", "agent": "codex", "kind": "id", "value": "synthetic-shared-reference"}},
+    {"pane_id": "pane-pi", "agent_session": {"source": "herdr:pi", "agent": "pi", "kind": "path", "value": "/synthetic/sessions/lead.jsonl"}},
+    {"pane_id": "pane-unknown"},
+    {"pane_id": "pane-null", "agent_session": null}
+  ]
+}
