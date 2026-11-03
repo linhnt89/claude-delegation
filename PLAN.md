@@ -22,22 +22,37 @@
   autopilot worktree were discarded.
 - Before that, see git history up to `archive/main-before-reset`.
 
-## Handoff (2026-11-01, after the rebuild)
-- `delegate list`: no open tasks.
-- Next: check the kit in `secsw-code` and `trial` with the rebuilt binary (their
-  `.delegate-kit.toml` may name kits it doesn't know), then choose the next core task below.
-- 2026-11-03: decisions 031–033 done (t116, t118, t117, t115 merged). Next: upgrade
-  `trial` with the new binary (trial's kit files are uncommitted). secsw-code is upgraded.
-- 2026-11-03: decision 034 (skills in `.agents/skills/`, linked from `.claude/skills/`).
-  t119 merged; t120 running.
+## Handoff (2026-11-03, awaiting merge approval)
+- Decisions 031–033 merged; secsw-code is upgraded. After decision 034 merges, upgrade
+  `trial` with the new binary (its kit files are uncommitted).
+- t121 round 1: independently authored (Muse) layout-neutral repairs for five unit tests and
+  S001, authorized by the user. Checks pass on main and t120; lead reviewed the test-only
+  diff. Its patch is already included unchanged in t120; merge t121 first, then t120.
+- t120 round 14: shared skill layout, migration, init/upgrade and docs implemented. Earlier
+  review findings fixed with regressions, including preservation, idempotence, exact link
+  targets, traversal safety, and rename-aside/link/cleanup with rollback on link failure.
+- Final lead verification: `scripts/check` passes (321 tests, clippy clean); 17 related
+  scenarios pass, including hidden S136/P029. Independent Claude-family review on the final
+  commit: 0 high, 0 medium, 1 low. No worker is running; neither task is merged.
+- Remaining low review finding: when `.claude` or `.claude/skills` is a regular file, full
+  upgrade reports affected skills but silently skips blocked pane files and says up to date.
+  No data loss. Ask whether to merge with this reporting limitation.
+- Deferred limitations: trailing-slash command arguments; combined canonical/layout takes
+  may require two invocations; conservative no-op refusal for symlinked skill ancestors;
+  inherited init `.claude` ancestry behavior; crash-interrupted backup rename needs manual
+  recovery (no journal). Keep these visible if accepting the merge.
+- Merge dry-run via `git merge-tree --write-tree task/t121 task/t120` is conflict-free.
+  `PLAN.md` has uncommitted lead changes; preserve/commit them on main before merging.
 
 ## Waiting for you
-- None.
+- Merge t121 and t120, accepting the remaining low reporting limitation? Both are reviewed;
+  no implementation worker remains running.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t120 | Skills in `.agents/skills/`, linked from `.claude/skills/` (decision 034): symlink kit files in `init`/`upgrade`, migration of old projects, this repo and `delegate/templates/project/` moved, README (Pi trust prompt) | 2 | running | – | deep | the 034 scenarios, `checks_by: t119` | `init.rs`, `upgrade.rs`, `scripts/kit-history`, kit paths |
+| t121 | Layout-neutral repairs for five existing upgrade unit tests and S001, preserving assertions | 1 | review | – | standard | `scripts/check`, `evals/run S001`; compatible with main and t120 | Round 1 passed; diff reviewed, patch supplied to t120. Merge decision pending. |
+| t120 | Skills in `.agents/skills/`, linked from `.claude/skills/` (decision 034): symlink kit files in `init`/`upgrade`, migration of old projects, this repo and `delegate/templates/project/` moved, README (Pi trust prompt) | 2 | review | t121 | deep | the 034 scenarios, `checks_by: t119` | Round 14: 321 tests and 17 lead-run scenarios passed; final review 0 high/0 medium/1 low. Awaiting merge approval. `init.rs`, `upgrade.rs`, `scripts/kit-history`, kit paths |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
