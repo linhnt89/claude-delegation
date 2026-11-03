@@ -38,3 +38,25 @@ choosing a production identity fallback is a user/design decision, not a worker 
 Full S137 requires all named harnesses; this probe does not pass it. The temporary probe
 script was exploratory, not a checked-in automated scenario. Reproducible opt-in live
 commands belong to t123's deliverable and must not be confused with automatic checks.
+
+## Lead-run adapter gate after implementation
+
+The final reviewed t123 executable was exercised against another unique private live
+Herdr 0.9.5 daemon, disposable git checkout, HOME/XDG roots and private integrations.
+No personal credentials or configuration were used. Raw output remains private.
+
+- Real Pi TUI produced a path reference and real Claude startup produced an id reference.
+  `observer capture` read both through the live UNIX API; `create` persisted those origins.
+- Wrapped stand-in research runs completed for both tasks. One successful snapshot showed
+  exactly two live tasks with the respective captured source-qualified origins.
+- A wrapped Pi-task retry preserved both task-instance tokens; a new snapshot remained
+  consistent. Wrapped discards followed by a successful snapshot produced an empty task set.
+- Codex interactive startup again supplied no observed identity in the credential-free
+  polling window. It remains unknown/unverified, not an accepted Codex integration.
+- Only the owned daemon child was terminated and reaped. Wrapped task state was discarded.
+  Private directories/logs were retained temporarily for inspection; none are committed.
+
+This establishes actual adapter transport plus Pi/Claude attribution, wrapped retry and
+retirement. It does not establish native sidebar/rendering, worker model completion,
+Codex integration, per-fallback attempt markers, hidden observer properties, or a pass
+for the full agreed S137–S144/P030–P033 set.

@@ -90,4 +90,15 @@ Remaining review follow-up is verification of these contracts against implementa
 no implementation has been reviewed yet. The user authorized proceeding and merging
 only green tasks. Main-branch context commit remains mandatory before worker startup.
 
+## Implementation review outcome
+
+t123 was implemented in six rounds with independent Copilot/Pi Claude Opus 5.5
+reviews. Reviewer regressions were retained; final review reported **0 high, 0 medium,
+0 low**. Final headless gate: **28 smoke tests**. Independent lead rerun also passed
+six related existing/hidden J8 scenarios (S056, S058, P009, P010, P018, S028).
+The eight new S walkthroughs remain HUMAN and all four new P checks remain absent;
+neither category is counted as a product pass. Rust gate: 321 tests, clippy clean.
+Lead-run private live adapter evidence is recorded separately in
+herdr-observer-live-identity.md. Native UI and production-contract work are not complete.
+
 Review remains a planning check, not runtime feasibility evidence or user acceptance.
