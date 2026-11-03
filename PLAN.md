@@ -3,12 +3,13 @@
 <!-- Living and small. Prune finished items: git history remembers them.
      Status: todo | ready (spec written) | running | review | done -->
 
-## Handoff (2026-11-04, Herdr observer design)
+## Handoff (2026-11-04, green headless observer slice merged)
 - User approved decision 035: target installed `herdrdev/herdr` + `penso/herdr-gpui`;
   changes to both are acceptable. Lead left, read-only task dashboard right; sidebar
   tasks nest under the launching lead conversation. `delegate` retains execution ownership.
 - Research: `docs/research/herdr-delegation-observers.md` has pinned source versions,
-  integration points, and gaps. No runtime prototype or production changes yet.
+  integration points, and gaps. t123's opt-in headless prototype is now merged under
+  `prototypes/herdr-observer/`; no native UI or production ownership/protocol changes.
 - t122: user approved observer scenarios S137–S144; all marked agreed. Executable human
   walkthroughs added; `evals/run S137 S138 S139 S140 S141 S142 S143 S144` reports 8 HUMAN,
   no product verdicts. `scripts/check` passes (321 tests, clippy clean).
@@ -16,13 +17,17 @@
   complete. Property automation waits for a pinned real observation boundary in a later task.
 - User authorized a one-off `pi:github-copilot/claude-opus-5.5@high` plan reviewer;
   workers.toml unchanged. Initial review blocked oversized t123 and evidence assumptions;
-  corrections in `docs/research/herdr-observer-plan-review.md`. Follow-up reviews prompted
-  duplicate-create preservation, explicit retirement, namespace/transport/limit contracts.
-  Spec fixes are prepared; implementation review must verify them. User authorizes green merges.
-- Split sequence: commit approved context on main, t123 headless launch-attribution/read
-  adapter, lead-run private live identity gate, t124 native GPUI patch with test-only
-  read/action hooks, t125 independent properties against those actual GPUI hooks,
-  then lead-run native demonstrations. Do not equate synthetic fixtures with live identity.
+  corrections in `docs/research/herdr-observer-plan-review.md`. t123 merged after six
+  implementation rounds; final independent review: 0 high, 0 medium, 0 low. 28 smoke tests
+  and 6 related/hidden scenarios pass; 321 Rust tests/clippy clean before merge.
+  User authorizes continuing and merging green tasks; no need to ask again for green merges.
+- Completed: approved context committed on main; t123 headless adapter merged; lead-run
+  private live adapter gate verified Pi/Claude capture, two live task origins, wrapped retry
+  identity and retirement. Codex is still unknown without credentials, not passing coverage.
+- Next gate: resolve safe Codex identity evidence or explicitly approve a Pi/Claude-only
+  bounded native spike. Then scope t124 native GPUI patch with test-only read/action hooks.
+  t125's full properties also depend on t127's production identity/attempt contract.
+  Do not equate synthetic fixtures, stand-ins or HUMAN output with feature acceptance.
 - Prototype attribution is a private sidecar, never a production owner/schema change.
   Unknown identity stays unknown; legacy session fields are not fallback. External unwrapped
   id reuse and exact fallback-attempt fencing remain feed gaps, not claimed guarantees.
@@ -35,7 +40,8 @@
 - Private preflight probe confirmed actual Pi TUI and Claude startup identity reporting;
   credential-free Codex remained unknown. `docs/research/herdr-observer-live-identity.md`
   records scope/limits. This is not all-harness acceptance or a fallback decision.
-- Commit approved context on main before t123 starts. No worker has started yet.
+- No active delegated tasks remain. t123 merged with task state removed. Full agreed
+  observer S137–S144/P030–P033 acceptance remains pending; no native work has started.
 
 ### Previous kit merge handoff (2026-11-03)
 - User approved; t121 then t120 merged. No open task state remains.
@@ -53,14 +59,15 @@
   recovery (no journal).
 
 ## Waiting for you
-- None now. User authorizes continuing through implementation/review and merging green tasks.
-  Stop for a genuine production identity/retention or credential-access decision.
+- Codex supplied no conversation identity in isolated credential-free startup probes.
+  Before t124, choose a safe authenticated isolated probe (no copying personal credentials),
+  or explicitly scope the native spike to verified Pi/Claude leads with Codex shown unknown.
+  No credential access, production fallback or ownership/schema change has been authorized.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t123 | Headless prototype attribution + read adapter | observer-1 | ready | commit approved t122 context | deep | isolated launch sidecar/read model and headless black-box smoke tests; documented feed gaps | long headless slice; review findings addressed in spec; context commit before run; no native or permanent eval checks |
-| t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | spec after live identity verification; include test-only GPUI read/action hooks; no daemon protocol change |
+| t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex evidence or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
 | t127 | Production observer identity/instance/attempt contract | observer-contract | todo | prototype evidence + user design | deep | reconcile decisions 009/031/035; stable task instances and per-fallback attempt identity without weakened P030/P032 | design first; no production schema changes authorized by the prototype; blocks full property completion |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
