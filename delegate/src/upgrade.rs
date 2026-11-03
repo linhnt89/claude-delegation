@@ -777,6 +777,28 @@ pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Skill names shared by both kit layouts (decision 034).
+    const SKILLS: &[&str] = &["delegate", "distill", "evaluate"];
+
+    /// Resolve the skill file from the actual kit instead of hard-coding a
+    /// layout: `.claude/skills/<name>/SKILL.md` on main,
+    /// `.agents/skills/<name>/SKILL.md` on the shared-skills layout.
+    fn skill_path(name: &str) -> String {
+        let suffix = format!("/{name}/SKILL.md");
+        PROJECT_FILES
+            .iter()
+            .find(|(p, _)| p.ends_with(suffix.as_str()))
+            .unwrap_or_else(|| panic!("kit has no skill file for {name}"))
+            .0
+            .to_string()
+    }
+
+    /// Where the `.claude` compatibility link lives on the new layout (a real
+    /// directory holding the skill on the old layout).
+    fn skill_link(name: &str) -> String {
+        format!(".claude/skills/{name}")
+    }
+
     #[derive(Debug)]
     struct Project(PathBuf);
 
@@ -795,6 +817,24 @@ mod tests {
                 if EXECUTABLE.contains(path) {
                     fs::set_permissions(self.0.join(path), fs::Permissions::from_mode(0o755))
                         .unwrap();
+                }
+            }
+            // On the shared-skills layout the kit also installs relative
+            // directory links; on the old layout the skill files above are the
+            // whole fixture, so this is a no-op there.
+            for name in SKILLS {
+                if skill_path(name).starts_with(".agents/") {
+                    let link = self.0.join(skill_link(name));
+                    if fs::symlink_metadata(&link).is_err() {
+                        if let Some(parent) = link.parent() {
+                            fs::create_dir_all(parent).unwrap();
+                        }
+                        std::os::unix::fs::symlink(
+                            format!("../../.agents/skills/{name}"),
+                            &link,
+                        )
+                        .unwrap();
+                    }
                 }
             }
             let record = Record {
@@ -830,7 +870,7 @@ mod tests {
         }
 
         fn snapshot(&self) -> BTreeMap<String, Vec<u8>> {
-            PROJECT_FILES
+            let mut snap: BTreeMap<String, Vec<u8>> = PROJECT_FILES
                 .iter()
                 .map(|(p, _)| *p)
                 .chain([RECORD, ".claude/settings.json"])
@@ -839,7 +879,20 @@ mod tests {
                         .unwrap()
                         .map(|b| (p.into(), b))
                 })
-                .collect()
+                .collect();
+            // Capture compatibility links by target (production hashes links
+            // as their literal targets). Old-layout directories are skipped.
+            for name in SKILLS {
+                let link = skill_link(name);
+                if fs::symlink_metadata(self.0.join(&link))
+                    .is_ok_and(|m| m.file_type().is_symlink())
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    let target = fs::read_link(self.0.join(&link)).unwrap();
+                    snap.insert(link, target.as_os_str().as_bytes().to_vec());
+                }
+            }
+            snap
         }
     }
 
@@ -965,25 +1018,25 @@ mod tests {
         let project = Project::new();
         let mut record = project.install();
         record.kit = history().unwrap()[0].id.clone();
-        let edited = ".claude/skills/delegate/SKILL.md";
-        let missing = ".claude/skills/evaluate/SKILL.md";
+        let edited = skill_path("delegate");
+        let missing = skill_path("evaluate");
         record
             .files
-            .insert(edited.into(), sha256::hex(b"old skill"));
+            .insert(edited.clone(), sha256::hex(b"old skill"));
         record
             .files
-            .insert(missing.into(), sha256::hex(b"old evaluate"));
+            .insert(missing.clone(), sha256::hex(b"old evaluate"));
         write_file(
             &project.0.join(RECORD),
             toml::to_string(&record).unwrap().as_bytes(),
         )
         .unwrap();
-        fs::write(project.0.join(edited), "our skill").unwrap();
-        fs::remove_file(project.0.join(missing)).unwrap();
+        fs::write(project.0.join(&edited), "our skill").unwrap();
+        fs::remove_file(project.0.join(&missing)).unwrap();
         let mut before = project.snapshot();
-        upgrade(&project.0, &[edited.into(), missing.into()]).unwrap();
+        upgrade(&project.0, &[edited.clone(), missing.clone()]).unwrap();
         for (path, body) in PROJECT_FILES {
-            if [edited, missing].contains(path) {
+            if edited.as_str() == *path || missing.as_str() == *path {
                 before.insert((*path).into(), body.as_bytes().to_vec());
                 record
                     .files
@@ -1007,16 +1060,16 @@ mod tests {
         project.commit();
         partial.files.retain(|path, _| path == "evals/run");
         fs::write(project.0.join(RECORD), toml::to_string(&partial).unwrap()).unwrap();
-        let missing = ".claude/skills/evaluate/SKILL.md";
-        let edited = ".claude/skills/delegate/SKILL.md";
-        fs::remove_file(project.0.join(missing)).unwrap();
-        fs::write(project.0.join(edited), b"our skill").unwrap();
+        let missing = skill_path("evaluate");
+        let edited = skill_path("delegate");
+        fs::remove_file(project.0.join(&missing)).unwrap();
+        fs::write(project.0.join(&edited), b"our skill").unwrap();
         upgrade(&project.0, &[]).unwrap();
-        assert!(!project.0.join(missing).exists());
-        assert_eq!(fs::read(project.0.join(edited)).unwrap(), b"our skill");
+        assert!(!project.0.join(&missing).exists());
+        assert_eq!(fs::read(project.0.join(&edited)).unwrap(), b"our skill");
         let record: Record =
             toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
-        assert_eq!(record.files[missing], current().files[missing]);
+        assert_eq!(record.files[missing.as_str()], current().files[missing.as_str()]);
         let before = project.snapshot();
         upgrade(&project.0, &[]).unwrap();
         assert_eq!(project.snapshot(), before);
@@ -1028,14 +1081,27 @@ mod tests {
             project.install();
             fs::remove_file(project.0.join(RECORD)).unwrap();
             let missing = ".claude/skills/delegate-pane/hooks/hooks.json";
-            let new = ".claude/skills/evaluate/SKILL.md";
+            let new = skill_path("evaluate");
             // Never installed in this project's history: unlike `missing`, this
             // file should be added, even when the other files identify a kit.
-            fs::remove_file(project.0.join(new)).unwrap();
+            fs::remove_file(project.0.join(&new)).unwrap();
             if !identifiable {
                 for (path, _) in PROJECT_FILES {
-                    if !OWNED.contains(path) && *path != new {
+                    if !OWNED.contains(path) && *path != new.as_str() {
                         fs::write(project.0.join(path), b"our edited kit file").unwrap();
+                    }
+                }
+                // Links are kit files too: left pristine, they still identify
+                // the kit. Retarget them so the fixture is genuinely
+                // unidentifiable on the shared-skills layout; a no-op where
+                // those paths are real directories.
+                for name in SKILLS {
+                    let dest = project.0.join(skill_link(name));
+                    if fs::symlink_metadata(&dest)
+                        .is_ok_and(|m| m.file_type().is_symlink())
+                    {
+                        fs::remove_file(&dest).unwrap();
+                        std::os::unix::fs::symlink("../../edited-elsewhere", &dest).unwrap();
                     }
                 }
             }
@@ -1051,10 +1117,10 @@ mod tests {
             upgrade(&project.0, &[]).unwrap();
             assert!(!project.0.join(missing).exists());
             assert_eq!(
-                fs::read(project.0.join(new)).unwrap(),
+                fs::read(project.0.join(&new)).unwrap(),
                 PROJECT_FILES
                     .iter()
-                    .find(|(p, _)| *p == new)
+                    .find(|(p, _)| *p == new.as_str())
                     .unwrap()
                     .1
                     .as_bytes()
@@ -1165,13 +1231,13 @@ mod tests {
         let project = Project::new();
         project.install();
         let own = fs::read(project.0.join("AGENTS.md")).unwrap();
-        let skill = ".claude/skills/delegate/SKILL.md";
-        fs::remove_file(project.0.join(skill)).unwrap();
-        std::os::unix::fs::symlink("../../../AGENTS.md", project.0.join(skill)).unwrap();
-        upgrade(&project.0, &[skill.into()]).unwrap();
+        let skill = skill_path("delegate");
+        fs::remove_file(project.0.join(&skill)).unwrap();
+        std::os::unix::fs::symlink("../../../AGENTS.md", project.0.join(&skill)).unwrap();
+        upgrade(&project.0, std::slice::from_ref(&skill)).unwrap();
         assert_eq!(fs::read(project.0.join("AGENTS.md")).unwrap(), own);
         assert!(
-            !fs::symlink_metadata(project.0.join(skill))
+            !fs::symlink_metadata(project.0.join(&skill))
                 .unwrap()
                 .file_type()
                 .is_symlink()

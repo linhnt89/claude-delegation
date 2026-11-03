@@ -15,10 +15,20 @@ echo "$OUT" | grep -qi "git" || fail "init outside a git repo didn't say it need
 
 d init
 [ "$RC" -eq 0 ] || fail "init failed: $OUT"
-for f in AGENTS.md CLAUDE.md PLAN.md .delegate.toml docs/decisions evals/run evals/README.md \
-         .claude/skills/delegate/SKILL.md .claude/skills/distill/SKILL.md .claude/skills/evaluate/SKILL.md; do
+for f in AGENTS.md CLAUDE.md PLAN.md .delegate.toml docs/decisions evals/run evals/README.md; do
   [ -e "$PROJ/$f" ] || fail "init didn't add $f"
   echo "$OUT" | grep -q "added .*$f" || fail "init's output doesn't list $f"
+done
+for n in delegate distill evaluate; do
+  f="$(skill_file "$n" "$PROJ")"
+  [ -e "$PROJ/$f" ] || fail "init didn't add $f"
+  echo "$OUT" | grep -q "added .*$f" || fail "init's output doesn't list $f"
+  if [ -L "$PROJ/.claude/skills/$n" ]; then
+    [ -f "$PROJ/.agents/skills/$n/SKILL.md" ] || fail "init didn't add canonical .agents/skills/$n/SKILL.md"
+    [ "$(readlink "$PROJ/.claude/skills/$n")" = "../../.agents/skills/$n" ] || fail ".claude/skills/$n isn't the relative kit link: $(readlink "$PROJ/.claude/skills/$n")"
+    echo "$OUT" | grep -q "added .*\.claude/skills/$n" || fail "init's output doesn't list .claude/skills/$n"
+    cmp -s "$PROJ/.agents/skills/$n/SKILL.md" "$PROJ/.claude/skills/$n/SKILL.md" || fail "linked skill $n differs from canonical"
+  fi
 done
 [ -x "$PROJ/evals/run" ] || fail "evals/run is not executable"
 [ ! -e "$HOME/.config/delegate/workers.toml" ] || fail "init wrote the machine's workers.toml (that's delegate setup's job now)"
