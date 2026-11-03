@@ -4,6 +4,9 @@
      Status: todo | ready (spec written) | running | review | done -->
 
 ## Done
+- Decision 034 (2026-11-03, t120/t121): shared skills in `.agents/skills/`, linked from
+  `.claude/skills/`; init/upgrade migration, docs and layout-neutral tests merged.
+  Post-merge `scripts/check`: 321 tests pass, clippy clean.
 - Checks for decision 034 (2026-11-03, t119): S134, S135, S136 (hidden), P014 sees symlinks;
   S038, S039, S041, S042, S082 layout-neutral.
 - Any model can lead (2026-11-03, t115, decision 031): skills and README say "the lead";
@@ -22,37 +25,27 @@
   autopilot worktree were discarded.
 - Before that, see git history up to `archive/main-before-reset`.
 
-## Handoff (2026-11-03, awaiting merge approval)
-- Decisions 031–033 merged; secsw-code is upgraded. After decision 034 merges, upgrade
-  `trial` with the new binary (its kit files are uncommitted).
-- t121 round 1: independently authored (Muse) layout-neutral repairs for five unit tests and
-  S001, authorized by the user. Checks pass on main and t120; lead reviewed the test-only
-  diff. Its patch is already included unchanged in t120; merge t121 first, then t120.
-- t120 round 14: shared skill layout, migration, init/upgrade and docs implemented. Earlier
-  review findings fixed with regressions, including preservation, idempotence, exact link
-  targets, traversal safety, and rename-aside/link/cleanup with rollback on link failure.
-- Final lead verification: `scripts/check` passes (321 tests, clippy clean); 17 related
-  scenarios pass, including hidden S136/P029. Independent Claude-family review on the final
-  commit: 0 high, 0 medium, 1 low. No worker is running; neither task is merged.
-- Remaining low review finding: when `.claude` or `.claude/skills` is a regular file, full
-  upgrade reports affected skills but silently skips blocked pane files and says up to date.
-  No data loss. Ask whether to merge with this reporting limitation.
+## Handoff (2026-11-03, after decision 034 merge)
+- User approved; t121 then t120 merged. No open task state remains.
+- Post-merge `scripts/check` passes (321 tests, clippy clean). Before merge, 17 related
+  scenarios passed, including hidden S136/P029; final independent review: 0 high, 0 medium,
+  1 low (accepted below).
+- Next session: upgrade `trial` with the new binary (its kit files are uncommitted).
+  secsw-code was upgraded for decisions 031–033, before decision 034.
+- Accepted low reporting limitation: when `.claude` or `.claude/skills` is a regular file,
+  full upgrade reports affected skills but silently skips blocked pane files and says up
+  to date. No data loss.
 - Deferred limitations: trailing-slash command arguments; combined canonical/layout takes
   may require two invocations; conservative no-op refusal for symlinked skill ancestors;
   inherited init `.claude` ancestry behavior; crash-interrupted backup rename needs manual
-  recovery (no journal). Keep these visible if accepting the merge.
-- Merge dry-run via `git merge-tree --write-tree task/t121 task/t120` is conflict-free.
-  `PLAN.md` has uncommitted lead changes; preserve/commit them on main before merging.
+  recovery (no journal).
 
 ## Waiting for you
-- Merge t121 and t120, accepting the remaining low reporting limitation? Both are reviewed;
-  no implementation worker remains running.
+- None.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t121 | Layout-neutral repairs for five existing upgrade unit tests and S001, preserving assertions | 1 | review | – | standard | `scripts/check`, `evals/run S001`; compatible with main and t120 | Round 1 passed; diff reviewed, patch supplied to t120. Merge decision pending. |
-| t120 | Skills in `.agents/skills/`, linked from `.claude/skills/` (decision 034): symlink kit files in `init`/`upgrade`, migration of old projects, this repo and `delegate/templates/project/` moved, README (Pi trust prompt) | 2 | review | t121 | deep | the 034 scenarios, `checks_by: t119` | Round 14: 321 tests and 17 lead-run scenarios passed; final review 0 high/0 medium/1 low. Awaiting merge approval. `init.rs`, `upgrade.rs`, `scripts/kit-history`, kit paths |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
 ## Known, not fixed
