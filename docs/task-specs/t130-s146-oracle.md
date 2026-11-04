@@ -17,8 +17,8 @@ so live resource handling cannot hide gaps, wrong-pane reports or incomplete tur
 - `evals/README.md`
 
 ## Scope
-- In: `evals/lib/codex_identity_oracle.py`, `evals/tests/test_codex_identity_oracle.py`,
-  `scripts/check`, `evals/README.md`
+- In: `evals/lib/codex_identity_oracle.py`, `evals/tests/test_codex_identity_oracle*.py`,
+  `evals/tests/README.md`, `scripts/check`
 - Out: live driver, scenario files/checks, Rust/product code, kit, workers config,
   private profiles/evidence, S145, t131 files. Do not read rejected t129 artifacts.
 
@@ -45,7 +45,9 @@ so live resource handling cannot hide gaps, wrong-pane reports or incomplete tur
 - Add standard-library eval check tests to the standing `scripts/check` gate so
   they continue running after merge, while retaining Rust checks unchanged. Document
   `evals/tests/` as tests of eval infrastructure (not user-level product verdicts)
-  in `evals/README.md`. Do not change the kit runner/templates.
+  in `evals/tests/README.md`. Root `evals/README.md` mirrors an installed kit file:
+  leave it unchanged rather than introducing kit changes just for project-only tests.
+  The lead will document the project-only tests in AGENTS.md after merge.
 - Apply the contract's explicit verdict truth table and all specified time equalities;
   a_exit is observed process exit, not sent input. False setup/evidence flags always
   prevent product verdicts. Error-vs-counterexample ordering does not affect precedence.

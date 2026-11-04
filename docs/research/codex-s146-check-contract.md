@@ -119,8 +119,10 @@ Trace fields:
 - `boundaries: {a_launch, a_reply, a_exit, b_launch, b_reply, end}`; finite,
   strictly ordered: a_launch < a_reply < a_exit < b_launch < b_reply < end.
   a_exit means confirmed TUI process exit/foreground-shell return, not sent Ctrl-C.
-- `samples: [{time, pane, ok, identity}]`; identity is null (explicit unknown) or
-  `{source, agent, kind, value}`. Failed reads have ok=false, never silently drop them.
+- `samples: [{time, pane, ok, identity}]`; pane is the actual opaque string from
+  panes.A or panes.B, NEVER the role label 'A'/'B'. Unknown/unbound pane strings are
+  malformed; the oracle maps actual values back to roles. identity is null (explicit
+  unknown) or `{source, agent, kind, value}`. Failed reads have ok=false; retain them.
 - `daemon_samples: [{time, ok, instance}]`; instance is a redacted private token
   bound by the driver to boot id/PID/start ticks. No empty instance is valid.
 - `setup_valid: bool`, `cleanup_ok: bool`, `interrupted: bool`.
@@ -138,8 +140,11 @@ post-reply samples for both running TUIs. Every failed read in a required window
 prevents pass unless a concrete independently attested product failure is present
 anywhere in the trace (before OR after that read error).
 
-Wrong-pane A=B observed anywhere in B phase is failure; any foreign/mismatched
-qualified identity while a TUI is running after grace is failure. Explicit unknown
+Known qualified wrong-pane publication is failure even during startup grace:
+A publishing B's full qualified identity after A exits, or B publishing A's full
+qualified identity during B's phase. Compare source/agent/kind/value as one tuple;
+colliding string values in another namespace are not that counterexample.
+Any foreign/mismatched qualified identity while a TUI is running after grace is failure. Explicit unknown
 continuing through reporting deadline is failure only when successful observations
 attest it; absence of samples is error. A startup mismatch during grace cannot hide
 wrong-pane publication. A may retain A/be unknown after exit; it must never become B.
@@ -162,7 +167,10 @@ For fail precedence, serving-instance continuity can be broken (record the issue
 but independent completed thread identities and valid pane binding must still be
 established. Unknown before the deadline or after A exits is not counterevidence.
 A successful wrong report after deadline needs no persistence inference; missing
-samples are never explicit unknown. Authorization headers, auth.json, hook changes
+samples are never explicit unknown. A is running on [a_launch,a_exit), not at the
+observed exit boundary itself; unknown at exactly a_exit is permitted. B remains
+running through the inclusive final end boundary. Required identity/post-reply
+checks use those same half-open A and inclusive B windows. Authorization headers, auth.json, hook changes
 or leaked credential prerequisites invalidate setup: check_error, not a Codex
 attribution failure. Bounded polling cannot prove absence of sub-cadence transients.
 
