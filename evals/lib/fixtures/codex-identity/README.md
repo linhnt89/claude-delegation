@@ -27,13 +27,30 @@ an implementation pass. Unsupported or missing evidence remains a check error.
   not a complete captured environment. Parser tests construct complete byte snapshots
   from this field. `cmdline` preserves NUL separators and actual argument layout.
 
-## Coverage limits / outstanding captures
+## Additional lead captures
 
-These fixtures establish rollout and PID/proc shapes only. A complete live-wave
-fixture set still needs actual Herdr create/get/read responses over one persistent
-socket, the hook-approval screen and raw SSE exchange, and a redacted snapshot
-binding an open rollout fd to the serving process. Do not fill those gaps with
-invented observations or call this directory full live-interface acceptance.
+- `herdr-api.json`: real create/get/send envelopes and hook-review screen from a
+  separate fresh credential-free capture, with run/binary paths and terminal ID
+  redacted. The identity projection comes from the earlier real A sample, not a
+  fabricated successful get response. Herdr closes ordinary RPC connections after
+  ONE response: a persistent second request failed with BrokenPipeError. The driver
+  must connect per request, within its fixed cycle budget.
+- `local-responses.json`: actual POST path/body size and returned SSE bytes from
+  that capture, plus the installed sole SessionStart declaration with path redacted.
+  Request bodies are intentionally absent. Stub-generated response/message IDs
+  are model objects, NOT thread IDs.
+- `herdr-agent-state.sh`: genuine installed Herdr asset, byte-for-byte pinned hash;
+  from herdrdev/herdr commit 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01,
+  src/integration/assets/codex/herdr-agent-state.sh. Apache-2.0 license copied here.
+  Test input only: do not execute it as a substitute live hook.
+- `serving-fd.json`: separate completed real-turn capture with simultaneous actual
+  daemon/PID/proc/fd/rollout inode+device relationship, projected and redacted.
+  Run prefix, PID/boot/start/other stat numbers and inode/device replaced consistently;
+  fd number and exact managed argv shape preserved. This is NOT an extra A/B run
+  or proof of continuous serving-instance coverage. See live-interfaces research.
+
+These fixtures pin interface shapes, not full live feature acceptance. Trusted
+snapshot acquisition and continuity still need the reviewed real owner loop.
 
 Expected rollout prompt: `Reply with LOCAL_STUB_OK. Do not use tools.`
 Expected assistant reply: `LOCAL_STUB_OK`.

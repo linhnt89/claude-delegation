@@ -1,4 +1,4 @@
-# Task t133: Pure Codex rollout and process evidence readers (blocked draft)
+# Task t133: Pure Codex rollout and process evidence readers
 
 size: medium
 
@@ -16,10 +16,9 @@ oracle outside this component.
 - `evals/scenarios/S146-codex-local-provider-pane-attribution/scenario.md`
 
 ## Readiness
-DO NOT RUN until the lead adds the missing real serving-fd fixture, finalizes these
-APIs with the t131 consumer and obtains independent split-spec review. The current
-projected fixtures are deliberately not claimed to be full live-interface evidence.
-Run at explicit `--tier standard`; do not grant live opt-in for this pure task.
+Run only after independent split-spec review; explicit `--tier standard`, offline
+only. The lead has captured serving-fd evidence and pinned the t131 consumer below.
+Projected fixtures are interface examples, not a live scenario verdict.
 
 ## Scope
 - In: `evals/lib/codex_identity_evidence.py`,
@@ -28,14 +27,20 @@ Run at explicit `--tier standard`; do not grant live opt-in for this pure task.
   scenario.md/check wrappers, product/Rust/kit code, dependencies/worker configuration,
   authenticated data. No process, socket, network or filesystem access in this module.
 
-## Proposed API (review before activating)
+## API
 
 Standard library only. All arguments are in-memory snapshots supplied by t131.
 `EvidenceError` has a stable redacted `code`; no input IDs, paths, prompt text or
 raw parser exceptions in messages. Invalid input is never guessed into success.
 Boolean values do not count as integers.
 
-- `parse_rollout(data: bytes) -> dict | None`: UTF-8 JSONL. Return None for pending
+- `parse_rollout(data: bytes, *, prompt: str, reply: str) -> dict | None`: UTF-8 JSONL.
+  Match exactly one user message containing the exact prompt in input_text and one
+  assistant message containing the exact reply in output_text in the same turn.
+  Context-user messages before the matching prompt are permitted; any additional
+  user message after that prompt, repeated prompt, additional assistant message or
+  second started turn is ambiguous. A completed turn missing the expected messages
+  is an error, not pending. Return None for pending
   incomplete evidence, including one incomplete final line while a writer is active.
   Complete malformed lines, conflicting metadata, invalid ordering or invalid field
   types raise EvidenceError. Result on completion is
@@ -59,6 +64,9 @@ Boolean values do not count as integers.
   return the parse_rollout result only when exact expected prompt/reply are complete.
   No candidates is pending. A disappeared inventory entry is a check error. This
   function does not translate wall timestamps into oracle monotonic boundaries.
+  It calls parse_rollout with supplied prompt/reply. Partial final lines are ignored
+  only until newline; never ignore a malformed complete line. A complete turn
+  followed by an incomplete tail can still return its completed evidence.
 - `parse_pid_record(data: bytes, *, kind: str) -> dict`: kind is `daemon` or `updater`.
   Require JSON object, positive pid/startTicks, nonempty bootId, processStartTime
   string, actual observed processIdentity schema. Updater need not contain
@@ -75,8 +83,8 @@ Boolean values do not count as integers.
   `environ` (bytes, NUL-separated), `fd_targets` (list[str]). Require PID/start/boot
   agreement; exact validated executable and private CODEX_HOME (not substring or
   duplicate env entry); cmdline[0] equals expected executable. Daemon args must be
-  the captured real managed app-server form; updater args exactly app-server,
-  daemon, pid-update-loop. Require canonical absolute expected paths and component
+  exactly `app-server --listen unix:// --analytics-default-enabled --managed-daemon`;
+  updater args exactly `app-server daemon pid-update-loop`. Require canonical absolute expected paths and component
   containment beneath CODEX_HOME/packages. Reject `..`, deleted-exe/fd suffixes,
   mismatched argv and ambiguous env. If rollout is given, kind must be daemon,
   rollout must lie beneath CODEX_HOME/sessions, and its exact target must be in

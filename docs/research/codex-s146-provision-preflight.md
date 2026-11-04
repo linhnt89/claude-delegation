@@ -79,16 +79,18 @@ sequence's daemon; no preparation daemon may survive into A.
 `t133` parses snapshots only; it neither starts/stops processes nor asserts that
 a driver-supplied snapshot was safely acquired. Exact APIs are staged in its spec.
 
-## Gates still open
+## Subsequent preparation and open gates
 
-- Full live interface fixtures: persistent Herdr socket replies, actual hook trust
-  cues, SSE exchange and serving-process rollout-fd snapshot.
-- Independent review of component contracts, budgets and split specs.
-- Worker live opt-in remains NOT enabled: pinned paths and sandbox execution/access
-  have not been validated inside an actual worker. Offline component tests only.
-- The previously approved one-off Opus spec review is already consumed. A further
-  one-off invocation needs approval; do not silently reuse it or substitute another
-  provider, and do not edit workers.toml to bypass that boundary.
+- Full interface captures are now recorded in codex-s146-live-interfaces.md and
+  lead-owned fixtures: actual hook trust cues, SSE, serving-process rollout-fd
+  binding and Herdr envelopes. Ordinary Herdr RPC is NOT persistent: the server
+  closes after one response. Use bounded connect-per-request; no product change.
+- User approved another one-off Opus spec review through
+  pi:github-copilot/claude-opus-5.5@high and continuing the S146 check through green
+  merges. Review t132/t133/t131 together before workers start; no workers.toml edits.
+- This implementation wave is offline-only in workers. No real binary execution,
+  provisioning, live opt-in, personal profile access or sandbox escape. The lead
+  performs the reviewed unchanged live baseline gate after offline tests/review.
 
-No later task is ready yet. The pure t130 oracle is unchanged; S145 and S146 remain
-agreed scenarios without a merged live check or accepted automated verdict.
+Independent split-spec review still blocks starts. The pure t130 oracle is
+unchanged; S145 and S146 remain agreed without an accepted automated live verdict.

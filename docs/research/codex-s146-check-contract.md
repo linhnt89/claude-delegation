@@ -5,7 +5,8 @@ review (`codex-s146-spec-review.md`); this revision addresses its oracle ambigui
 and splits the later driver into smaller waves. No product/protocol changes. S145
 stays untouched. t130 is merged (6039a94), with 31 offline tests in the standing gate
 and a final zero-findings independent review. Live packages remain blocked until
-the fixtures/provisioning preflight and their split specs are complete.
+their split-spec review is complete. The lead has now captured concrete interfaces
+and a working fresh provisioning preflight; see codex-s146-live-interfaces.md.
 
 ## Packages and gates
 
@@ -19,9 +20,9 @@ the fixtures/provisioning preflight and their split specs are complete.
   is unmerged, because the runner otherwise only warns and runs without the rule.
 - Specs are staged in `docs/task-specs/`. t130 is complete; no later task is ready.
   Do not run the superseded oversized t131 spec. The later-wave specs/fixtures need
-  completion before any live task starts. Credential-free live opt-in in a worker
-  sandbox is permitted only after the lead validates its explicit pinned binary paths,
-  provisioning input and sandbox access; no credentials or sandbox escape allowed.
+  completion before any live task starts. The current wave is offline-only in
+  workers: no real binaries/provisioning or live opt-in. Lead runs the final reviewed
+  unchanged live driver; no credentials or sandbox escape allowed.
 - Configured standard candidates start with DeepSeek/Muse; deep candidates are GPT.
   Do not pin a model or edit workers.toml. If t130 falls back to GPT, t131's deep
   candidate pool will be empty: stop and ask, never bypass `checks_by`.
@@ -182,7 +183,9 @@ attribution failure. Bounded polling cannot prove absence of sub-cadence transie
 ## Resource and timing policy
 
 Single owning synchronous event loop, no forgotten sampling threads. Nonblocking
-PTY/API/process IO over persistent sockets; each operation <= 0.2s and the entire
+PTY/API/process IO; ordinary Herdr RPC uses a NEW Unix socket per request (the pinned
+server closes after one response, confirmed live/source). Connect/write/read together
+are one operation <=0.2s and the entire
 sample cycle (both panes plus daemon) <= 0.6s. This leaves margin under the 1s max
 gap; enforce cycle deadlines rather than adding independent timeout allowances.
 Use monotonic absolute deadlines. Active run <= 180s, reserve up to 60s for cleanup,
