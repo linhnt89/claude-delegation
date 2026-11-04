@@ -4,30 +4,32 @@ S146 is agreed. The actual t130/t131 specs received the authorized independent O
 review (`codex-s146-spec-review.md`); this revision addresses its oracle ambiguities
 and splits the later driver into smaller waves. No product/protocol changes. S145
 stays untouched. t130 is merged (6039a94), with 31 offline tests in the standing gate
-and a final zero-findings independent review. Live packages remain blocked until
-their split-spec review is complete. The lead has now captured concrete interfaces
-and a working fresh provisioning preflight; see codex-s146-live-interfaces.md.
+and a final zero-findings independent review. Authorized combined split-spec review
+completed (`codex-s146-split-review.md`); lead corrections extracted t138 and closed
+fixture/API gaps. t132 preparation and t133 evidence readers are now merged after
+independent reviews; t138 is running. The final t131/live gate still depends on
+merged resources. Concrete interfaces/preflight: codex-s146-live-interfaces.md.
 
 ## Packages and gates
 
 - t130: merged pure trace oracle/adversarial tests and standing test gate. Non-GPT
   DeepSeek author verified by merge Worker trailer. No live processes/profiles.
-- t132: local SSE stub, fresh profile/provisioning and genuine hook validation.
-- t133: pure rollout/PID/proc evidence readers, tested against lead-redacted fixtures.
+- t132: merged local SSE stub, fresh profile/provisioning and genuine hook validation.
+- t133: merged pure rollout/PID/proc readers, tested against lead-redacted fixtures.
 - t138: trusted file/proc acquisition, owned process/subreaper handles and one-shot
   RPC resource helpers/tests, extracted per independent review; depends on t133.
 - t131: single-owner live loop, signals/cleanup, wrapper and docs, explicitly
   `--tier deep`; depends on merged t130/t132/t133/t138 and their actual Worker trailers.
   `checks_by: t130` enforces oracle/driver family separation; never start while t130
   is unmerged, because the runner otherwise only warns and runs without the rule.
-- Specs are staged in `docs/task-specs/`. t130 is complete; no later task is ready.
-  Do not run the superseded oversized t131 spec. The later-wave specs/fixtures need
-  completion before any live task starts. The current wave is offline-only in
+- Current specs are in `docs/task-specs/`; t130/t132/t133 are complete. Do not run
+  the superseded oversized t131 spec; current t131 depends on merged t138 and peer
+  API verification before starting. The current wave is offline-only in
   workers: no real binaries/provisioning or live opt-in. Lead runs the final reviewed
   unchanged live driver; no credentials or sandbox escape allowed.
 - Configured standard candidates start with DeepSeek/Muse; deep candidates are GPT.
-  Do not pin a model or edit workers.toml. If t130 falls back to GPT, t131's deep
-  candidate pool will be empty: stop and ask, never bypass `checks_by`.
+  Do not pin a model or edit workers.toml. t130's verified DeepSeek authorship leaves
+  t131's GPT deep pool eligible. Never bypass `checks_by` if capacity disappears.
 - A later remedy must exclude ALL check-author families. A GPT-authored t131 means
   the current GPT-only deep remedy pool is blocked. Ask for independent non-GPT
   deep capacity before that wave; no remedy worker is scheduled by this plan.
