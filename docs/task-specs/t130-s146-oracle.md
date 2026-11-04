@@ -9,13 +9,16 @@ so live resource handling cannot hide gaps, wrong-pane reports or incomplete tur
 
 ## Context (read these, nothing more)
 - `AGENTS.md`
+- `docs/decisions/036-codex-attribution-regression-boundary.md`
+- `docs/research/codex-s146-spec-review.md`
 - `docs/research/codex-s146-check-contract.md`
 - `docs/research/codex-attribution-redesign-review.md`
 - `evals/scenarios/S146-codex-local-provider-pane-attribution/scenario.md`
 - `evals/README.md`
 
 ## Scope
-- In: `evals/lib/codex_identity_oracle.py`, `evals/tests/test_codex_identity_oracle.py`
+- In: `evals/lib/codex_identity_oracle.py`, `evals/tests/test_codex_identity_oracle.py`,
+  `scripts/check`, `evals/README.md`
 - Out: live driver, scenario files/checks, Rust/product code, kit, workers config,
   private profiles/evidence, S145, t131 files. Do not read rejected t129 artifacts.
 
@@ -39,6 +42,13 @@ so live resource handling cannot hide gaps, wrong-pane reports or incomplete tur
   unused daemon, interruption and cleanup failure, contradictory evidence and
   multiple calls not leaking state. Include property-like seeded mutations around
   grace/dwell/gap boundaries; print seed on failure.
+- Add standard-library eval check tests to the standing `scripts/check` gate so
+  they continue running after merge, while retaining Rust checks unchanged. Document
+  `evals/tests/` as tests of eval infrastructure (not user-level product verdicts)
+  in `evals/README.md`. Do not change the kit runner/templates.
+- Apply the contract's explicit verdict truth table and all specified time equalities;
+  a_exit is observed process exit, not sent input. False setup/evidence flags always
+  prevent product verdicts. Error-vs-counterexample ordering does not affect precedence.
 - This task contributes to S146; it must not claim a live eval pass or add a scenario
   check before the driver exists. If the written contract is ambiguous, ask before coding.
 
@@ -51,8 +61,10 @@ so live resource handling cannot hide gaps, wrong-pane reports or incomplete tur
 ## Constraints
 No dependencies or product APIs. Keep the implementation independently reviewable;
 stop instead of growing a generic event engine. Report actual selected worker family.
-The lead must verify a non-GPT author before scheduling GPT-only deep t131; no model
-pin or worker configuration change is authorized by this spec.
+The lead runs `--tier standard` explicitly, stops on any GPT selection or step-up,
+then verifies the non-GPT Worker trailer before scheduling deep t131. No model pin
+or worker configuration change is authorized by this spec. Later live-wave tasks
+remain blocked on split specs and redacted-interface/provisioning preflight.
 
 ## If unsure
 STOP. Write the blocking question in `.task/REPORT.md`; do not improvise the contract.

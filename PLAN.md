@@ -86,13 +86,21 @@
   They pin trace/coverage, binary/version and genuine hook hash, provisioning opt-in,
   independent rollout/serving-daemon evidence, resource ownership, signal cleanup,
   offline Acceptance and the lead-only expected-failing live baseline gate.
-- Next USER GATE: authorize a further independent Opus plan review of the actual
-  t130/t131 specs (prior one-off review is complete). No check implementation before
-  that review. No task state created or worker started. S145 unchanged; no product patch.
-  Check authorship capacity remains an explicit gate: t130 standard may fall back to
-  GPT, which would exhaust t131's deep pool under checks_by; stop instead of overriding.
-  GPT-authored t131 also blocks the later GPT-only deep remedy under family independence;
-  that later wave needs separately approved non-GPT deep capacity, not a silent override.
+- Authorized Opus spec review completed: 2 high, 4 medium, 5 low, retained in
+  `docs/research/codex-s146-spec-review.md`. t130's time/precedence ambiguities are
+  resolved by an explicit contract truth table; its scope now wires Python check-tests
+  into scripts/check and documents evals/tests. Decision 036 records approved boundaries.
+- First implementation wave: t130 only, explicit --tier standard. Stop on GPT selection
+  or step-up; verify the non-GPT Worker trailer after merge. No model/config override.
+  The oversized t131 task state is discarded, replaced by a blocked smaller draft.
+  Later live work is split into t132 preparation/stub, t133 pure evidence readers and
+  t131 final loop/cleanup. Those waves need concrete redacted interface fixtures,
+  working pinned provisioning/budgets, component APIs and independent spec review
+  before any worker starts. S145 unchanged; no product patch.
+- Later gates: patched-build policy/delivery, safe authenticated S145 check and
+  concurrent/resume/mixed-version scenarios are explicit planned rows. GPT-authored
+  check components block the current GPT-only deep remedy pool: request independent
+  non-GPT capacity for that wave, never silently bypass checks_by.
   Codex target approval is not schema-change approval.
 - Rejected t129 draft and latest offline reproducers are retained privately at
   `/var/tmp/ho-codex.OAzcs8/rejected-t129/` while available. Treat them as unsafe
@@ -129,9 +137,15 @@
 |----|------|------|--------|------------|------|------------|-------|
 | t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex shared-daemon attribution remedy or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
-| t130 | Pure S146 trace oracle + adversarial checks | codex-check-1 | todo | renewed independent spec review | standard | oracle unit tests + scripts/check; contributes to agreed S146, not live acceptance | spec staged in docs/task-specs; non-GPT authorship needed for t131 capacity; no worker started |
-| t131 | Credential-free real Codex/Herdr S146 driver | codex-check-2 | todo | t130 + renewed independent spec review | deep | resource tests + honest no-opt-in skip + lead-run genuine wrong-pane baseline failure | spec staged; checks_by t130; no authenticated access; no worker started |
-| t128 | Codex shared-daemon attribution regression and bounded remedy | observer-codex | todo | t130/t131 + safe S145 check + independent plan review + remedy design + independent author capacity | deep | S145 through real authenticated isolated Codex/Herdr; no wrong-pane attribution | t129 discarded as unsafe; current GPT-only deep capacity cannot implement after GPT-authored checks; no protocol design approved |
+| t130 | Pure S146 trace oracle + adversarial checks + standing test gate | codex-check-1 | ready | completed independent spec review + ambiguity corrections | standard | oracle unit tests + scripts/check; contributes to S146, not live acceptance | explicit --tier standard; stop on GPT selection/step-up; non-GPT merge Worker trailer required before live wave |
+| t132 | Local SSE stub, fresh profile and pinned provisioning/hook validation | codex-check-2 | todo | concrete fixtures + working provision preflight + split spec review | deep | offline preparation/safety tests; no authenticated access | split out of oversized t131; needs exact component API and budget |
+| t133 | Pure rollout/PID/proc evidence readers | codex-check-2 | todo | lead-redacted real-format fixtures + split spec review | standard | fixture-driven binding/continuity/ownership tests | separate files from t132; no process control; parser APIs precede t131 |
+| t131 | S146 final owner loop, signals/cleanup and wrapper | codex-check-3 | todo | merged t130/t132/t133 + concrete API fixtures + spec review | deep | resource tests + asserted no-opt-in skip + genuine lead-run wrong-pane baseline FAIL | explicit --tier deep; checks_by t130 only after its Worker trailer exists; blocked staged draft replaces oversized spec |
+| t134 | Pinned external Codex build and patch delivery | codex-remedy-prep | todo | approved remedy contract | deep | reproducible baseline/patched artifact digests and worker-runnable source tests | no product implementation until exact contract approved |
+| t135 | Safe authenticated S145 check | codex-auth-check | todo | reviewed S146 components + separately isolated user login | deep | honest auth gate through real integration, no credential exposure | no authenticated profile currently retained; needs independent spec review |
+| t136 | Concurrent/resume and mixed-version evaluation definition | codex-remedy-evals | todo | user design/approval | standard | approved scenarios before remedy acceptance specs | no check/scenario intent invented as accepted |
+| t137 | Check-author-owned patched-binary version/digest policy | codex-remedy-checks | todo | t131/t135 + t134 delivery contract | standard | same real attribution checks can exercise explicit patched artifacts | check-author family required; no remedy author changing its own oracle |
+| t128 | Codex shared-daemon attribution regression and bounded remedy | observer-codex | todo | t131/t134/t135/t136/t137 + independent review + remedy design + author capacity | deep | S145 AND S146 plus approved concurrent/resume/mixed-version checks; no wrong-pane attribution | current GPT-only deep pool blocked after GPT-authored checks; no protocol design approved |
 | t127 | Production observer identity/instance/attempt contract | observer-contract | todo | prototype evidence + user design | deep | reconcile decisions 009/031/035; stable task instances and per-fallback attempt identity without weakened P030/P032 | design first; no production schema changes authorized by the prototype; blocks full property completion |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 

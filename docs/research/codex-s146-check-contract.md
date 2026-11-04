@@ -1,15 +1,27 @@
 # S146 check contract — proposed implementation boundary
 
-S146 is agreed; this private eval contract and staged task specs still need independent
-plan review. No Codex/Herdr product or public protocol changes. S145 stays untouched.
+S146 is agreed. The actual t130/t131 specs received the authorized independent Opus
+review (`codex-s146-spec-review.md`); this revision addresses its oracle ambiguities
+and splits the later driver into smaller waves. No product/protocol changes. S145
+stays untouched. t130 is the first implementation wave; live packages remain blocked
+until the fixtures/provisioning preflight and their split specs are complete.
 
 ## Packages and gates
 
-- t130: pure trace oracle and adversarial tests, standard tier, no processes/profiles.
-- t131: Linux credential-free live driver and resource-safety tests, deep tier,
-  depends on merged t130; `checks_by: t130` enforces oracle/driver family separation.
-- Both specs are staged in `docs/task-specs/`; no worker starts before plan review.
-  Import them with `delegate new` only when the review is authorized.
+- t130: pure trace oracle/adversarial tests and standing test gate, explicitly
+  `--tier standard`, no live processes/profiles. Stop on a GPT author/step-up;
+  record actual selected family before merging.
+- t132: local SSE stub, fresh profile/provisioning and genuine hook validation.
+- t133: pure rollout/PID/proc evidence readers, tested against lead-redacted fixtures.
+- t131: single-owner live loop, signals/cleanup, wrapper and docs, explicitly
+  `--tier deep`; depends on merged t130/t132/t133 and their actual Worker trailers.
+  `checks_by: t130` enforces oracle/driver family separation; never start while t130
+  is unmerged, because the runner otherwise only warns and runs without the rule.
+- Specs are staged in `docs/task-specs/`. Only t130 is currently implementation-ready;
+  do not run the superseded oversized t131 spec. The later-wave specs/fixtures need
+  completion before any live task starts. Credential-free live opt-in in a worker
+  sandbox is permitted only after the lead validates its explicit pinned binary paths,
+  provisioning input and sandbox access; no credentials or sandbox escape allowed.
 - Configured standard candidates start with DeepSeek/Muse; deep candidates are GPT.
   Do not pin a model or edit workers.toml. If t130 falls back to GPT, t131's deep
   candidate pool will be empty: stop and ask, never bypass `checks_by`.
@@ -20,7 +32,9 @@ plan review. No Codex/Herdr product or public protocol changes. S145 stays untou
 ## Driver inputs and boundaries
 
 No opt-in: exit 77 before reading any profile, resolving binaries, spawning processes
-or making connections. Opt-in is `DELEGATE_CODEX_LOCAL_PROBE=1`.
+or making connections. Non-Linux also exits 77 before side effects even if opted in.
+Opt-in is `DELEGATE_CODEX_LOCAL_PROBE=1`. Missing prerequisites AFTER opt-in on Linux
+are broken setup (exit 3), matching S146's opted-in-broken-setup rule.
 
 Required explicit absolute executable paths: `DELEGATE_CODEX_BIN` and
 `DELEGATE_HERDR_BIN`. Resolve symlinks once, record canonical path, file digest and
@@ -98,10 +112,13 @@ Trace fields:
 - `version: 1`, `panes: {A: actual_id, B: actual_id}` (distinct opaque nonempty strings).
 - `threads: {A: {id, source: 'herdr:codex', agent: 'codex', kind: 'id',
   started, completed, evidence_valid, serving_instance}, B: ...}`.
-  Times are monotonic seconds. Completed > started; independent ids are distinct.
+  Times are monotonic seconds; independent ids are distinct. For each label,
+  started equals its launch boundary and completed equals its reply boundary:
+  these are driver-observed times, not wall-clock rollout timestamps.
   evidence_valid is set only after driver checks the independent evidence above.
 - `boundaries: {a_launch, a_reply, a_exit, b_launch, b_reply, end}`; finite,
-  ordered with a_reply < a_exit < b_launch and b_reply < end.
+  strictly ordered: a_launch < a_reply < a_exit < b_launch < b_reply < end.
+  a_exit means confirmed TUI process exit/foreground-shell return, not sent Ctrl-C.
 - `samples: [{time, pane, ok, identity}]`; identity is null (explicit unknown) or
   `{source, agent, kind, value}`. Failed reads have ok=false, never silently drop them.
 - `daemon_samples: [{time, ok, instance}]`; instance is a redacted private token
@@ -116,9 +133,10 @@ from max(its reply, its launch + 10) to its exit/end, not merely a historical ma
 Sample target cadence 0.2s, maximum admitted gap 1s including edges.
 Cover both panes from B launch to end;
 cover A from A launch through its post-exit transition to B. Daemon coverage is
-required from A's first completed observation through end. Require successful
+required on the closed interval [a_reply, end]. Require successful
 post-reply samples for both running TUIs. Every failed read in a required window
-prevents pass unless concrete independently attested product failure already exists.
+prevents pass unless a concrete independently attested product failure is present
+anywhere in the trace (before OR after that read error).
 
 Wrong-pane A=B observed anywhere in B phase is failure; any foreign/mismatched
 qualified identity while a TUI is running after grace is failure. Explicit unknown
@@ -127,20 +145,34 @@ attest it; absence of samples is error. A startup mismatch during grace cannot h
 wrong-pane publication. A may retain A/be unknown after exit; it must never become B.
 Correctness is source/agent/kind/value equality, not merely equal value.
 
-Validate records before trusting concrete failure evidence: structural validity,
-independent thread identity/completion evidence and real distinct pane binding are
-required to call a mismatch product failure. With these established, concrete
-wrong-pane/mismatch observations retain fail precedence over later read gaps,
-cleanup errors or interruption; list those additional issues too. Without concrete
-counterevidence, incomplete setup, coverage, serving-instance proof, daemon
-continuity or cleanup means check_error. Never turn an untrusted malformed trace
-into a product verdict. Bounded polling is not proof against sub-cadence transients.
+The pure oracle checks only distinct nonempty opaque pane strings; the driver,
+not the oracle, proves they came from real pane-create responses.
+
+Verdict precedence (independent of error/counterexample temporal order):
+| Preconditions / observation | Verdict |
+| --- | --- |
+| Malformed schema/types/nonfinite or inconsistent time/binding data | check_error |
+| setup_valid=false, or either independent thread evidence_valid=false | check_error, even if a sample appears wrong |
+| Valid setup/schema/bindings/completed threads plus concrete wrong qualified identity (including A=B) | fail, retaining coverage/daemon/cleanup/interruption issues |
+| Valid evidence plus explicit unknown on a successful read at/after that pane's reporting deadline while running | fail, retaining additional issues |
+| No concrete counterexample, but required coverage/serving-instance proof/continuity/cleanup missing or interrupted | check_error |
+| All required coverage, identity, daemon and cleanup conditions satisfied | pass |
+
+For fail precedence, serving-instance continuity can be broken (record the issue),
+but independent completed thread identities and valid pane binding must still be
+established. Unknown before the deadline or after A exits is not counterevidence.
+A successful wrong report after deadline needs no persistence inference; missing
+samples are never explicit unknown. Authorization headers, auth.json, hook changes
+or leaked credential prerequisites invalidate setup: check_error, not a Codex
+attribution failure. Bounded polling cannot prove absence of sub-cadence transients.
 
 ## Resource and timing policy
 
 Single owning synchronous event loop, no forgotten sampling threads. Nonblocking
-PTY/API/process IO; individual operations <= 0.5s during observed windows. Use
-monotonic absolute deadlines. Active run <= 180s, reserve up to 60s for cleanup,
+PTY/API/process IO over persistent sockets; each operation <= 0.2s and the entire
+sample cycle (both panes plus daemon) <= 0.6s. This leaves margin under the 1s max
+gap; enforce cycle deadlines rather than adding independent timeout allowances.
+Use monotonic absolute deadlines. Active run <= 180s, reserve up to 60s for cleanup,
 so final result precedes the scenario's 300s outer timeout. SIGTERM/SIGINT enter
 the same bounded cleanup path and cannot yield pass. Test interruption at each
 resource-acquisition and A/B phase, including cleanup.
