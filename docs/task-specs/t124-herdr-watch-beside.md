@@ -11,8 +11,11 @@ interactive screen, launcher and config snippet are t140.
 
 ## Readiness
 - t139 merged (origin, instance, Herdr client, workers without `HERDR_*`).
-- Lead: `signal-hook` fetched into the cargo cache (`cargo fetch` in the task worktree;
-  the sandbox's `~/.cargo` is read-only).
+- Done by the lead: `signal-hook = "0.4.6"` is in the cargo cache, with
+  `signal-hook-registry 1.4.8` and the `libc 0.2.191` delegate already locks. The
+  sandbox's `~/.cargo` is read-only, so add exactly that version and build offline. Use
+  `signal_hook::flag::register` (a safe function). Its `BorrowSignalSafe` trait is the
+  crate's own `unsafe`, not ours.
 - S148 automated (fails until built). Hidden S150 runs at review.
 
 ## Context (read these, nothing more)
