@@ -133,10 +133,11 @@ cat >"$EVALS_WORK/keys2.json" <<EOF
 EOF
 mkdir -p "$EVALS_WORK/pane2"
 side_pane "$EVALS_WORK/pane2" "$EVALS_WORK/keys2.json" &
+PANE2=$!   # wait for this driver only: the Herdr stand-in runs in the background too
 sleep 5
 d discard t703; [ "$RC" -eq 0 ] || { echo "setup: discard t703 failed: $OUT"; exit 3; }
 flag discarded
-wait
+wait "$PANE2"
 problem="$(python3 - "$EVALS_WORK/pane2" <<'PY'
 import re, sys
 d = sys.argv[1]
