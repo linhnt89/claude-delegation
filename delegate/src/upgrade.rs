@@ -1019,12 +1019,16 @@ impl Plan {
 }
 
 pub fn upgrade(dir: &Path, paths: &[String]) -> Result<()> {
+    upgrade_with_kits(dir, paths, &history()?)
+}
+
+fn upgrade_with_kits(dir: &Path, paths: &[String], kits: &[Kit]) -> Result<()> {
     let root = PathBuf::from(
         git(dir, &["rev-parse", "--show-toplevel"])
             .context("not inside a git repository; enter your project and run delegate init")?,
     );
     let now = current();
-    let mut kits = history()?;
+    let mut kits = kits.to_vec();
     // A binary can be built with modified templates without a regenerated catalog.
     // Its own embedded kit is always known, independently of the catalog.
     if !kits.iter().any(|k| k.id == now.id) {
@@ -2272,8 +2276,42 @@ mod tests {
         write_file(&project.0.join(path), body.as_bytes()).unwrap();
     }
 
+    /// Today's kit at the retired `.claude/skills/<name>/SKILL.md` layout. No
+    /// project ever shipped that kit, so tests build it instead of relying on a
+    /// fake catalog entry. It goes first so `identify` prefers it to a real
+    /// historical kit that happens to share today's skill bodies.
+    fn legacy_kit() -> Kit {
+        let now = current();
+        let mut files = now.files.clone();
+        for (link, _) in PROJECT_LINKS {
+            let name = link.rsplit('/').next().unwrap();
+            let hash = files[&skill_path(name)].clone();
+            files.remove(*link);
+            files.insert(format!("{link}/SKILL.md"), hash);
+        }
+        let mut lines = String::new();
+        for (path, hash) in &files {
+            lines.push_str(path);
+            lines.push(' ');
+            lines.push_str(hash);
+            lines.push('\n');
+        }
+        Kit {
+            id: sha256::hex(lines.as_bytes())[..12].to_owned(),
+            files,
+            templates: now.templates,
+        }
+    }
+
+    fn history_with_legacy_layout() -> Vec<Kit> {
+        let mut kits = history().unwrap();
+        kits.insert(0, legacy_kit());
+        kits
+    }
+
     #[test]
     fn migrated_skills_do_not_reinfer_retired_entries_from_head() {
+        let kits = history_with_legacy_layout();
         for recorded in [false, true] {
             let project = Project::new();
             let mut record = project.install();
@@ -2293,7 +2331,7 @@ mod tests {
                 fs::remove_file(project.0.join(RECORD)).unwrap();
             }
             project.commit();
-            upgrade(&project.0, &[]).unwrap();
+            upgrade_with_kits(&project.0, &[], &kits).unwrap();
             let first = project.snapshot();
             let installed: Record =
                 toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
@@ -2302,7 +2340,7 @@ mod tests {
                 assert!(!installed.files.contains_key(&format!("{}/SKILL.md", skill_link(name))));
             }
             // HEAD still contains the old directories until the owner commits.
-            upgrade(&project.0, &[]).unwrap();
+            upgrade_with_kits(&project.0, &[], &kits).unwrap();
             assert_eq!(first, project.snapshot());
         }
     }
@@ -2503,6 +2541,29 @@ mod tests {
             current().files,
             "run scripts/kit-history before building"
         );
+    }
+
+    #[test]
+    fn history_lists_only_shipped_kits() {
+        let kits = history().unwrap();
+        let now = current();
+        let legacy = legacy_kit();
+        assert_eq!(
+            kits.iter().filter(|kit| kit.id == now.id).count(),
+            1,
+            "history must contain the current kit exactly once"
+        );
+        let (newest, older) = kits.split_last().unwrap();
+        assert_eq!(newest.id, now.id, "the current kit must be last");
+        assert_eq!(newest.files, now.files);
+        for kit in older {
+            assert_ne!(kit.id, now.id, "{} repeats the current kit id", kit.id);
+            assert_ne!(
+                kit.files, legacy.files,
+                "{} is today's kit under the retired skill layout; build it in tests instead",
+                kit.id
+            );
+        }
     }
 
     #[test]
@@ -2916,6 +2977,7 @@ mod tests {
 
     #[test]
     fn old_skill_pointers_and_files_preserve_legacy_evidence() {
+        let kits = history_with_legacy_layout();
         let link = ".claude/skills/delegate";
         let old = format!("{link}/SKILL.md");
         for recorded in [false, true] {
@@ -2949,7 +3011,7 @@ mod tests {
                 let mut plan = Plan::default();
                 plan.skills(
                     &project.0,
-                    &history().unwrap(),
+                    &kits,
                     &current(),
                     &mut record.clone(),
                     None,
@@ -2962,7 +3024,7 @@ mod tests {
                     .unwrap();
                 assert!(kept.contains("delegate upgrade .claude/skills/delegate"));
                 assert!(!kept.contains("git diff"));
-                upgrade(&project.0, &[]).unwrap();
+                upgrade_with_kits(&project.0, &[], &kits).unwrap();
                 assert!(fs::symlink_metadata(project.0.join(".agents/skills/delegate")).is_err());
                 let after: Record =
                     toml::from_str(&fs::read_to_string(project.0.join(RECORD)).unwrap()).unwrap();
@@ -2972,9 +3034,9 @@ mod tests {
                 }
                 assert!(fs::read_link(project.0.join(".claude/skills/distill")).is_ok());
                 let before = project.snapshot();
-                upgrade(&project.0, &[]).unwrap();
+                upgrade_with_kits(&project.0, &[], &kits).unwrap();
                 assert_eq!(project.snapshot(), before);
-                upgrade(&project.0, &[link.into()]).unwrap();
+                upgrade_with_kits(&project.0, &[link.into()], &kits).unwrap();
                 assert_eq!(
                     fs::read_link(project.0.join(link)).unwrap(),
                     Path::new("../../.agents/skills/delegate")
