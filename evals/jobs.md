@@ -67,6 +67,12 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
   (`evals/lib/herdr_standin.py`, modelled on the lead's private probe). They fail until
   t139/t124 are built. The lead validated the S148/S150 checks against a throwaway
   contract-following fake, and against broken variants that the checks rejected.
+- Decision 039 (user's choice after plan review): unreadable tasks are isolated, so hidden
+  S150 now also expects `unavailable · <id>`, and makes its outage an unlistable task store.
+- User approved S151 (t140) on 2026-11-04: `--beside` launch, keyboard inspection, inert
+  task text, terminal restore, sidebar snippet. Its launch bullet was reworded to match
+  Herdr 0.9.5 (a fixed typed command; paths go through the split's cwd and env).
+  Checks never reach the lead's real Herdr: `common.sh` unsets every `HERDR_*`.
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->

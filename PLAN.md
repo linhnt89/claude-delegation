@@ -19,7 +19,10 @@
 - Scenarios done (user-approved): S147 (t139) and S148 (t124) are automated and fail
   until built. Hidden S149/S150 hold their failure paths. Stand-in Herdr socket:
   `evals/lib/herdr_standin.py`; side-pane driver: `evals/lib/watch_pane.py`.
-  NEXT: independent plan review of both specs, then delegate t139.
+  Plan review (GPT-6.1 Sol): 0 high, 5 medium, 1 low. All fixed. User chose signal-hook,
+  isolating unreadable tasks and splitting t124/t140 (decision 039). Hidden S150 revised
+  to match. S151 (t140) approved and automated (fails until built).
+  NEXT: plan re-review of t139/t124/t140 → fix → delegate t139.
 - Later, optional: ask upstream Sheprd for a mod data source (agent identity + external
   data) if per-task clickable rows or native cards prove needed.
 - No active delegated tasks. t138 diagnostics remain under
@@ -50,8 +53,9 @@
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t139 | Record Herdr lead origin + task instance; strip HERDR_* from workers | observer-2 | todo | plan review | standard | `scripts/check`, S055 S056 S057 S061 P009 S147 | spec drafted; Pi/Claude supported, Codex unsupported, never fails `new` |
-| t124 | `delegate watch --beside` side pane + Herdr sidebar task tokens | observer-3 | todo | t139 merged, plan review | standard | `scripts/check`, S148 S055 S056 S057 P009 | spec drafted; variant B; never edits Herdr config; tokens TTL + cleared on identity change |
-| t125 | Independent observer property checks | observer-4 | todo | t124, t139 | standard | P030–P033 through status JSON and the side pane's Herdr reports (stand-in socket), with seeded action sequences | max four properties; resolve scope gaps first; family independent from implementation; no full acceptance from reduced coverage |
+| t124 | Side-pane reporter: lead's tasks as Herdr sidebar tokens, bounded fallible reader, quit/signals | observer-3 | todo | t139 merged, signal-hook fetched, plan re-review | standard | `scripts/check`, S148 S055 S056 S057 P009 (+hidden S150) | decision 039: signal-hook allowed; unreadable task isolated as `unavailable`; never false-empty |
+| t140 | Interactive side pane keys, `--beside` launcher, `--sidebar-config`, skill text | observer-4 | todo | t124 merged | standard | `scripts/check`, S151 S148; lead-run real Pi/Claude walkthrough (S137/S138) | split from t124 by decision 039 |
+| t125 | Independent observer property checks | observer-5 | todo | t124, t139, t140 | standard | P030–P033 through status JSON and the side pane's Herdr reports (stand-in socket), with seeded action sequences | max four properties; resolve scope gaps first; family independent from implementation; no full acceptance from reduced coverage |
 | t127 | Production observer attempt identity, retention, fallback | observer-contract | todo | t124 in use + user design | deep | per-fallback attempt identity, closed-lead/merge retention, cross-host visibility, without weakened P030/P032 | origin + task instance moved to t139 (038); the rest still design-first |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read hidden scenarios/data today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | separate sandbox design; unchanged by reduced observer scope |
 

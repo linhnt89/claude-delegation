@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stand-in Herdr 0.9.5 socket for checks: `pane.get` and `pane.report_metadata` only.
+"""Stand-in Herdr 0.9.5 socket for checks: pane.get, pane.report_metadata, pane.split, pane input.
 
     herdr_standin.py <socket> <panes.json> <requests.jsonl>
 
@@ -11,6 +11,8 @@ a check can change a pane mid-run. Each pane is keyed by its id:
                                  "kind": "path", "value": "/home/u/s.jsonl"}},
      "w1:p2": {"mode": "error"}}
 
+`pane.split` answers a new pane id (w1:p101, ...) with the requested cwd and focus;
+`pane.send_input`/`send_text`/`send_keys` answer ok. Both only record: they run nothing.
 `mode` (optional) misbehaves on `pane.get`: error | wrong_pane | wrong_id | slow |
 oversize | garbage | close. `pane.report_metadata` updates that pane's tokens the way
 Herdr 0.9.5 did in the lead's probe (docs/research/herdr-sidebar-tokens-probe.md):
@@ -30,6 +32,7 @@ SOCK, PANES, LOG = sys.argv[1:4]
 TOKENS = PANES + ".tokens.json"
 lock = threading.Lock()
 tokens = {}  # pane -> key -> (value, expires_at or None)
+next_pane = 100  # ids handed out by pane.split
 
 
 def load_panes():
@@ -138,6 +141,21 @@ def handle(conn):
                         exp = time.time() + ttl / 1000 if isinstance(ttl, (int, float)) else None
                         keys[key] = (value, exp)
                 save_tokens()
+            conn.sendall(envelope(rid, {"type": "ok"}))
+        elif method == "pane.split":
+            target = params.get("target_pane_id")
+            if target not in panes:
+                conn.sendall(envelope(rid, error=("pane_not_found", f"pane {target} not found")))
+                return
+            with lock:
+                global next_pane
+                next_pane += 1
+                new_id = f"{target.split(':')[0]}:p{next_pane}"
+            info = {"pane_id": new_id, "workspace_id": target.split(":")[0],
+                    "agent_status": "unknown", "cwd": params.get("cwd"),
+                    "focused": bool(params.get("focus"))}
+            conn.sendall(envelope(rid, {"type": "pane_info", "pane": info}))
+        elif method in ("pane.send_input", "pane.send_text", "pane.send_keys"):
             conn.sendall(envelope(rid, {"type": "ok"}))
         else:
             conn.sendall(envelope(rid, error=("unknown_method", f"unknown method {method}")))

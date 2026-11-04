@@ -23,8 +23,11 @@ stop inheriting Herdr hints, so a worker's hooks can't overwrite the lead pane's
 - In: `delegate/src/origin.rs` (new), `delegate/src/main.rs` (module line only),
   `delegate/src/commands.rs`, `delegate/src/task.rs`, `delegate/src/status.rs`,
   `delegate/src/harness.rs`, and their unit tests
+- Also in, test fixtures only: the `TaskView { .. }` literals in `watch.rs`,
+  `statusline.rs` and `wait.rs` tests gain `origin: None, instance: None`, and nothing else
+  in those files changes.
 - Out: `prototypes/**`, `evals/**`, `.claude/**`, `.agents/**`, `delegate/templates/**`,
-  `statusline.rs`, `watch.rs`, the pane mod, `Owner` and `session`/`session_name`
+  non-test code in `statusline.rs`, `watch.rs`, `wait.rs`, the pane mod, `Owner` and `session`/`session_name`
   semantics, `workers.toml` handling, dependencies
 
 ## Contract
