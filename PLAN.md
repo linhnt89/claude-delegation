@@ -31,10 +31,20 @@
   signal-hook 0.4.6 fetched into the cargo cache by the lead.
 - t124 MERGED (a4145f5, DeepSeek v4.1 Flash, 1 round): S148 + hidden S150 pass;
   361 Rust tests. Accepted: `Budget.details` flag, transitive `errno`, bounded merge
-  readiness beside the new reader. t140 started.
+  readiness beside the new reader.
+- t140 MERGED (ca5fe04, 1 round): S151 + S148 pass. Isolated walkthrough with a
+  private Herdr daemon and two real Pi leads passed 17/17. It checked origins, the
+  unfocused side pane, per-lead tokens, expand, `/new` and exit clearing rows,
+  resuming A in another pane restoring A's rows, and `q` clearing them. Not covered:
+  a Claude lead (no credentials in isolation; the print-mode probe passed earlier)
+  and how Sheprd renders the rows (the user checks this after pasting
+  `delegate watch --sidebar-config`).
+- t141 (`docs/task-specs/t141-kit-history-real-kits-only.md`) is running. t140
+  hand-added a fake legacy kit to kit-history.txt. t141 moves that need into the
+  upgrade tests. Don't run `scripts/kit-history` on main until it merges.
 - Later, optional: ask upstream Sheprd for a mod data source (agent identity + external
   data) if per-task clickable rows or native cards prove needed.
-- No active delegated tasks. t138 diagnostics remain under
+- t138 diagnostics remain under
   `/tmp/delegate-codex-deferred.pnZRzk/` (unreviewed, not safe to apply wholesale).
 
 ## Observer baseline and limits
