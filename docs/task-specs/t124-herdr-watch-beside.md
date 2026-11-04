@@ -60,16 +60,45 @@ interactive screen, launcher and config snippet are t140.
   - Each sends one final clearing report, restores the terminal and exits 0.
 
 ### Fallible, bounded task reader (`status.rs`, `events.rs`)
-- Listing the task store fails (unreadable or unlistable folder) → a read error, never an
-  empty list. Existing `task_ids`/`collect` keep their behaviour for other callers.
-- One task that fails to load → that task alone is `unavailable`; the rest are read normally.
+- A public function, roughly `read_tasks(ctx, Budget { steps, .. }) -> Result<Vec<TaskRead>>`.
+  `TaskRead` is a task's view or `Unavailable { id, reason }`. The step count is a
+  parameter: t124 uses 5 per task; t140 asks for 50 for the selected task, with no
+  reader changes.
+- Listing the task store fails (unreadable or unlistable folder) → `Err`, never an empty
+  list. Existing `task_ids`/`collect` keep their behaviour for other callers.
+- One task that fails to load → `Unavailable` for that task alone; the rest are read
+  normally.
 - `events.jsonl`: read the last 256 KiB, at most 200 records. Skip records over 16 KiB and
-  count them. Keep the newest five steps per task. Show what was dropped.
-- Tests:
-  - a 50 MiB events file (the refresh stays under one interval)
-  - oversized and malformed records
-  - an unlistable store
-  - one corrupt `STATE.json`
+  count them. Show what was dropped.
+- **Whole-refresh budget.** No recursive worktree scan and no unbounded subprocess:
+  - The worktree activity scan stops after 5,000 entries; the time is then "unknown".
+  - Each git call (merge readiness) is killed after 2 s. That task's readiness becomes
+    unknown, not ready, and its other fields still show.
+  - The reader runs on its own thread. The report/quit loop never waits on it: while a
+    refresh is overdue it keeps the last good rows (stale rules below). `q` and signals
+    are handled within 200 ms even during a stuck refresh.
+
+### Unreadable tasks and attribution
+An unreadable task's origin can't be read, so the side pane never guesses it:
+- During its own run, the side pane remembers the last successful read of each task:
+  (id, instance, origin).
+- A task that becomes unreadable is shown as `unavailable · <id>` under this lead only
+  if that memory says it is this lead's task. It is ranked with failed/blocked.
+- With no memory of it (unreadable since startup), it isn't attributed. On screen it
+  counts under "unknown lead · unavailable", and it gets no token.
+- Memory is kept while the id is still listed. It is dropped when the id leaves the
+  listing, and replaced when a later read shows a different instance (id reuse). It is
+  never written to disk.
+
+### Tests
+- a 50 MiB events file
+- oversized and malformed records
+- an unlistable store
+- one corrupt `STATE.json`, both after a good read (shown under this lead) and from
+  startup (unknown lead, no token)
+- id reuse with a new instance
+- a worktree with 100,000 files (the refresh stays within budget)
+- a stalled `git` on `PATH`: readiness unknown, reports continue, `q` within 200 ms
 
 ### Sidebar tokens
 - Each cycle sends one `pane.report_metadata` on PANE with `source = "delegate:watch"`,

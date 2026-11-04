@@ -33,8 +33,8 @@ says how to use it.
 ### Keys in `--lead-pane` on a terminal
 - Rows keep t124's attention order. The selection starts on the first row.
 - `↑`/`↓` move the selection over this lead's tasks, then the collapsed groups.
-- `enter` expands or collapses the selected task: delegate's steps (t124's budgets, up to
-  50 for the selected task), worker, tier, changed files and `next`. "No activity yet"
+- `enter` expands or collapses the selected task: delegate's steps from t124's
+  `read_tasks` with a 50-step budget, worker, tier, changed files and `next`. "No activity yet"
   if there are no steps.
 - `tab` moves to the next group; `q` quits (t124's exit path).
 - Selection is keyed by (task id, instance). A selected task that disappears shows "task

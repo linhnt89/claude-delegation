@@ -22,7 +22,9 @@
   Plan review (GPT-6.1 Sol): 0 high, 5 medium, 1 low. All fixed. User chose signal-hook,
   isolating unreadable tasks and splitting t124/t140 (decision 039). Hidden S150 revised
   to match. S151 (t140) approved and automated (fails until built).
-  NEXT: plan re-review of t139/t124/t140 → fix → delegate t139.
+  Re-review: 0 high, 3 medium (t124/t140 only), fixed: remembered attribution for
+  unreadable tasks, `read_tasks` step budget, whole-refresh budget. t139 started.
+  NEXT: review t139; before t124 starts, one more plan review of t124/t140.
 - Later, optional: ask upstream Sheprd for a mod data source (agent identity + external
   data) if per-task clickable rows or native cards prove needed.
 - No active delegated tasks. t138 diagnostics remain under
