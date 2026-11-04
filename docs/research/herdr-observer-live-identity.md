@@ -152,6 +152,37 @@ a dedicated field is not a proof that every existing extension channel is unusab
 The check may proceed independently; a successful single-pane probe does not unblock
 native Codex coverage.
 
+## Regression-check implementation attempt: rejected, not merged (2026-11-04)
+
+User approved S145 and autonomous bounded continuation. t129 implemented an opt-in
+live driver in an isolated worker checkout. Lead-run `evals/run S145` against later
+drafts repeatedly reported product failure: pane A exposed B's identity. The latest
+private trace recorded two independently completed real Codex threads, distinct ids,
+one daemon pid/start fingerprint throughout, real public pane samples, and actual
+Herdr 0.9.5 / Codex 0.166.0 versions. These runs corroborate the exploratory bug,
+but do not establish an accepted automated scenario.
+
+Independent reviews continued to find serious check defects despite passing offline
+fixtures. The final review had five high and one medium findings: a fixture-only
+pane id in live coverage validation, false passes when post-reply observations were
+missing, unsafe hardlinked evidence/lock mutations, incomplete daemon-control path
+validation, and monitor cleanup that could silently fail. The draft was not merged.
+t129 was discarded; its rejected patch and review reproducers remain private temporary
+diagnostics, not installable kit code. S145 remains agreed with no merged check.
+
+A deeper corrective round requires independent plan review. Both configured review
+tiers contain only GPT candidates, so a GPT lead could not obtain a different-family
+plan review from them. No model configuration was changed and no deep implementation
+was started. Continuing requires an approved independent reviewer plus an architecture
+choice for the caller-context remedy; do not repeat a narrow hook patch or treat the
+rejected driver's failures as passing feature acceptance.
+
+All private Herdr server children and the private Codex app-server were stopped after
+live runs. A lingering updater from the initial private Codex startup was separately
+terminated after checking its exact private executable, command and CODEX_HOME; no
+personal process was stopped. The temporary authenticated profile and private evidence
+are retained, permission-restricted, outside git. No active delegated task remains.
+
 The earlier Pi/Claude adapter gate establishes transport, wrapped retry and retirement.
 None of these probes establishes native sidebar/rendering, per-fallback attempt
 markers, hidden observer properties, or full S137–S144/P030–P033 acceptance.

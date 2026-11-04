@@ -44,7 +44,9 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
   observer scenarios exist yet; production identity fallback and retention remain open.
 - User approved S145 and proceeding through checks/investigation on 2026-11-04.
   It covers the lead-reproduced Codex shared-daemon wrong-pane identity report.
-  Its opt-in live check is pending; exploratory evidence is not an `evals/run` verdict.
+  Its opt-in live check is pending: t129's draft reproduced the failure in lead-run
+  live tests but was discarded after safety/oracle review. No accepted automated
+  check exists; exploratory evidence is not feature acceptance.
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->
