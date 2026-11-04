@@ -3,27 +3,27 @@
 <!-- Living and small. Prune finished items: git history remembers them.
      Status: todo | ready (spec written) | running | review | done -->
 
-## Handoff (2026-11-04, Pi/Claude native dashboard first)
-- User approved decision 037: build the bounded native dashboard for Pi/Claude;
-  defer Codex attribution/check/remedy work. The goal is the viewer beside the lead,
-  not completing the Codex regression framework first.
-- Target remains installed `herdrdev/herdr` + `penso/herdr-gpui` (decision 035).
-  Lead left, read-only task dashboard right; sidebar tasks nest under the launching
-  lead conversation. `delegate` retains execution/lifecycle ownership.
-- Codex attribution is explicitly unsupported/unknown in this slice. Never group
-  its tasks using the known-stale pane identity or guess a launching lead. This is
-  an observer-support boundary, not permission to change worker execution.
-- NEXT SESSION: scope t124's isolated Pi/Claude native GPUI patch against pinned
-  sources; map bounded evidence to S137–S144 without weakening agreed scenarios;
-  pin test-only native read/action hooks and independently review the plan before
-  delegation. No native implementation has started.
-- No active delegated tasks remain. t138 was finished but unreviewed and had no
-  runner-recognized Acceptance heading (`Tests / acceptance`). Its code was NOT
-  merged. Saved temporary diagnostic patch/spec/report under
-  `/tmp/delegate-codex-deferred.pnZRzk/`, then discarded t138. Discarded never-run
-  t131 state too. Archived draft is not accepted or safe to apply wholesale.
-- Keep one session per phase: this scope/cleanup handoff is complete; use a fresh
-  session for native-spike scoping. User already authorizes green task merges.
+## Handoff (2026-11-04, real tasks beside the lead, no Sheprd patch — 038 accepted)
+- User chose option B (real /delegate tasks under real Pi/Claude leads) and mockup
+  variant B: per-task sidebar rows from Herdr pane tokens + a read-only
+  `delegate watch --beside` side pane. No Sheprd/Herdr changes, no pin to maintain.
+  Decision 038 accepted 2026-11-04; 031/037 Status lines note it.
+- Sequential: t139 (`docs/task-specs/t139-herdr-lead-origin.md`) then t124
+  (`docs/task-specs/t124-herdr-watch-beside.md`), which reuses t139's Herdr client.
+  Both are DRAFTS: independent plan review before either runs.
+- Probe (private Herdr 0.9.5, synthetic ids): `docs/research/herdr-sidebar-tokens-probe.md`.
+  Key facts: tokens survive a conversation change in the pane, any source can overwrite
+  any key, values capped at 80 chars, bidi and U+2028 not stripped, TTL works.
+- Workers inherit `HERDR_*`, so a worker's hook can overwrite the lead pane's identity.
+  t139 strips them.
+- Scenarios done (user-approved): S147 (t139) and S148 (t124) are automated and fail
+  until built. Hidden S149/S150 hold their failure paths. Stand-in Herdr socket:
+  `evals/lib/herdr_standin.py`; side-pane driver: `evals/lib/watch_pane.py`.
+  NEXT: independent plan review of both specs, then delegate t139.
+- Later, optional: ask upstream Sheprd for a mod data source (agent identity + external
+  data) if per-task clickable rows or native cards prove needed.
+- No active delegated tasks. t138 diagnostics remain under
+  `/tmp/delegate-codex-deferred.pnZRzk/` (unreviewed, not safe to apply wholesale).
 
 ## Observer baseline and limits
 - Merged t123: opt-in headless adapter in `prototypes/herdr-observer/`, not native UI
@@ -49,9 +49,10 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t124 | Isolated Pi/Claude native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + recorded Pi/Claude live identity evidence + bounded spec/review | deep | two Pi/Claude lead groups, lead preserved on selection, read-only lifecycle; opt-in pinned native evidence | NEXT; reduced scope approved in 037; Codex unsupported/unknown; pin native read/action hooks; no daemon protocol change |
-| t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; resolve scope gaps first; family independent from implementation; no full acceptance from reduced coverage |
-| t127 | Production observer identity/instance/attempt contract | observer-contract | todo | prototype evidence + user design | deep | reconcile decisions 009/031/035; stable task instances and per-fallback attempt identity without weakened P030/P032 | design first; no production schema changes authorized; blocks full properties, not bounded spike |
+| t139 | Record Herdr lead origin + task instance; strip HERDR_* from workers | observer-2 | todo | plan review | standard | `scripts/check`, S055 S056 S057 S061 P009 S147 | spec drafted; Pi/Claude supported, Codex unsupported, never fails `new` |
+| t124 | `delegate watch --beside` side pane + Herdr sidebar task tokens | observer-3 | todo | t139 merged, plan review | standard | `scripts/check`, S148 S055 S056 S057 P009 | spec drafted; variant B; never edits Herdr config; tokens TTL + cleared on identity change |
+| t125 | Independent observer property checks | observer-4 | todo | t124, t139 | standard | P030–P033 through status JSON and the side pane's Herdr reports (stand-in socket), with seeded action sequences | max four properties; resolve scope gaps first; family independent from implementation; no full acceptance from reduced coverage |
+| t127 | Production observer attempt identity, retention, fallback | observer-contract | todo | t124 in use + user design | deep | per-fallback attempt identity, closed-lead/merge retention, cross-host visibility, without weakened P030/P032 | origin + task instance moved to t139 (038); the rest still design-first |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read hidden scenarios/data today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | separate sandbox design; unchanged by reduced observer scope |
 
 ## Deferred Codex groundwork
@@ -144,8 +145,10 @@ A new caller-context protocol/schema still requires explicit user design approva
   for change after reporting the stall (t118).
 
 ## Open questions
-- Pi/Claude native spike: exact isolated GPUI build, task-data bridge and test-only
-  read/action hooks need a bounded spec and independent review before t124 starts.
+- Does a Pi lead's `path` identity survive resume unchanged? S142's resume step depends
+  on it; verify in the S137–S144 walkthroughs.
+- Side pane scope: one checkout (the lead's cwd). Leads delegating into several
+  checkouts see only that checkout's tasks; revisit after use.
 - Production identity fallback, pane reuse/resume, stable task instance and fallback-
   attempt identity remain open. Use captured real identity or explicit unknown.
 - Dashboard visibility across checkouts/workspaces/hosts and retention after

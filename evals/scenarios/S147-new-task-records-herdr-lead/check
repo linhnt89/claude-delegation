@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# delegate new records the Herdr lead conversation that created a task (decision 038).
+. "$EVALS_LIB/common.sh"
+. "$EVALS_LIB/herdr.sh"
+setup_project
+simple_workers standard gpt-env gpt-env gpt-env
+# The stand-in records which HERDR_* variables a worker sees.
+stub_worker gpt-env <<'B'
+work() { env | grep '^HERDR_' >"$calls/$n/herdr-env" || : >"$calls/$n/herdr-env"; printf '\n# touched\n' >>README.md; }
+B
+trap 'kill_runs; herdr_down' EXIT
+herdr_up
+
+PI_PATH="/home/dev/.pi/agent/sessions/shop/2026-11-04T10-12-00_a1b2.jsonl"
+CLAUDE_ID="5d0c7e2a-9b41-4f6e-8a37-2c1d9e0f4b66"
+NEW_CLAUDE_ID="e81f3a09-6c2d-4b75-9e10-7a4c2d8b3f51"
+herdr_panes <<EOF
+{"w1:p1": {"agent_session": {"source": "herdr:pi", "agent": "pi", "kind": "path", "value": "$PI_PATH"}},
+ "w1:p2": {"agent_session": {"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "$CLAUDE_ID"}},
+ "w1:p3": {"agent_session": {"source": "herdr:codex", "agent": "codex", "kind": "id", "value": "codex-thread-0f9e"}},
+ "w1:p4": {"agent_session": {"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "$NEW_CLAUDE_ID"}}}
+EOF
+
+in_pane w1:p1 write_spec t210 "Split bill" "Split a bill between people." "true"
+in_pane w1:p2 --claude "$CLAUDE_ID" write_spec t211 "Round totals" "Round totals to cents." "true"
+in_pane w1:p3 write_spec t212 "Tax table" "Read tax rates from a table." "true"
+write_spec t213 "Gift cards" "Accept gift cards." "true"   # plain terminal, no Herdr
+
+d status --json
+problem="$(PI="$PI_PATH" CL="$CLAUDE_ID" python3 - "$OUT" <<'PY'
+import json, os, re, sys
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+try: tasks = {t["id"]: t for t in json.loads(sys.argv[1])["tasks"]}
+except Exception as e: print(f"status --json gave no tasks: {e}"); sys.exit()
+want = {
+  "t210": {"support": "supported", "source": "herdr:pi", "agent": "pi", "kind": "path", "value": os.environ["PI"]},
+  "t211": {"support": "supported", "source": "herdr:claude", "agent": "claude", "kind": "id", "value": os.environ["CL"]},
+  "t212": {"support": "unsupported", "source": "herdr:codex", "agent": "codex"},
+  "t213": None,
+}
+for tid, origin in want.items():
+  t = tasks.get(tid)
+  if t is None: print(f"status --json lacks {tid}"); sys.exit()
+  if "origin" not in t: print(f"{tid} has no origin key in status --json"); sys.exit()
+  if t["origin"] != origin: print(f"{tid}'s origin is {t['origin']!r}, want {origin!r}"); sys.exit()
+  if not isinstance(t.get("instance"), str) or not UUID.match(t["instance"]):
+    print(f"{tid}'s instance is {t.get('instance')!r}, want a UUID"); sys.exit()
+if "codex-thread-0f9e" in sys.argv[1]: print("status --json reveals the Codex lead's identity value"); sys.exit()
+if len({t["instance"] for t in tasks.values()}) != len(tasks): print("two tasks share an instance id"); sys.exit()
+if tasks["t211"].get("session") != os.environ["CL"]: print(f"t211's session is {tasks['t211'].get('session')!r}; the Claude owner must still be recorded"); sys.exit()
+if tasks["t213"].get("session_name") != "by hand": print(f"t213's session_name is {tasks['t213'].get('session_name')!r}, want 'by hand'"); sys.exit()
+print(json.dumps({tid: tasks[tid]["instance"] for tid in want}))
+PY
+)"
+case "$problem" in "{"*) INSTANCES="$problem" ;; *) fail "$problem" ;; esac
+
+# Running the Pi task (from the Pi lead's pane, with Herdr variables set) changes nothing
+# about its origin, and its worker gets no Herdr variable.
+in_pane w1:p1 d run t210
+[ "$RC" -eq 0 ] || fail "delegate run t210 failed: $OUT"
+c="$(calls_where work gpt-env | tail -1)"
+[ -n "$c" ] || fail "setup: the stand-in worker for t210 never ran"
+[ -f "$HOME/.cache/stub/calls/$c/herdr-env" ] || { echo "setup: the stand-in didn't record its environment"; exit 3; }
+[ -s "$HOME/.cache/stub/calls/$c/herdr-env" ] &&
+  fail "the worker for t210 saw Herdr variables: $(cut -d= -f1 "$HOME/.cache/stub/calls/$c/herdr-env" | tr '\n' ' ')"
+after="$(sj 's["tasks"][0]["origin"]' t210)"
+[ "$(sj 's["tasks"][0]["instance"]' t210)" = "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["t210"])' "$INSTANCES")" ] ||
+  fail "running t210 changed its instance"
+python3 -c 'import json,sys; o=json.loads(sys.argv[1]); sys.exit(0 if o and o.get("kind")=="path" and o.get("support")=="supported" else 1)' "$after" ||
+  fail "running t210 changed its origin to $after"
+
+# A discarded id re-created from another Claude conversation is a new task.
+d discard t213
+[ "$RC" -eq 0 ] || fail "delegate discard t213 failed: $OUT"
+in_pane w1:p4 --claude "$NEW_CLAUDE_ID" write_spec t213 "Gift cards again" "Accept gift cards, take two." "true"
+new_inst="$(sj 's["tasks"][0]["instance"]' t213)"
+old_inst="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["t213"])' "$INSTANCES")"
+[ -n "$new_inst" ] && [ "$new_inst" != "$old_inst" ] || fail "re-created t213 has instance $new_inst, want a new one (old $old_inst)"
+[ "$(sj 's["tasks"][0]["origin"]["value"]' t213)" = "$NEW_CLAUDE_ID" ] ||
+  fail "re-created t213's origin is $(sj 's["tasks"][0]["origin"]' t213), want the new Claude lead's"
+
+pass "Pi and Claude tasks named their lead, Codex was marked unsupported without its id, the plain-terminal task had none, running kept the origin and hid Herdr from the worker, and a reused id became a new task"

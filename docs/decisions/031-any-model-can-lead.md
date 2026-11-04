@@ -1,7 +1,7 @@
 # 031: Any model can lead; the lead names itself only for plan review
 
 - Date: 2026-11-02
-- Status: accepted
+- Status: accepted; partly superseded by 038 (lead origin is recorded for observation only)
 
 <!-- Append-only. Never edit an accepted decision's substance: write a new one that
      supersedes it, and update only this Status line. Keep it under a page. -->

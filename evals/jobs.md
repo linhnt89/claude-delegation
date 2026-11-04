@@ -59,6 +59,14 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
   guessed. S137–S146/P030–P033 intent is unchanged; reduced-harness evidence must
   not be reported as full observer/property acceptance. Map native-slice checks
   explicitly during t124 scoping.
+- User approved decision 038 and S147/S148 on 2026-11-04: `delegate new` records the
+  Herdr lead's origin (Pi/Claude supported, Codex unsupported, workers get no `HERDR_*`),
+  and a `delegate watch --beside` side pane puts only its lead's tasks in the sidebar,
+  clearing them on a conversation change. Their approved failure paths became S149/S150
+  (same wording) and are hidden. All four checks use the stand-in Herdr socket
+  (`evals/lib/herdr_standin.py`, modelled on the lead's private probe). They fail until
+  t139/t124 are built. The lead validated the S148/S150 checks against a throwaway
+  contract-following fake, and against broken variants that the checks rejected.
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->
@@ -74,3 +82,4 @@ Retired by decision 030 (in git history, out of the vault): J9 P017 · J10 P022 
 Added for decision 031 (new feature: fails until built): J6 P028.
 Added for decisions 032, 033 (new feature: fails until built): J1 P029.
 Added for decision 034 (new feature: fails until built): J1 S136.
+Added for decision 038 (new feature: fails until built): J8 S149 S150.
