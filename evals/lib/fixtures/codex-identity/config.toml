@@ -1,0 +1,15 @@
+model = "gpt-5.4"
+model_provider = "local"
+check_for_update_on_startup = false
+cli_auth_credentials_store = "ephemeral"
+[features]
+hooks = true
+shell_snapshot = false
+[projects."/RUN/checkout"]
+trust_level = "trusted"
+[model_providers.local]
+name = "Local diagnostic"
+base_url = "http://127.0.0.1:40000/v1"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false

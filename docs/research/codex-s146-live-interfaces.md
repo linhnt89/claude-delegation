@@ -83,8 +83,10 @@ Collectors must:
 - Read PID record through a stable descriptor; get boot ID and /proc stat start
   ticks before/after collecting exe/cmdline/environ and fd targets. Reject changes,
   permission denial, process exit, truncated reads or unsupported records.
-- Open /proc/PID/exe and compare its SHA-256 to the preparation-validated pinned
-  managed executable; never trust executableIdentity.digest as SHA-256 proof.
+- Open /proc/PID/exe and compare its SHA-256 ONCE per attested instance to the
+  preparation-validated pinned executable; keep descriptor and stable fstat identity.
+  Each subsequent sample checks liveness/boot/start/exe identity, NOT a 319MB rehash.
+  Never trust executableIdentity.digest as SHA-256 proof.
 - For serving proof, open the chosen rollout, fstat dev/ino, then fstat matching
   /proc/PID/fd/N and compare dev/ino + exact canonical target to that descriptor.
   Recheck rollout link/owner and PID/boot/start after acquisition. A matching path
@@ -115,6 +117,16 @@ Explicit canonical inputs to the later lead live gate:
   SHA-256 b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8.
 - Herdr /home/linhnt/.local/share/mise/installs/herdr/0.9.5/herdr,
   SHA-256 14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d.
+
+The lead gate requires a fresh SHORT EVALS_RESULTS=$(mktemp -d /tmp/s146.XXXX):
+default delegate results paths cannot hold these Unix sockets. Preflight the longest
+Codex control-socket pathname (<108 bytes) before allocating the root. Actual start
+stdout/package layout/socket and local config are now in provisioning.json/config.toml.
+Containment/digest validation PRECEDES managed --version execution. Use a Linux child
+subreaper before spawning any child; adopted descendants can be enumerated/reaped
+without inspecting arbitrary personal process environments. The independent review
+and all lead corrections are in codex-s146-split-review.md. Resource primitives are
+extracted to t138; it follows t133, then t131 assembles merged components.
 
 Workers use offline synthetic processes/loopback only, NOT real binaries, profile
 provisioning, personal data or sandbox escape. Lead runs reviewed unchanged driver

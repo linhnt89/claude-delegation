@@ -14,8 +14,10 @@ and a working fresh provisioning preflight; see codex-s146-live-interfaces.md.
   DeepSeek author verified by merge Worker trailer. No live processes/profiles.
 - t132: local SSE stub, fresh profile/provisioning and genuine hook validation.
 - t133: pure rollout/PID/proc evidence readers, tested against lead-redacted fixtures.
+- t138: trusted file/proc acquisition, owned process/subreaper handles and one-shot
+  RPC resource helpers/tests, extracted per independent review; depends on t133.
 - t131: single-owner live loop, signals/cleanup, wrapper and docs, explicitly
-  `--tier deep`; depends on merged t130/t132/t133 and their actual Worker trailers.
+  `--tier deep`; depends on merged t130/t132/t133/t138 and their actual Worker trailers.
   `checks_by: t130` enforces oracle/driver family separation; never start while t130
   is unmerged, because the runner otherwise only warns and runs without the rule.
 - Specs are staged in `docs/task-specs/`. t130 is complete; no later task is ready.
@@ -44,8 +46,11 @@ resolve `latest`, PATH defaults or a patched binary under the baseline label.
 Future patched-build support needs an explicit reviewed version/digest policy.
 Opted-in missing/mismatched inputs are check errors, not skips.
 
-Create an exclusive 0700 run directory under EVALS_WORK (never accept an existing
-CODEX_HOME or arbitrary output filename). Everything writable belongs below it:
+The lead live gate sets EVALS_RESULTS=$(mktemp -d /tmp/s146.XXXX) so Unix sockets fit;
+the default delegate results/work/S146 path is too long. Preflight the longest
+planned Codex control socket before allocation; >107 bytes is actionable check_error
+instructing use of short EVALS_RESULTS. Create an exclusive 0700 run directory under
+EVALS_WORK (never accept an existing CODEX_HOME or arbitrary output filename). Everything writable belongs below it:
 HOME/CODEX_HOME/XDG roots, repo, sockets, evidence, session files and logs. Use a
 minimal explicit environment with no inherited credentials, proxy/provider config,
 HERDR context, shell init or account settings. Use a shell without user rc files.
@@ -67,7 +72,8 @@ opt-in: sandbox access, remaining interface fixtures and independent split-spec
 review are still blocking. t132/t133 blocked drafts now stage their component APIs.
 Allow only initial private preparation start/stop before A. Verify the selected
 managed executable's canonical path lies under the run-owned package root and its
-version matches 0.166.0. Record its digest. Fully stop/reap the initial daemon and
+version matches 0.166.0. Record its digest. Resolve/validate containment and digest BEFORE executing the
+managed --version command; validate that output separately. Fully stop/reap the initial daemon and
 updater before A; then A's real TUI creates the shared daemon with A's actual pane
 context. Never stop/restart it during the A→B sequence. A version drift is error.
 Other incidental network (e.g. Herdr definition refresh) is not model traffic;
@@ -182,7 +188,11 @@ attribution failure. Bounded polling cannot prove absence of sub-cadence transie
 
 ## Resource and timing policy
 
-Single owning synchronous event loop, no forgotten sampling threads. Nonblocking
+Single owning synchronous event loop, no forgotten sampling threads. Establish a
+Linux child subreaper before any child so detached owned descendants can be enumerated
+and reaped without arbitrary personal-environment scans. Hash each held attested
+executable once per instance, then recheck identity/liveness rather than rehashing
+319MB every sample. Nonblocking
 PTY/API/process IO; ordinary Herdr RPC uses a NEW Unix socket per request (the pinned
 server closes after one response, confirmed live/source). Connect/write/read together
 are one operation <=0.2s and the entire

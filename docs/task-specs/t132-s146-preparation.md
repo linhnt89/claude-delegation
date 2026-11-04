@@ -10,6 +10,7 @@ its Herdr/TUI/daemon lifecycle or reimplementing the oracle/evidence readers.
 - `AGENTS.md`, `docs/decisions/036-codex-attribution-regression-boundary.md`
 - `docs/research/codex-s146-check-contract.md`
 - `docs/research/codex-s146-provision-preflight.md`
+- `docs/research/codex-credential-free-attribution.md`
 - `docs/research/codex-s146-live-interfaces.md`
 - `evals/lib/fixtures/codex-identity/README.md` and its fixtures
 - `evals/scenarios/S146-codex-local-provider-pane-attribution/scenario.md`
@@ -45,16 +46,20 @@ mutate inputs. No module-import side effects. Do not spawn processes or threads.
   hooks=true, shell_snapshot=false, exact absolute repo trust key, local responses
   provider at http://127.0.0.1:port/v1, requires_openai_auth=false and
   supports_websockets=false. No git subprocess; t131 initializes repo.
-- `validate_managed_package(codex_home: Path, start_response: bytes,
-  expected_digest: str, managed_version: str) -> dict`: parse actual start stdout;
+- `resolve_managed_package(codex_home: Path, start_response: bytes,
+  expected_digest: str) -> dict`: BEFORE executing any path from stdout, parse
+  actual start stdout;
   require status=started/backend=pid, positive pid, cliVersion/appServerVersion/
-  managedCodexVersion all 0.166.0. Require managed_version == 'codex-cli 0.166.0'
-  (obtained independently by t131). Resolve only installed current/release symlinks
+  managedCodexVersion all 0.166.0. Resolve only installed current/release symlinks
   staying under this fresh CODEX_HOME/packages; regular executable, uid match,
   no hardlinks, digest equals expected_digest. Require socketPath lies within the
   private app-server-control directory. Return `{executable, sha256}`.
   t131 supplies the pinned CLI digest, never a PID-record digest or version-only
   substitute. No execution here; malformed paths, drift or unexpected layout error.
+  Exact start/layout fixture: provisioning.json. Only AFTER this validation may
+  t131 execute the returned path with --version.
+- `validate_managed_version(version: str) -> None`: require exactly the stripped
+  version 'codex-cli 0.166.0'; otherwise PreparationError. Pure string check.
 - `validate_hook(codex_home: Path) -> None`: inspect exclusive regular uid-owned,
   nlink=1 hooks.json and herdr-agent-state.sh. Exactly the captured declaration:
   sole hooks.SessionStart list of one entry containing sole hooks list of one
@@ -79,7 +84,7 @@ new files from this invocation; do not recursively remove arbitrary caller paths
 
 ## Local Responses stub
 
-`LocalStub()` binds nonblocking IPv4 127.0.0.1 port 0. Properties `port: int`,
+`LocalStub(*, clock=time.monotonic)` binds nonblocking IPv4 127.0.0.1 port 0. Properties `port: int`,
 `invalid: bool`, `request_count: int`; methods `poll() -> None`, `close() -> None`.
 No thread/process: t131 calls poll every loop tick, including waiting for setup
 commands. poll never waits for IO and does bounded work (one <=64KiB read/write per
@@ -123,6 +128,9 @@ that can extend the owner's absolute deadline.
   content reads, stub Authorization rejection, bounded partial/malformed HTTP,
   repeated/auxiliary requests, connection limits and idempotent descriptor teardown.
 - [ ] Independent review has no unresolved high findings.
+
+Deadline/partial-request tests use injected monotonic time, not 2-second sleeps.
+Module suite target <5s normal; no loaded-machine wall-time correctness assertions.
 
 Offline infrastructure gates for agreed S146 only, NOT a live scenario pass.
 No worker live opt-in, dependencies, product/protocol or scenario intent changes.

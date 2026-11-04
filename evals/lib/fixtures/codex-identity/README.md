@@ -49,6 +49,19 @@ an implementation pass. Unsupported or missing evidence remains a check error.
   fd number and exact managed argv shape preserved. This is NOT an extra A/B run
   or proof of continuous serving-instance coverage. See live-interfaces research.
 
+- `rollout-a-full.jsonl`: ALL 14 original records from the earlier real A rollout,
+  preserving ordering, key/container/type shapes, binding fields and expected turn.
+  Content/instruction strings, paths, hashes, message/thread/turn IDs and unrelated
+  values redacted. No rows omitted. This includes context-user messages, world_state,
+  turn_context, duplicate event_msg item_completed UserMessage/AgentMessage records
+  and token records; only response_item messages count for prompt/reply ambiguity.
+- `config.toml`: actual successful local-provider configuration with root and port
+  replaced by /RUN and 40000. Quoted absolute project trust key is deliberate.
+- `provisioning.json`: real fresh daemon start stdout and package/control layout;
+  run prefix/PID redacted. current is an absolute in-root symlink, release/codex a
+  relative bin/codex symlink. Executable had nlink=1 on the /tmp preflight filesystem.
+  Exact app-server-control socket suffix is included for pathname-length preflight.
+
 These fixtures pin interface shapes, not full live feature acceptance. Trusted
 snapshot acquisition and continuity still need the reviewed real owner loop.
 

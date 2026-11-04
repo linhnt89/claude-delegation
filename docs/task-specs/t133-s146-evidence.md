@@ -39,7 +39,13 @@ Boolean values do not count as integers.
   assistant message containing the exact reply in output_text in the same turn.
   Context-user messages before the matching prompt are permitted; any additional
   user message after that prompt, repeated prompt, additional assistant message or
-  second started turn is ambiguous. A completed turn missing the expected messages
+  second started turn is ambiguous. ONLY response_item/type=message role=user or
+  assistant count for those message/ambiguity rules, NOT duplicate event_msg
+  user_message/agent_message/item_completed records. Tolerate world_state,
+  turn_context, token_usage_record, event_msg thread_settings_applied/item_completed/
+  token_count/user_message/agent_message, response_item reasoning and developer
+  messages. Full real record ordering is in rollout-a-full.jsonl; no records were
+  omitted there, only content strings/identifiers redacted. A completed turn missing the expected messages
   is an error, not pending. Return None for pending
   incomplete evidence, including one incomplete final line while a writer is active.
   Complete malformed lines, conflicting metadata, invalid ordering or invalid field
@@ -56,7 +62,9 @@ Boolean values do not count as integers.
 - `bind_launch(rollouts: dict[str, bytes], before_paths: frozenset[str], *, cwd: str,
   launched_at: str, observed_at: str, prompt: str, reply: str) -> dict | None`:
   timestamps are timezone-qualified ISO8601 wall-clock snapshots; require launch <=
-  observation. Inventory new paths only. Exactly one new candidate with supported
+  observation. observed_at MUST be taken after inventory bytes have been read.
+  A sole candidate outside [launched_at,observed_at] is check_error, not pending;
+  clock reversal/drift must not create a binding. Inventory new paths only. Exactly one new candidate with supported
   metadata, matching cwd/version 0.166.0/provider local and metadata timestamp in
   [launched_at,observed_at] may bind. More than one new candidate (including auxiliary,
   incomplete or mismatched sessions) is ambiguous, not permission to select newest.
