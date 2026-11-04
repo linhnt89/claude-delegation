@@ -129,3 +129,20 @@ user-level pass. The later t131 lead-only live baseline gate is still mandatory.
 No dependencies, filesystem/proc control, live input mode or product/schema change.
 Stop on contract ambiguity; do not invent evidence. Do not commit; runner commits.
 Report actual family, test counts, limits and doc conflicts in `.task/REPORT.md`.
+
+## Round 2
+Apply CURRENT .task/REVIEW.patch first, then fix ALL four independent review findings
+in .task/REVIEW.md (2 high, 2 medium). Lead independently reproduced the wrong-message
+turn and contradictory assistant output defects as well. Validate every present
+message attribution (internal metadata + retained-source metadata) and turn_context
+turn/root identity against started/completed turn. Extra unrelated record fields
+stay tolerated but conflicting binding fields are never ignored. Validate the
+ENTIRE assistant textual output equals the expected reply and completion; do not
+match merely one item. Likewise the submitted actual user message must have exactly
+the expected full prompt text, not the expected item plus unrelated appended text.
+Reject NaN/Infinity/-Infinity constants in all JSON loaders, including ignored
+fields. Suppress input-bearing parser exception contexts in EvidenceError paths
+(`raise ... from None` or equivalent), including the generic guard.
+Add a regression for appended contradictory input_text on the submitted user
+message in addition to reviewer tests. Do not weaken fixtures/tests or create
+fallback guesses. Rerun all Acceptance; no live binary/provisioning access.

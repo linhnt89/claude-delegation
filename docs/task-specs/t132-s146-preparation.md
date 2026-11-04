@@ -136,3 +136,11 @@ Offline infrastructure gates for agreed S146 only, NOT a live scenario pass.
 No worker live opt-in, dependencies, product/protocol or scenario intent changes.
 Stop on contract ambiguity. Do not commit; runner commits. Report family, tests,
 limits and doc conflicts in `.task/REPORT.md`.
+
+## Round 2
+Apply the CURRENT .task/REVIEW.patch first; it contains the independent review's
+regression tests. Fix both findings in .task/REVIEW.md: service available ready
+request bytes before declaring a request still incomplete after 2s (preserve bounded
+work/overflow constraints); high descriptors must not leak raw ValueError from
+select. Prefer scalable selectors/poll or fail redacted/invalid, never raw traceback.
+Keep injected-clock tests fast and all original security guards. Rerun Acceptance.
