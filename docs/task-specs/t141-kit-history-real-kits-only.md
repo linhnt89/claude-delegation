@@ -41,3 +41,16 @@ embedded history to real kits only.
 - [ ] `scripts/kit-history && git diff --exit-code -- delegate/templates/kit-history.txt`
 - [ ] `! grep -q 6b531f9317d6 delegate/templates/kit-history.txt`
 - [ ] `scripts/check`
+
+## Answers
+1. (b). Split `upgrade()` into a private `upgrade_with_kits(..., kits: &[Kit])` and a
+   public wrapper that passes `history()?`. This is the only non-test change allowed in
+   `upgrade.rs`: no other behaviour or signature changes. No thread-local or
+   `cfg(test)` code inside production functions. Both named tests keep exercising the
+   full automatic upgrade path through the inner function. The legacy kit they pass
+   must make `old_skill_pointers_and_files_preserve_legacy_evidence` independent of
+   today's `distill`/`evaluate` bodies matching `b129c8e57f94`.
+2. (a). Remap only the link entries, exactly the construction you verified reproduces
+   `6b531f9317d6`'s `files`. Use the same helper to build the test kit for question 1.
+3. (a). Exactly one entry has `current().id`. It is last and has `current().files`. No
+   other entry equals the remapped map.
