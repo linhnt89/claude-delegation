@@ -74,6 +74,8 @@ mod tests {
             goal: String::new(),
             session: None,
             session_name: "by hand".into(),
+            origin: None,
+            instance: None,
             phase: "interrupted".into(),
             outcome: None,
             worker: Some("pi:test".into()),

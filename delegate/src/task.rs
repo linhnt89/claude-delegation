@@ -228,6 +228,28 @@ pub struct Owner {
     pub dir: String,
 }
 
+/// How a conversation identity is referenced by its harness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefKind {
+    Id,
+    Path,
+}
+
+/// The Herdr pane's lead conversation at `delegate new`; observation only.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "support", rename_all = "snake_case")]
+pub enum Origin {
+    Supported {
+        source: String,
+        agent: String,
+        kind: RefKind,
+        value: String,
+    },
+    /// Known agent, but this delegate can't assert its conversation identity.
+    Unsupported { source: String, agent: String },
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct State {
     #[serde(default)]
@@ -235,6 +257,10 @@ pub struct State {
     pub base: Option<String>,
     pub rounds: Vec<Round>,
     pub review: Option<ReviewState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
 }
 
 #[derive(Debug)]
@@ -254,12 +280,21 @@ impl Task {
         }
         let dir = ctx.dhome.join(id);
         let state_file = dir.join("STATE.json");
-        let state = if state_file.is_file() {
+        let mut state: State = if state_file.is_file() {
             serde_json::from_str(&std::fs::read_to_string(&state_file)?)
                 .with_context(|| format!("reading {}", state_file.display()))?
         } else {
             State::default()
         };
+        // A stale or hand-edited origin that no longer meets the capture rules reads as
+        // unknown; it is never sanitized into a different identity. Do not save this back.
+        if state
+            .origin
+            .as_ref()
+            .is_some_and(|origin| !crate::origin::valid(origin))
+        {
+            state.origin = None;
+        }
         Ok(Task {
             id: id.to_string(),
             wt: dir.join("worktree"),
@@ -518,6 +553,60 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(task.dir.join("STATE.json"))?)?;
         assert_eq!(json["owner"]["session"], "session-a");
         assert_eq!(json["owner"]["dir"], "/projects/pane-polish");
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn old_state_loads_and_an_invalid_origin_reads_as_unknown() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-origin-{}", uuid::Uuid::new_v4()));
+        let ctx = Ctx {
+            root: root.clone(),
+            dhome: root.join("tasks"),
+            gitdir: root.join(".git"),
+        };
+        let task = Task::load(&ctx, "t001")?;
+        std::fs::create_dir_all(&task.dir)?;
+        let state_file = task.dir.join("STATE.json");
+        std::fs::write(&state_file, r#"{"base":null,"rounds":[],"review":null}"#)?;
+        let old = Task::load(&ctx, "t001")?;
+        assert_eq!(old.state.origin, None);
+        assert_eq!(old.state.instance, None);
+
+        let instance = "6f0d9c4e-0e7a-4b1a-9a08-2f5e4a2c1b3d";
+        std::fs::write(
+            &state_file,
+            format!(
+                r#"{{"base":null,"rounds":[],"review":null,
+                    "origin":{{"support":"supported","source":"herdr:pi","agent":"pi",
+                    "kind":"path","value":"/sessions/lead.jsonl"}},
+                    "instance":"{instance}"}}"#
+            ),
+        )?;
+        let loaded = Task::load(&ctx, "t001")?;
+        assert_eq!(
+            loaded.state.origin,
+            Some(Origin::Supported {
+                source: "herdr:pi".into(),
+                agent: "pi".into(),
+                kind: RefKind::Path,
+                value: "/sessions/lead.jsonl".into(),
+            })
+        );
+        assert_eq!(loaded.state.instance.as_deref(), Some(instance));
+
+        std::fs::write(
+            &state_file,
+            format!(
+                r#"{{"base":null,"rounds":[],"review":null,
+                    "origin":{{"support":"supported","source":"herdr:pi","agent":"pi",
+                    "kind":"path","value":"relative.jsonl"}},
+                    "instance":"{instance}"}}"#
+            ),
+        )?;
+        let invalid = Task::load(&ctx, "t001")?;
+        assert_eq!(invalid.state.origin, None, "an invalid origin is never repaired");
+        assert_eq!(invalid.state.instance.as_deref(), Some(instance));
         std::fs::remove_dir_all(root)?;
         Ok(())
     }

@@ -6,6 +6,7 @@ mod config;
 mod harness;
 mod init;
 mod migration;
+mod origin;
 mod prompts;
 mod quota;
 mod setup;

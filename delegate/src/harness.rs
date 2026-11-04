@@ -509,13 +509,16 @@ pub(crate) fn run_streamed(
     });
     let (program, args) = cmd.split_first().context("empty command")?;
     let args = warm_worker_args(program, args, cwd)?;
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .env("DELEGATE_SANDBOXED", "1")
         .stdout(Stdio::from(OwnedFd::from(output)))
-        .stderr(Stdio::from(OwnedFd::from(err_output)))
+        .stderr(Stdio::from(OwnedFd::from(err_output)));
+    strip_herdr_env(&mut command);
+    let mut child = command
         .spawn()
         .with_context(|| format!("starting {program}"))?;
     let mut exited_at = None;
@@ -605,16 +608,29 @@ pub fn run_logged(
     };
     let (program, args) = cmd.split_first().context("empty command")?;
     let args = warm_worker_args(program, args, cwd)?;
-    let status = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .env("DELEGATE_SANDBOXED", "1")
         .stdout(stdout)
-        .stderr(Stdio::from(lf))
+        .stderr(Stdio::from(lf));
+    strip_herdr_env(&mut command);
+    let status = command
         .status()
         .with_context(|| format!("starting {program}"))?;
     Ok(status.code().unwrap_or(-1))
+}
+
+/// Sandboxed processes (workers, checks, review, plan review) never inherit the lead's
+/// Herdr hints, so a harness hook cannot report into the lead's pane.
+pub(crate) fn strip_herdr_env(command: &mut Command) {
+    for (name, _) in std::env::vars_os() {
+        if name.as_encoded_bytes().starts_with(b"HERDR_") {
+            command.env_remove(&name);
+        }
+    }
 }
 
 fn last_log_lines(text: &str) -> Vec<String> {
@@ -1002,6 +1018,39 @@ mod tests {
         let mut stream = events::Stream::new(&dir, Harness::Codex, &dir);
         assert_eq!(run_streamed(&cmd, &dir, &log, &mut stream).unwrap(), 0);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn spawned_workers_lose_herdr_hints() {
+        const CHILD: &str = "_DELEGATE_TEST_HERDR_ENV";
+        if std::env::var(CHILD).is_ok() {
+            assert!(std::env::var_os("HERDR_TEST_A").is_some(), "setup: no parent hint");
+            let dir =
+                std::env::temp_dir().join(format!("delegate-herdr-env-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&dir).unwrap();
+            let cmd = ["sh", "-c", "if env | grep -q '^HERDR_'; then exit 7; fi"].map(str::to_owned);
+            let log = dir.join("run.log");
+            assert_eq!(run_logged(&cmd, &dir, &log, None).unwrap(), 0);
+            let mut stream = events::Stream::new(&dir, Harness::Codex, &dir);
+            assert_eq!(run_streamed(&cmd, &dir, &log, &mut stream).unwrap(), 0);
+            std::fs::remove_dir_all(dir).unwrap();
+            return;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "harness::tests::spawned_workers_lose_herdr_hints"])
+            .env(CHILD, "1")
+            .env("HERDR_TEST_A", "lead")
+            .env("HERDR_SOCKET_PATH", "/tmp/nonexistent-herdr.sock")
+            .env("HERDR_PANE_ID", "w1:p1")
+            .env("DELEGATE_SANDBOXED", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

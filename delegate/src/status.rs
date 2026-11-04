@@ -40,6 +40,8 @@ pub struct TaskView {
     pub goal: String,
     pub session: Option<String>,
     pub session_name: String,
+    pub origin: Option<crate::task::Origin>,
+    pub instance: Option<String>,
     pub phase: String,
     pub outcome: Option<String>,
     pub worker: Option<String>,
@@ -567,6 +569,8 @@ fn collect_task(ctx: &Ctx, t: &Task, depth: Depth) -> Result<TaskView> {
                     .into_owned()
             },
         ),
+        origin: t.state.origin.clone(),
+        instance: t.state.instance.clone(),
         phase,
         outcome,
         worker: active
@@ -1040,6 +1044,8 @@ mod tests {
             goal: String::new(),
             session: None,
             session_name: "by hand".into(),
+            origin: None,
+            instance: None,
             phase: phase.into(),
             outcome: outcome.map(str::to_owned),
             worker: Some("pi:test@high".into()),
@@ -1456,6 +1462,47 @@ mod tests {
         assert!(live.alive());
         assert!(!is_alive(live.pid, "0", &live.boot_id));
         assert!(!is_alive(live.pid, &live.pid_start, "other boot"));
+        Ok(())
+    }
+
+    #[test]
+    fn status_json_always_has_origin_and_instance_at_every_depth() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-origin-view-{}", uuid::Uuid::new_v4()));
+        let ctx = Ctx {
+            root: root.clone(),
+            dhome: root.join("tasks"),
+            gitdir: root.join(".git"),
+        };
+        let mut task = Task::load(&ctx, "t001")?;
+        fs::create_dir_all(&task.dir)?;
+        fs::write(&task.spec, "# Task t001: A task\n")?;
+        for depth in [Depth::Phase, Depth::Full] {
+            let json = serde_json::to_value(&collect(&ctx, Some("t001"), depth)?[0])?;
+            assert!(json["origin"].is_null());
+            assert!(json["instance"].is_null());
+        }
+
+        task.state.instance = Some("6f0d9c4e-0e7a-4b1a-9a08-2f5e4a2c1b3d".into());
+        task.state.origin = Some(crate::task::Origin::Supported {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            kind: crate::task::RefKind::Path,
+            value: "/sessions/lead.jsonl".into(),
+        });
+        task.save()?;
+        let json = serde_json::to_value(&collect(&ctx, Some("t001"), Depth::Phase)?[0])?;
+        assert_eq!(
+            json["origin"],
+            serde_json::json!({
+                "support": "supported",
+                "source": "herdr:pi",
+                "agent": "pi",
+                "kind": "path",
+                "value": "/sessions/lead.jsonl",
+            })
+        );
+        assert_eq!(json["instance"], "6f0d9c4e-0e7a-4b1a-9a08-2f5e4a2c1b3d");
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 

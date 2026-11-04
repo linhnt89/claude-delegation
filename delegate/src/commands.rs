@@ -13,6 +13,7 @@ use crate::config::{
     workers_config_path,
 };
 use crate::harness::{self, Bounds, Session};
+use crate::origin;
 use crate::prompts;
 use crate::quota;
 use crate::spec;
@@ -61,7 +62,8 @@ fn first_line(path: &Path) -> Option<String> {
 }
 
 /// Attribute an unowned task to the calling session, never to a later runner.
-fn claim_owner(ctx: &Ctx, t: &mut Task) -> Result<()> {
+/// Returns whether it wrote and saved the owner; `new` saves the rest when it did not.
+fn claim_owner(ctx: &Ctx, t: &mut Task) -> Result<bool> {
     if t.state.owner.is_none()
         && let Ok(session) = std::env::var("CLAUDE_CODE_SESSION_ID")
         && !session.is_empty()
@@ -77,13 +79,18 @@ fn claim_owner(ctx: &Ctx, t: &mut Task) -> Result<()> {
                 t.dir.display()
             )
         })?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 // ---------------------------------------------------------------- new
 
 pub fn new(ctx: &Ctx, id: &str, prune: bool) -> Result<()> {
+    new_with_env(ctx, id, prune, &origin::Env::from_process())
+}
+
+fn new_with_env(ctx: &Ctx, id: &str, prune: bool, env: &origin::Env) -> Result<()> {
     let mut t = Task::load(ctx, id)?;
     if t.spec.exists() {
         bail!("{} already exists", t.spec.display());
@@ -91,7 +98,24 @@ pub fn new(ctx: &Ctx, id: &str, prune: bool) -> Result<()> {
     fs::create_dir_all(&t.dir)?;
     let template = if prune { PRUNE_TEMPLATE } else { SPEC_TEMPLATE };
     fs::write(&t.spec, template.replace("<id>", &t.id))?;
-    claim_owner(ctx, &mut t)?;
+    // A reused id is a new task, and capture never inherits an old origin.
+    t.state.instance = Some(uuid::Uuid::new_v4().to_string());
+    let outcome = origin::capture(env);
+    t.state.origin = outcome.origin();
+    if env.herdr_present()
+        && let Some(reason) = outcome.reason()
+    {
+        eprintln!("{}", origin::note(&t.id, reason));
+    }
+    if !claim_owner(ctx, &mut t)? {
+        t.save().with_context(|| {
+            format!(
+                "saving {}'s state; check permissions on {} and retry",
+                t.id,
+                t.dir.display()
+            )
+        })?;
+    }
     println!("{}", t.spec.display());
     Ok(())
 }
@@ -1058,13 +1082,16 @@ fn run_with_timeout(cmd: &[String], cwd: &Path) -> Result<(i32, String)> {
     let out_path =
         std::env::temp_dir().join(format!("delegate-check-{}.log", uuid::Uuid::new_v4()));
     let out = fs::File::create(&out_path)?;
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .env("DELEGATE_SANDBOXED", "1")
         .stdout(out.try_clone()?)
-        .stderr(out)
+        .stderr(out);
+    harness::strip_herdr_env(&mut command);
+    let mut child = command
         .spawn()
         .with_context(|| format!("starting {program}"))?;
     let start = std::time::Instant::now();
@@ -1818,6 +1845,7 @@ pub fn discard(ctx: &Ctx, id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
     use std::path::PathBuf;
 
     #[test]
@@ -3344,6 +3372,398 @@ deep = ["claude:sonnet@high"]
         let reader = fs::File::open(t.dir.join("operation.lock"))?;
         reader.try_lock_shared()?; // what ensure_idle holds, briefly, for every status poll
         assert!(Operation::acquire(&t, "checks").is_ok());
+        Ok(())
+    }
+
+    /// A one-connection Herdr stand-in for `new`'s origin capture.
+    fn herdr_socket(path: &Path, reply: impl FnOnce(serde_json::Value) -> Vec<u8> + Send + 'static) {
+        let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
+        std::thread::spawn(move || {
+            let Ok((conn, _)) = listener.accept() else {
+                return;
+            };
+            let request = {
+                use std::io::BufRead as _;
+                let mut line = String::new();
+                if std::io::BufReader::new(&conn).read_line(&mut line).is_err() {
+                    return;
+                }
+                serde_json::from_str::<serde_json::Value>(&line).ok()
+            };
+            let Some(request) = request else { return };
+            let body = reply(request);
+            let mut out = &conn;
+            let _ = out.write_all(&body);
+        });
+    }
+
+    fn herdr_reply(request: &serde_json::Value, identity: serde_json::Value) -> Vec<u8> {
+        let mut info = serde_json::json!({"pane_id": request["params"]["pane_id"]});
+        info["agent_session"] = identity;
+        let body = serde_json::json!({
+            "id": request["id"],
+            "result": {"type": "pane_info", "pane": info},
+        });
+        (body.to_string() + "\n").into_bytes()
+    }
+
+    fn new_ctx(repo: &TestRepo) -> Result<Ctx> {
+        let root = repo.0.join("repo");
+        fs::create_dir_all(&root)?;
+        Ok(Ctx {
+            root: root.clone(),
+            dhome: repo.0.join("tasks"),
+            gitdir: root.join(".git"),
+        })
+    }
+
+    #[test]
+    fn new_records_a_herdr_origin_and_an_instance() -> Result<()> {
+        let repo =
+            TestRepo(std::env::temp_dir().join(format!("delegate-new-{}", uuid::Uuid::new_v4())));
+        let ctx = new_ctx(&repo)?;
+        let socket = repo.0.join("herdr.sock");
+        herdr_socket(&socket, |request| {
+            herdr_reply(
+                &request,
+                serde_json::json!({
+                    "source": "herdr:claude", "agent": "claude",
+                    "kind": "id", "value": "session-a",
+                }),
+            )
+        });
+        let env = origin::Env {
+            sandboxed: false,
+            socket: Some(socket),
+            pane_id: Some("w1:p1".into()),
+            claude_session: Some("session-a".into()),
+        };
+        new_with_env(&ctx, "t001", false, &env)?;
+        let task = Task::load(&ctx, "t001")?;
+        assert_eq!(
+            task.state.origin,
+            Some(crate::task::Origin::Supported {
+                source: "herdr:claude".into(),
+                agent: "claude".into(),
+                kind: crate::task::RefKind::Id,
+                value: "session-a".into(),
+            })
+        );
+        let instance = task.state.instance.as_deref().context("instance")?;
+        assert!(uuid::Uuid::parse_str(instance).is_ok(), "{instance}");
+        assert!(task.spec.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn new_without_herdr_records_no_origin_but_sets_an_instance() -> Result<()> {
+        let repo = TestRepo(
+            std::env::temp_dir().join(format!("delegate-new-{}", uuid::Uuid::new_v4())),
+        );
+        let ctx = new_ctx(&repo)?;
+        new_with_env(&ctx, "t001", false, &origin::Env::default())?;
+        let task = Task::load(&ctx, "t001")?;
+        assert_eq!(task.state.origin, None);
+        assert!(
+            task.state
+                .instance
+                .as_deref()
+                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_capture_failure_still_creates_the_task() -> Result<()> {
+        let repo = TestRepo(
+            std::env::temp_dir().join(format!("delegate-new-{}", uuid::Uuid::new_v4())),
+        );
+        let ctx = new_ctx(&repo)?;
+        let dir = repo.0.join("endpoints");
+        fs::create_dir_all(&dir)?;
+        let regular = dir.join("regular");
+        fs::write(&regular, "")?;
+        let listener_path = dir.join("listening.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&listener_path)?;
+
+        let envs = [
+            origin::Env::default(),
+            origin::Env {
+                sandboxed: true,
+                socket: Some(listener_path.clone()),
+                pane_id: Some("w1:p1".into()),
+                claude_session: None,
+            },
+            origin::Env {
+                socket: Some(PathBuf::from("relative.sock")),
+                pane_id: Some("w1:p1".into()),
+                ..origin::Env::default()
+            },
+            origin::Env {
+                socket: Some(dir.join("missing.sock")),
+                pane_id: Some("w1:p1".into()),
+                ..origin::Env::default()
+            },
+            origin::Env {
+                socket: Some(regular),
+                pane_id: Some("w1:p1".into()),
+                ..origin::Env::default()
+            },
+            origin::Env {
+                socket: Some(listener_path.clone()),
+                pane_id: Some("bad\u{1b}pane".into()),
+                ..origin::Env::default()
+            },
+            origin::Env {
+                socket: Some(listener_path),
+                pane_id: None,
+                ..origin::Env::default()
+            },
+        ];
+        for (number, env) in envs.iter().enumerate() {
+            let id = format!("t10{number}");
+            new_with_env(&ctx, &id, false, env).with_context(|| format!("case {number}"))?;
+            let task = Task::load(&ctx, &id)?;
+            assert_eq!(task.state.origin, None, "case {number}");
+            assert!(task.state.instance.is_some(), "case {number}");
+        }
+
+        // The same holds for failures after the pane answered.
+        let replies: Vec<Box<dyn FnOnce(serde_json::Value) -> Vec<u8> + Send>> = vec![
+            Box::new(|request| {
+                (serde_json::json!({
+                    "id": request["id"], "error": {"code": "internal", "message": "no"},
+                })
+                .to_string()
+                    + "\n")
+                    .into_bytes()
+            }),
+            Box::new(|request| {
+                let mut body = herdr_reply(
+                    &request,
+                    serde_json::json!({
+                        "source": "herdr:pi", "agent": "pi", "kind": "id", "value": "pane-a",
+                    }),
+                );
+                body.pop();
+                let mut value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                value["id"] = "other-request".into();
+                (value.to_string() + "\n").into_bytes()
+            }),
+            Box::new(|request| {
+                let mut value: serde_json::Value = serde_json::from_slice(&herdr_reply(
+                    &request,
+                    serde_json::json!({
+                        "source": "herdr:pi", "agent": "pi", "kind": "id", "value": "pane-a",
+                    }),
+                ))
+                .unwrap();
+                value["result"]["pane"]["pane_id"] = "w9:p9".into();
+                (value.to_string() + "\n").into_bytes()
+            }),
+            Box::new(|request| {
+                herdr_reply(
+                    &request,
+                    serde_json::json!({
+                        "source": "herdr:pi", "agent": "pi", "kind": "id", "value": "bad\u{202e}",
+                    }),
+                )
+            }),
+        ];
+        for (number, reply) in replies.into_iter().enumerate() {
+            let id = format!("t20{number}");
+            let socket = dir.join(format!("reply{number}.sock"));
+            herdr_socket(&socket, reply);
+            let env = origin::Env {
+                sandboxed: false,
+                socket: Some(socket),
+                pane_id: Some("w1:p1".into()),
+                claude_session: None,
+            };
+            new_with_env(&ctx, &id, false, &env).with_context(|| format!("reply {number}"))?;
+            let task = Task::load(&ctx, &id)?;
+            assert_eq!(task.state.origin, None, "reply {number}");
+            assert!(task.state.instance.is_some(), "reply {number}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_with_a_bad_herdr_endpoint_exits_zero_with_a_note() -> Result<()> {
+        const CHILD: &str = "_DELEGATE_TEST_NEW_ORIGIN";
+        if std::env::var(CHILD).is_ok() {
+            let ctx = Ctx::discover()?;
+            new(&ctx, "t900", false)?;
+            return Ok(());
+        }
+        let repo = TestRepo(
+            std::env::temp_dir().join(format!("delegate-new-{}", uuid::Uuid::new_v4())),
+        );
+        let root = repo.0.join("repo");
+        fs::create_dir_all(&root)?;
+        git(&root, &["init", "-q", "-b", "main"])?;
+        let not_socket = repo.0.join("not-a-socket");
+        fs::write(&not_socket, "")?;
+        let output = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "commands::tests::new_with_a_bad_herdr_endpoint_exits_zero_with_a_note",
+                "--nocapture",
+            ])
+            .current_dir(&root)
+            .env(CHILD, "1")
+            .env("DELEGATE_HOME", repo.0.join("tasks"))
+            .env("HERDR_SOCKET_PATH", &not_socket)
+            .env("HERDR_PANE_ID", "w1:p1")
+            .env_remove("DELEGATE_SANDBOXED")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "new failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(
+                "note: no lead origin recorded for t900 (Herdr socket is not a UNIX socket); the task runs normally"
+            ),
+            "{stderr}"
+        );
+        let ctx = new_ctx(&repo)?;
+        let task = Task::load(&ctx, "t900")?;
+        assert_eq!(task.state.origin, None);
+        assert!(task.state.instance.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn check_commands_lose_herdr_hints() -> Result<()> {
+        const CHILD: &str = "_DELEGATE_TEST_HERDR_CHECK";
+        if std::env::var(CHILD).is_ok() {
+            assert!(std::env::var_os("HERDR_TEST_A").is_some(), "setup: no parent hint");
+            let cmd = [
+                "sh".to_string(),
+                "-c".to_string(),
+                "if env | grep -q '^HERDR_'; then exit 7; fi".to_string(),
+            ];
+            let (rc, out) = run_with_timeout(&cmd, &std::env::temp_dir())?;
+            assert_eq!(rc, 0, "{out}");
+            return Ok(());
+        }
+        let output = Command::new(std::env::current_exe()?)
+            .args(["--exact", "commands::tests::check_commands_lose_herdr_hints"])
+            .env(CHILD, "1")
+            .env("HERDR_TEST_A", "lead")
+            .env("HERDR_PANE_ID", "w1:p1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn run_and_retry_keep_origin_and_instance_and_a_reused_id_is_new() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const CHILD: &str = "_DELEGATE_TEST_ORIGIN_RUN";
+        if std::env::var(CHILD).is_ok() {
+            let ctx = Ctx::discover()?;
+            let id = std::env::var("_DELEGATE_TEST_ORIGIN_RUN_ID")?;
+            return run(
+                &ctx,
+                &RunArgs {
+                    id,
+                    tier: None,
+                    worker: Some("codex:gpt-test@high".into()),
+                    questions: QuestionPhase::Never,
+                    dry_run: false,
+                    research: false,
+                    background: false,
+                },
+            );
+        }
+
+        let repo =
+            TestRepo(std::env::temp_dir().join(format!("delegate-run-{}", uuid::Uuid::new_v4())));
+        let root = repo.0.join("repo");
+        fs::create_dir_all(root.join("bin"))?;
+        git(&root, &["init", "-q", "-b", "main"])?;
+        git(&root, &["config", "user.name", "Test"])?;
+        git(&root, &["config", "user.email", "test@example.invalid"])?;
+        git(&root, &["config", "commit.gpgsign", "false"])?;
+        fs::write(root.join("code"), "base\n")?;
+        git(&root, &["add", "."])?;
+        git(&root, &["commit", "-qm", "base"])?;
+        let worker = root.join("bin/codex");
+        fs::write(&worker, "#!/bin/sh\nexit 0\n")?;
+        fs::set_permissions(&worker, fs::Permissions::from_mode(0o755))?;
+        fs::write(root.join("workers.toml"), crate::config::WORKERS_EXAMPLE)?;
+        let ctx = Ctx {
+            root: root.clone(),
+            dhome: repo.0.join("tasks"),
+            gitdir: root.join(".git"),
+        };
+        let origin = crate::task::Origin::Supported {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            kind: crate::task::RefKind::Path,
+            value: "/sessions/lead.jsonl".into(),
+        };
+        let instance = uuid::Uuid::new_v4().to_string();
+        let mut task = Task::load(&ctx, "t900")?;
+        fs::create_dir_all(&task.dir)?;
+        fs::write(&task.spec, "# Task t900: Keep state\n\n## Acceptance\n")?;
+        task.state.origin = Some(origin.clone());
+        task.state.instance = Some(instance.clone());
+        task.save()?;
+
+        let path = std::env::join_paths(
+            std::iter::once(root.join("bin"))
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
+        )?;
+        for round in 0..2 {
+            let output = Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "commands::tests::run_and_retry_keep_origin_and_instance_and_a_reused_id_is_new",
+                ])
+                .current_dir(&root)
+                .env(CHILD, "1")
+                .env("_DELEGATE_TEST_ORIGIN_RUN_ID", "t900")
+                .env("DELEGATE_HOME", &ctx.dhome)
+                .env("DELEGATE_WORKERS", root.join("workers.toml"))
+                .env("DELEGATE_SANDBOX", "0")
+                .env("PATH", &path)
+                .env_remove("CLAUDE_CODE_SESSION_ID")
+                .env_remove("HERDR_SOCKET_PATH")
+                .env_remove("HERDR_PANE_ID")
+                .env_remove("DELEGATE_SANDBOXED")
+                .env_remove("_DELEGATE_BACKGROUND_RUN")
+                .output()?;
+            assert!(
+                output.status.success(),
+                "round {round} failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let after = Task::load(&ctx, "t900")?;
+            assert_eq!(after.state.origin, Some(origin.clone()));
+            assert_eq!(after.state.instance.as_deref(), Some(instance.as_str()));
+            assert_eq!(after.state.rounds.len(), round + 1);
+        }
+
+        discard(&ctx, "t900")?;
+        new_with_env(&ctx, "t900", false, &origin::Env::default())?;
+        let recreated = Task::load(&ctx, "t900")?;
+        assert!(recreated.state.instance.is_some());
+        assert_ne!(recreated.state.instance.as_deref(), Some(instance.as_str()));
+        assert_eq!(recreated.state.origin, None);
         Ok(())
     }
 }

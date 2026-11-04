@@ -160,6 +160,8 @@ mod tests {
             goal: String::new(),
             session: session.map(str::to_owned),
             session_name: name.into(),
+            origin: None,
+            instance: None,
             phase: phase.into(),
             outcome: (phase == "done").then(|| "pass".into()),
             worker: None,
