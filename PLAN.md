@@ -23,8 +23,12 @@
   isolating unreadable tasks and splitting t124/t140 (decision 039). Hidden S150 revised
   to match. S151 (t140) approved and automated (fails until built).
   Re-review: 0 high, 3 medium (t124/t140 only), fixed: remembered attribution for
-  unreadable tasks, `read_tasks` step budget, whole-refresh budget. t139 started.
-  NEXT: review t139; before t124 starts, one more plan review of t124/t140.
+  unreadable tasks, `read_tasks` step budget, whole-refresh budget. t124/t140 plan
+  review: 0 high, 1 medium (S151 bare `wait`), fixed.
+- t139 MERGED (673fb8e, DeepSeek v4.1 Flash, 1 round): S147 + hidden S149 pass.
+  Accepted deviation: category C detected without a Unicode table, so scattered
+  unassigned codepoints aren't enumerated.
+  NEXT: lead fetches `signal-hook` into the cargo cache, then start t124.
 - Later, optional: ask upstream Sheprd for a mod data source (agent identity + external
   data) if per-task clickable rows or native cards prove needed.
 - No active delegated tasks. t138 diagnostics remain under
@@ -54,8 +58,7 @@
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t139 | Record Herdr lead origin + task instance; strip HERDR_* from workers | observer-2 | todo | plan review | standard | `scripts/check`, S055 S056 S057 S061 P009 S147 | spec drafted; Pi/Claude supported, Codex unsupported, never fails `new` |
-| t124 | Side-pane reporter: lead's tasks as Herdr sidebar tokens, bounded fallible reader, quit/signals | observer-3 | todo | t139 merged, signal-hook fetched, plan re-review | standard | `scripts/check`, S148 S055 S056 S057 P009 (+hidden S150) | decision 039: signal-hook allowed; unreadable task isolated as `unavailable`; never false-empty |
+| t124 | Side-pane reporter: lead's tasks as Herdr sidebar tokens, bounded fallible reader, quit/signals | observer-3 | todo | signal-hook fetched | standard | `scripts/check`, S148 S055 S056 S057 P009 (+hidden S150) | decision 039: signal-hook allowed; unreadable task isolated as `unavailable`; never false-empty |
 | t140 | Interactive side pane keys, `--beside` launcher, `--sidebar-config`, skill text | observer-4 | todo | t124 merged | standard | `scripts/check`, S151 S148; lead-run real Pi/Claude walkthrough (S137/S138) | split from t124 by decision 039 |
 | t125 | Independent observer property checks | observer-5 | todo | t124, t139, t140 | standard | P030–P033 through status JSON and the side pane's Herdr reports (stand-in socket), with seeded action sequences | max four properties; resolve scope gaps first; family independent from implementation; no full acceptance from reduced coverage |
 | t127 | Production observer attempt identity, retention, fallback | observer-contract | todo | t124 in use + user design | deep | per-fallback attempt identity, closed-lead/merge retention, cross-host visibility, without weakened P030/P032 | origin + task instance moved to t139 (038); the rest still design-first |
