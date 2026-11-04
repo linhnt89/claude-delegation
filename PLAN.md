@@ -39,11 +39,14 @@
   a Claude lead (no credentials in isolation; the print-mode probe passed earlier)
   and how Sheprd renders the rows (the user checks this after pasting
   `delegate watch --sidebar-config`).
-- t141 (`docs/task-specs/t141-kit-history-real-kits-only.md`) is running. t140
-  hand-added a fake legacy kit to kit-history.txt. t141 moves that need into the
-  upgrade tests. Don't run `scripts/kit-history` on main until it merges.
-- Later, optional: ask upstream Sheprd for a mod data source (agent identity + external
-  data) if per-task clickable rows or native cards prove needed.
+- t141 MERGED (1 question round + 1 round): kit-history.txt is generator output again
+  (fake legacy kit removed). Upgrade tests build that layout through the private
+  `upgrade_with_kits`; `history_lists_only_shipped_kits` guards against a new fake.
+- Installed `~/.local/bin/delegate` rebuilt from main 2026-11-04 (old binary kept
+  as `delegate.bak-20261103`). The sidebar block was appended to the user's Herdr
+  config.toml (backup `config.toml.bak.pre-delegate`). The side pane runs beside the
+  Claude lead and found its identity. Rows under a lead in Sheprd are still unseen:
+  the first task created with the new binary shows them.
 - t138 diagnostics remain under
   `/tmp/delegate-codex-deferred.pnZRzk/` (unreviewed, not safe to apply wholesale).
 
