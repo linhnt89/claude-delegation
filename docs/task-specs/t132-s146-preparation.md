@@ -144,3 +144,43 @@ request bytes before declaring a request still incomplete after 2s (preserve bou
 work/overflow constraints); high descriptors must not leak raw ValueError from
 select. Prefer scalable selectors/poll or fail redacted/invalid, never raw traceback.
 Keep injected-clock tests fast and all original security guards. Rerun Acceptance.
+
+## Round 3
+Apply NEW current .task/REVIEW.patch first (round 2 tests), not the older review
+patch. Fix both findings: a complete request >64KiB must drain over bounded ticks
+even if owner polling resumed late. Keep one bounded read/tick; don't expire a tick
+that makes read progress or still has readable queued bytes. Treat the 2s request
+timeout as no-progress/inactivity; owner's absolute deadline still bounds the run.
+Never permit unbounded reads, body/buffer growth or background blocking IO.
+For hook validation reject group/world WRITABLE mode bits on hooks.json and genuine
+script, while allowing installed read/execute bits (0644/0755) beneath the private
+0700 run root. Do NOT chmod/rewrite the genuine live script. Add regression tests
+for 0666 hooks and 0777 script; preserve digest/type/uid/nlink/race checks.
+Rerun all Acceptance and report the clarified inactivity rule.
+
+## Round 4
+Apply NEW .task/REVIEW.patch first (round 3 trust-key regression). Fix both low
+findings as spec compliance: TOML project key containing DEL must either correctly
+escape it (while preserving valid Unicode paths) or reject with PreparationError
+before publishing a malformed profile. Do not introduce surrogate-pair TOML errors.
+Replace path chmod(follow_symlinks=False) on NEW directories with verified no-follow
+directory descriptor + fchmod, keeping exclusive creation/no chmod of preexisting
+entries. Redact NotImplementedError paths as well; simulate unsupported operations
+in tests. Preserve mode/uid/link/ancestor guards. Rerun all Acceptance.
+
+## Round 5
+Apply NEW current .task/REVIEW.patch first (round 4 tests), then:
+1. Remove ALL tracked bytecode/__pycache__ artifacts from this branch. Final diff
+   against main must contain ONLY the two scoped .py files, never generated files.
+   Use PYTHONDONTWRITEBYTECODE=1 while testing and remove generated caches before
+   finishing; do not add unrelated .gitignore or touch oracle source/tests.
+2. Reject ':' in the canonical Herdr parent before profile creation, to preserve
+   the exact pinned absolute PATH and avoid relative entries.
+3. Clarify source-binary vs private-artifact policy: herdr_bin is a canonical regular
+   executable, permitted current-uid OR root ownership and multiple hardlinks. It
+   is an explicit externally pinned source binary (t131 separately validates digest),
+   NOT a private run-created artifact. Keep no-follow canonical traversal and stable
+   reads; do not relax uid/nlink=1 rules for run-created managed package/hooks/control
+   artifacts. Adjust the earlier source-binary hardlink test to this clarified rule;
+   retain ancestor/symlink/FIFO/other-user rejection. Add root-owned source coverage.
+Rerun all Acceptance and verify final git diff --stat has no binary/cache files.

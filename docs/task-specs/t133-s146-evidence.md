@@ -146,3 +146,34 @@ fields. Suppress input-bearing parser exception contexts in EvidenceError paths
 Add a regression for appended contradictory input_text on the submitted user
 message in addition to reviewer tests. Do not weaken fixtures/tests or create
 fallback guesses. Rerun all Acceptance; no live binary/provisioning access.
+
+## Round 3
+Apply NEW current .task/REVIEW.patch first (second review tests). Fix all three
+findings: retained_source.id.role, when present, must agree with actual payload.role
+and have proper type; validate present conflicting message/turn binding fields,
+not only turn_id. Selected user/assistant content must fail closed on unsupported
+item types or shapes (including refusal without a text key), not discard unknown
+items before text comparison. Preserve tolerated separate reasoning/context records.
+Validate integer ranges/signedness of Linux stat numeric fields, not just PID and
+start ticks: impossible ppid or overflowing/negative unsigned counters must error;
+legitimate signed values such as tpgid=-1 and cutime/cstime must remain supported.
+Use actual Linux x86_64 field definitions with tests, not a blanket unsigned rule.
+Do not change fixtures or weaken previous tests. Rerun all Acceptance.
+
+## Round 4
+Apply NEW current .task/REVIEW.patch first (third review). Fix both high findings:
+1. Tolerated record types are not counted as duplicate messages, but their present
+   known thread/session/turn/root binding fields must still agree with this rollout's
+   metadata and started/completed turn. Validate known payload binding fields on
+   thread_settings_applied/item_completed/user_message/agent_message/token_count,
+   token_usage_record etc, plus already-covered context/message locations. Do not
+   ignore contradictions merely because the record's content is unrelated. Do not
+   treat arbitrary message item IDs as conversation identities.
+2. Prevent datetime.fromisoformat's silent submicrosecond truncation from admitting
+   out-of-window or reversed boundaries. Either compare timestamp fractions exactly,
+   or explicitly reject unsupported >6-digit fractional precision with EvidenceError
+   BEFORE conversion. The pinned live driver emits <=6 fractional digits; no need to
+   accept every ISO8601 extension, but never silently lose precision into success.
+Cover all reviewer cases without changing fixtures or weakening existing tests.
+Rerun all Acceptance, remove generated caches before done; only two scoped .py files
+may be in the final diff. No live binaries/provisioning or product changes.
