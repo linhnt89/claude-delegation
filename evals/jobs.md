@@ -47,6 +47,11 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
   Its opt-in live check is pending: t129's draft reproduced the failure in lead-run
   live tests but was discarded after safety/oracle review. No accepted automated
   check exists; exploratory evidence is not feature acceptance.
+- User approved S146 on 2026-11-04: credential-free sibling using real Codex/Herdr,
+  genuine SessionStart hooks and one shared daemon, with only model replies stubbed
+  locally. Exploratory probes reproduce the wrong-pane report without credentials;
+  oracle/driver specs await renewed independent review. No check exists yet. S146
+  does not replace authenticated S145 or concurrent/resume/native acceptance.
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->

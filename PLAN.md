@@ -64,14 +64,40 @@
   review, temporarily through `pi:github-copilot/claude-opus-5.5@high`. Use a one-off
   `delegate plan-review --planner gpt --worker pi:github-copilot/claude-opus-5.5@high`;
   do not change `workers.toml` or silently substitute another reviewer/provider.
-- Next session: redesign the S145 check and scope the smallest caller-context remedy
-  against pinned Codex/Herdr source, write reviewable specs, then run the approved
-  independent plan review before deep implementation. Codex target approval is not
-  blanket approval for ownership/schema changes; settle the exact contract first.
+- Current design draft: `docs/research/codex-attribution-redesign.md` separates the
+  S145 verdict oracle from private live resource handling and compares remedy boundaries.
+  Pinned source reconfirms the stale server environment; a caller-scoped hook context
+  appears to require a new protocol contract, which is NOT yet authorized. The approved
+  one-off Opus review completed: 4 high, 7 medium, 4 low; retained in
+  `docs/research/codex-attribution-redesign-review.md`. Corrections/blockers are recorded
+  at the top of the draft. Review had zero task specs and does not approve implementation.
+- User approved retiring the exposed temporary authenticated profile: deleted only
+  `/var/tmp/ho-codex.OAzcs8/home/.codex` after ownership/ancestor/process checks;
+  confirmed absent. No credential contents read/copied or personal profile touched.
+  This resolves that specific exposure, not the general sandbox limitation or t025.
+- Credential-free lead probes reproduced the bug with real Codex 0.166.0 / Herdr 0.9.5,
+  genuine unchanged hook and a localhost Responses provider: distinct completed A/B
+  threads, B exposed on A, B unknown. Refined repeat proved the same managed-daemon
+  PID/OS start fingerprint held each rollout open. No auth file or Authorization header;
+  all owned processes, including the private updater, cleaned up. Details and limits:
+  `docs/research/codex-credential-free-attribution.md`. Not an automated eval verdict.
+- User approved S146; marked agreed. Check contract and concrete t130/t131 specs are
+  staged in `docs/research/codex-s146-check-contract.md` and `docs/task-specs/`.
+  They pin trace/coverage, binary/version and genuine hook hash, provisioning opt-in,
+  independent rollout/serving-daemon evidence, resource ownership, signal cleanup,
+  offline Acceptance and the lead-only expected-failing live baseline gate.
+- Next USER GATE: authorize a further independent Opus plan review of the actual
+  t130/t131 specs (prior one-off review is complete). No check implementation before
+  that review. No task state created or worker started. S145 unchanged; no product patch.
+  Check authorship capacity remains an explicit gate: t130 standard may fall back to
+  GPT, which would exhaust t131's deep pool under checks_by; stop instead of overriding.
+  GPT-authored t131 also blocks the later GPT-only deep remedy under family independence;
+  that later wave needs separately approved non-GPT deep capacity, not a silent override.
+  Codex target approval is not schema-change approval.
 - Rejected t129 draft and latest offline reproducers are retained privately at
   `/var/tmp/ho-codex.OAzcs8/rejected-t129/` while available. Treat them as unsafe
-  diagnostic input, never apply the draft wholesale. Workers must not access the
-  authenticated temporary profile. No task is currently active.
+  diagnostic input, never apply the draft wholesale. The authenticated temporary
+  CODEX_HOME has now been deleted with user approval. No task is currently active.
 
 ## Investigation baseline
 - Authenticated isolated Codex tracing found a real attribution bug: Codex 0.166.0's
@@ -103,7 +129,9 @@
 |----|------|------|--------|------------|------|------------|-------|
 | t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex shared-daemon attribution remedy or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
-| t128 | Codex shared-daemon attribution regression and bounded remedy | observer-codex | todo | safe S145 check + independent plan review + remedy design | deep | S145 through real authenticated isolated Codex/Herdr; no wrong-pane attribution | t129 discarded as unsafe; Codex target + one-off Copilot Opus review approved; contract/design pending; blocks full Codex native gate |
+| t130 | Pure S146 trace oracle + adversarial checks | codex-check-1 | todo | renewed independent spec review | standard | oracle unit tests + scripts/check; contributes to agreed S146, not live acceptance | spec staged in docs/task-specs; non-GPT authorship needed for t131 capacity; no worker started |
+| t131 | Credential-free real Codex/Herdr S146 driver | codex-check-2 | todo | t130 + renewed independent spec review | deep | resource tests + honest no-opt-in skip + lead-run genuine wrong-pane baseline failure | spec staged; checks_by t130; no authenticated access; no worker started |
+| t128 | Codex shared-daemon attribution regression and bounded remedy | observer-codex | todo | t130/t131 + safe S145 check + independent plan review + remedy design + independent author capacity | deep | S145 through real authenticated isolated Codex/Herdr; no wrong-pane attribution | t129 discarded as unsafe; current GPT-only deep capacity cannot implement after GPT-authored checks; no protocol design approved |
 | t127 | Production observer identity/instance/attempt contract | observer-contract | todo | prototype evidence + user design | deep | reconcile decisions 009/031/035; stable task instances and per-fallback attempt identity without weakened P030/P032 | design first; no production schema changes authorized by the prototype; blocks full property completion |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
