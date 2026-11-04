@@ -97,7 +97,8 @@
   found actual-pane binding/exit-edge defects. All fixed; final independent review
   0 high/0 medium/0 low (`docs/research/codex-s146-oracle-review.md`). Lead's 25
   opaque-pane-renaming/adversarial probes pass. Offline evidence only, no S146 verdict.
-- No active task state remains. Oversized t131 state discarded; smaller draft blocked.
+- After t130, no active task state remained. Oversized t131 was discarded; smaller
+  drafts were blocked pending preparation (now advanced below).
   Lead preparation advanced: redacted real rollout/PID/proc fixtures now live under
   `evals/lib/fixtures/codex-identity/`; t132/t133 blocked spec drafts stage component
   boundaries/APIs. Fresh credential-free provisioning succeeds with `app-server daemon
@@ -119,8 +120,19 @@
   skip assertion and wrapper/timing fixes. No second Opus invocation claimed.
   Worker execution is offline-only (synthetic processes/loopback), not real binary
   provisioning or opt-in. Lead runs unchanged live baseline gate after review.
-  t132/t133 may now start together, t138 follows t133, and t131 follows all component
+  t132/t133 started together; t138 follows t133, and t131 follows all component
   merges. S145 unchanged; no Codex/Herdr product patch.
+- t132 merged after five GPT rounds: 41 preparation tests (one sandbox ownership
+  skip), 72 identity tests and scripts/check pass. Final independent Claude review:
+  0 high/0 medium/1 low, retained in codex-s146-prepare-final-review.md. Accepted low:
+  shared-stub malformed-input subtests cannot individually detect every missing
+  invalid-flag mutation; reviewer confirmed current branches set the flag correctly.
+  Source Herdr binary accepts current/root uid and hardlinks; private managed/hook
+  artifacts retain strict uid/nlink=1 guards. No live S146 verdict.
+- t133 is running round 4 standard (DeepSeek); repeated independent reviews found
+  cross-turn/output/binding and timestamp precision defects, now being fixed with
+  regression tests. Do not start t138 until evidence reader merge/review is green.
+  t131/t138 spec state remains not run.
   `scripts/check` passes (31 Python tests, 321 Rust tests, clippy clean); new fixtures
   are interface preparation, not an automated S146 verdict.
 - Later gates: patched-build policy/delivery, safe authenticated S145 check and
@@ -131,7 +143,8 @@
 - Rejected t129 draft and latest offline reproducers are retained privately at
   `/var/tmp/ho-codex.OAzcs8/rejected-t129/` while available. Treat them as unsafe
   diagnostic input, never apply the draft wholesale. The authenticated temporary
-  CODEX_HOME has now been deleted with user approval. No task is currently active.
+  CODEX_HOME has now been deleted with user approval. Current check-task state is
+  recorded above; no product remedy task is active.
 
 ## Investigation baseline
 - Authenticated isolated Codex tracing found a real attribution bug: Codex 0.166.0's
@@ -163,8 +176,7 @@
 |----|------|------|--------|------------|------|------------|-------|
 | t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex shared-daemon attribution remedy or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
-| t132 | Local SSE stub, fresh profile and pinned provisioning/hook validation | codex-check-2 | ready | split-spec review corrections complete | deep | offline preparation/safety tests; no authenticated access | explicit deep; worker offline-only, no real binary provisioning |
-| t133 | Pure rollout/PID/proc evidence readers | codex-check-2 | ready | split-spec review corrections complete | standard | fixture-driven binding/continuity/ownership tests | full real-format fixtures; no process control |
+| t133 | Pure rollout/PID/proc evidence readers | codex-check-2 | running | split-spec review corrections complete | standard | fixture-driven binding/continuity/ownership tests | round 4; full real-format fixtures; no process control |
 | t138 | Trusted acquisition, exact owned-process/subreaper handles and one-shot RPC | codex-check-2b | ready | merged t133 | deep | synthetic resource/RPC tests + independent review | extracted per Opus high finding; distinct module/tests, no owner loop |
 | t131 | S146 final owner loop, signals/cleanup and wrapper | codex-check-3 | ready | merged t130/t132/t133/t138 | deep | owner tests + asserted no-opt-in skip + genuine lead-run wrong-pane baseline FAIL | explicit deep; checks_by t130; short EVALS_RESULTS live gate; no resource helper duplication |
 | t134 | Pinned external Codex build and patch delivery | codex-remedy-prep | todo | approved remedy contract | deep | reproducible baseline/patched artifact digests and worker-runnable source tests | no product implementation until exact contract approved |
