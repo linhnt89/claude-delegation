@@ -26,7 +26,7 @@ pub fn run(ctx: &Ctx, id: Option<&str>, interval: f64) -> Result<()> {
     }
 }
 
-fn refresh_interval(seconds: f64) -> Result<Duration> {
+pub(crate) fn refresh_interval(seconds: f64) -> Result<Duration> {
     let interval = Duration::try_from_secs_f64(seconds)
         .context("invalid watch interval; use a finite positive number of seconds")?;
     if interval.is_zero() {

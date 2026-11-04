@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -720,6 +720,105 @@ fn command_target(command: &str) -> String {
     decode().unwrap_or_else(|| command.to_owned())
 }
 
+/// A bounded read of the end of an append-only event log.
+#[derive(Debug, Default)]
+pub(crate) struct Tail {
+    pub(crate) steps: Vec<Value>,
+    pub(crate) dropped: crate::status::EventDrops,
+}
+
+/// Read at most `max_bytes` from the end of `path`, at most `max_records` records, and
+/// skip single records larger than `max_record_bytes`. Counting what was omitted lets
+/// the side pane show an honest "some activity was not read" instead of pretending the
+/// task has no activity.
+pub(crate) fn collect_tail(
+    path: &Path,
+    max_bytes: u64,
+    max_records: usize,
+    max_record_bytes: usize,
+) -> Tail {
+    let mut tail = Tail::default();
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return tail,
+        Err(_) => {
+            tail.dropped.unreadable = true;
+            return tail;
+        }
+    };
+    let Ok(metadata) = file.metadata() else {
+        tail.dropped.unreadable = true;
+        return tail;
+    };
+    let len = metadata.len();
+    let start = len.saturating_sub(max_bytes);
+    tail.dropped.before_window = start;
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        tail.dropped.unreadable = true;
+        return tail;
+    }
+    let mut bytes = Vec::new();
+    if Read::by_ref(&mut file)
+        .take(max_bytes)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        tail.dropped.unreadable = true;
+        return tail;
+    }
+    if start > 0 {
+        // The first bytes are the tail of a record whose beginning was not read.
+        if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=end);
+            tail.dropped.incomplete += 1;
+        } else {
+            tail.dropped.incomplete += 1;
+            return tail;
+        }
+    }
+    let mut lines: Vec<&[u8]> = bytes
+        .split_inclusive(|byte| *byte == b'\n')
+        .filter(|line| line.iter().any(|byte| !byte.is_ascii_whitespace()))
+        .collect();
+    if let Some(last) = lines.last()
+        && last.last() != Some(&b'\n')
+    {
+        lines.pop();
+        tail.dropped.incomplete += 1;
+    }
+    if lines.len() > max_records {
+        tail.dropped.over_limit = lines.len() - max_records;
+        lines.drain(..lines.len() - max_records);
+    }
+    let mut indices = HashMap::<u64, usize>::new();
+    for line in lines {
+        if line.len() > max_record_bytes {
+            tail.dropped.oversized += 1;
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(line) else {
+            tail.dropped.malformed += 1;
+            continue;
+        };
+        let Some(id) = value["id"].as_u64() else {
+            tail.dropped.malformed += 1;
+            continue;
+        };
+        if let Some(&index) = indices.get(&id) {
+            if let Some(step) = tail.steps.get_mut(index) {
+                step["result"] = value["result"].clone();
+            }
+        } else if value["kind"].is_string()
+            && value["at"].is_string()
+            && value["target"].is_string()
+        {
+            indices.insert(id, tail.steps.len());
+            tail.steps.push(value);
+        }
+    }
+    tail
+}
+
 /// Fold append-only result patches, ignoring incomplete/corrupt records during a write.
 pub(crate) fn collect(path: &Path) -> Vec<Value> {
     let Ok(bytes) = std::fs::read(path) else {
@@ -778,6 +877,7 @@ fn timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     const RECORDINGS: &[(Harness, &str, &str)] = &[
         (
@@ -1327,5 +1427,66 @@ mod tests {
             .unwrap();
         assert!(stream.saw_quota());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tail_reads_a_huge_log_without_reading_it_all() -> Result<()> {
+        let dir = temp();
+        let path = dir.join("events.jsonl");
+        let mut file = File::create(&path)?;
+        let size = 50 * 1024 * 1024;
+        file.set_len(size)?;
+        file.seek(SeekFrom::End(0))?;
+        file.write_all(
+            b"\n{\"id\":1,\"kind\":\"read\",\"at\":\"2026-11-04T00:00:00Z\",\"target\":\"newest\"}\n",
+        )?;
+        let start = Instant::now();
+        let tail = collect_tail(&path, 256 * 1024, 200, 16 * 1024);
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert_eq!(tail.steps.len(), 1);
+        assert_eq!(tail.steps[0]["target"], "newest");
+        assert!(tail.dropped.before_window > 0);
+        assert!(tail.dropped.incomplete > 0, "the first sparse bytes are a partial record");
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tail_skips_oversized_and_malformed_records_and_folds_patches() -> Result<()> {
+        let dir = temp();
+        let path = dir.join("events.jsonl");
+        let oversized = "x".repeat(20 * 1024);
+        let text = format!(
+            "{oversized}\nnot json\n{{\"id\":7,\"kind\":\"read\",\"at\":\"2026-11-04T00:00:00Z\",\"target\":\"a.rs\"}}\n{{\"id\":7,\"result\":\"ok\"}}\n"
+        );
+        std::fs::write(&path, text)?;
+        let tail = collect_tail(&path, 256 * 1024, 200, 16 * 1024);
+        assert_eq!(tail.dropped.oversized, 1);
+        assert_eq!(tail.dropped.malformed, 1);
+        assert_eq!(tail.steps.len(), 1);
+        assert_eq!(tail.steps[0]["result"], "ok");
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tail_keeps_only_the_newest_record_limit() -> Result<()> {
+        let dir = temp();
+        let path = dir.join("events.jsonl");
+        let mut text = String::new();
+        for id in 0..10 {
+            let _ = writeln!(
+                text,
+                "{{\"id\":{id},\"kind\":\"read\",\"at\":\"2026-11-04T00:00:00Z\",\"target\":\"f{id}\"}}"
+            );
+        }
+        std::fs::write(&path, text)?;
+        let tail = collect_tail(&path, 256 * 1024, 3, 16 * 1024);
+        assert_eq!(tail.steps.len(), 3);
+        assert_eq!(tail.steps[0]["target"], "f7");
+        assert_eq!(tail.steps[2]["target"], "f9");
+        assert_eq!(tail.dropped.over_limit, 7);
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 }

@@ -125,6 +125,138 @@ pub(crate) fn capture(env: &Env) -> Outcome {
     parse(&line, &request_id, pane, env.claude_session.as_deref())
 }
 
+/// The current lead observed on a pane, without guessing beyond the stored rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PaneLead {
+    Supported(Origin),
+    /// A Codex conversation; this slice cannot attribute its tasks.
+    Unsupported { source: String, agent: String },
+    /// The pane has no agent session right now.
+    NoConversation,
+    /// An identity that does not meet t139's rules.
+    Invalid,
+}
+
+/// Read a pane's current conversation with one bounded `pane.get`.
+pub(crate) fn pane_lead(socket: &Path, pane: &str) -> Result<PaneLead, &'static str> {
+    if pane.is_empty() || pane.chars().any(forbidden_category_c) {
+        return Err("invalid Herdr pane id");
+    }
+    let params = json!({"pane_id": pane});
+    let value = exchange(socket, "pane.get", &params)?;
+    let result = &value["result"];
+    if result.get("type").and_then(Value::as_str) != Some("pane_info") {
+        return Err("Herdr did not return pane_info");
+    }
+    let info = &result["pane"];
+    if info.get("pane_id").and_then(Value::as_str) != Some(pane) {
+        return Err("Herdr returned another pane");
+    }
+    let Some(identity) = info.get("agent_session") else {
+        return Ok(PaneLead::NoConversation);
+    };
+    if identity.is_null() {
+        return Ok(PaneLead::NoConversation);
+    }
+    let Some(identity) = identity.as_object() else {
+        return Ok(PaneLead::Invalid);
+    };
+    let (Some(source), Some(agent), Some(kind), Some(value)) = (
+        identity.get("source").and_then(Value::as_str),
+        identity.get("agent").and_then(Value::as_str),
+        identity.get("kind").and_then(Value::as_str),
+        identity.get("value").and_then(Value::as_str),
+    ) else {
+        return Ok(PaneLead::Invalid);
+    };
+    if [source, agent, value]
+        .into_iter()
+        .any(|field| !valid_text(field))
+    {
+        return Ok(PaneLead::Invalid);
+    }
+    let kind = match kind {
+        "id" => RefKind::Id,
+        "path" => RefKind::Path,
+        _ => return Ok(PaneLead::Invalid),
+    };
+    if kind == RefKind::Path && !Path::new(value).is_absolute() {
+        return Ok(PaneLead::Invalid);
+    }
+    Ok(match (source, agent) {
+        ("herdr:pi", "pi") | ("herdr:claude", "claude") => PaneLead::Supported(Origin::Supported {
+            source: source.into(),
+            agent: agent.into(),
+            kind,
+            value: value.into(),
+        }),
+        ("herdr:codex", "codex") => PaneLead::Unsupported {
+            source: source.into(),
+            agent: agent.into(),
+        },
+        _ => PaneLead::Invalid,
+    })
+}
+
+/// Report sidebar metadata tokens on one pane. This is display-only: callers never read
+/// these values back as task data.
+pub(crate) fn report_metadata(
+    socket: &Path,
+    pane: &str,
+    source: &str,
+    seq: u64,
+    ttl_ms: u64,
+    tokens: &[(&str, Option<String>)],
+) -> Result<(), &'static str> {
+    if pane.is_empty() || pane.chars().any(forbidden_category_c) {
+        return Err("invalid Herdr pane id");
+    }
+    let mut values = serde_json::Map::new();
+    for (key, value) in tokens {
+        values.insert((*key).into(), value.clone().map_or(Value::Null, Value::String));
+    }
+    let params = json!({
+        "pane_id": pane,
+        "source": source,
+        "seq": seq,
+        "ttl_ms": ttl_ms,
+        "tokens": Value::Object(values),
+    });
+    let _ = exchange(socket, "pane.report_metadata", &params)?;
+    Ok(())
+}
+
+fn exchange(socket: &Path, method: &str, params: &Value) -> Result<Value, &'static str> {
+    if !socket.is_absolute() {
+        return Err("Herdr socket path is not absolute");
+    }
+    let metadata = std::fs::metadata(socket).map_err(|_| "Herdr socket is unavailable")?;
+    if !metadata.file_type().is_socket() {
+        return Err("Herdr socket is not a UNIX socket");
+    }
+    let deadline = Instant::now() + DEADLINE;
+    let mut stream = connect(socket, deadline)?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request = json!({
+        "id": &request_id,
+        "method": method,
+        "params": params,
+    })
+    .to_string()
+        + "\n";
+    send(&mut stream, request.as_bytes(), deadline)?;
+    let line = receive(&mut stream, deadline)?;
+    let value = serde_json::from_slice::<Value>(&line)
+        .map_err(|_| "Herdr response was not JSON")?;
+    if value.get("id").and_then(Value::as_str) != Some(&request_id) {
+        return Err("Herdr response had another request id");
+    }
+    if value.get("error").is_some() {
+        return Err("Herdr returned an error");
+    }
+    Ok(value)
+}
+
 /// `UnixStream::connect` has no timeout; bound it with the same total deadline.
 fn connect(socket: &Path, deadline: Instant) -> Result<UnixStream, &'static str> {
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -296,6 +428,12 @@ fn valid_text(text: &str) -> bool {
 
 fn forbidden_identity_char(c: char) -> bool {
     forbidden_category_c(c) || matches!(c, '\u{2028}' | '\u{2029}')
+}
+
+/// Display text uses the same safety rules as identity text: category C, Zl and Zp
+/// become U+FFFD instead of being sent to a terminal or a sidebar.
+pub(crate) fn forbidden_display_char(c: char) -> bool {
+    forbidden_identity_char(c)
 }
 
 /// Unicode category C without a dependency: controls, format, private use and the

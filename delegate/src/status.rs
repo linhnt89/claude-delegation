@@ -11,14 +11,15 @@ use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{IsTerminal, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::config::Worker;
+use crate::config::{ProjectRules, ReviewRule, Worker};
 use crate::task::{CheckOutcome, Ctx, RoundStatus, Task, git};
 use crate::{commands, spec};
 
@@ -29,6 +30,139 @@ pub enum Depth {
     // Constructed by t011/t012; keep the parallel-task interface available now.
     #[allow(dead_code)]
     Phase,
+}
+
+/// Bounds for the side pane's read-only refresh. The defaults are the t124 values;
+/// the next task only changes `steps` (and may turn details off for the plain frame).
+#[derive(Clone, Copy, Debug)]
+pub struct Budget {
+    /// Most event steps kept per task.
+    pub steps: usize,
+    /// Read changed files and the log tail (the expanded-task fields).
+    pub details: bool,
+    /// Most directory entries the worktree activity scan may inspect.
+    pub max_entries: usize,
+    /// Deadline for every git process.
+    pub git_timeout: Duration,
+    /// Most bytes read from the end of `events.jsonl`.
+    pub event_bytes: u64,
+    /// Most records considered from that window.
+    pub event_records: usize,
+    /// Largest single event record accepted.
+    pub event_record_bytes: usize,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self {
+            steps: 5,
+            details: true,
+            max_entries: 5_000,
+            git_timeout: Duration::from_secs(2),
+            event_bytes: 256 * 1024,
+            event_records: 200,
+            event_record_bytes: 16 * 1024,
+        }
+    }
+}
+
+/// What the bounded event reader omitted, so the UI can say so instead of showing a
+/// clean-looking empty activity list.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EventDrops {
+    /// Bytes of `events.jsonl` before the 256 KiB window.
+    pub before_window: u64,
+    /// Complete records older than the per-refresh record limit.
+    pub over_limit: usize,
+    /// Records larger than the record-size limit.
+    pub oversized: usize,
+    /// Records that were not JSON, or had no usable step id.
+    pub malformed: usize,
+    /// Partial records at either end of the window.
+    pub incomplete: usize,
+    /// The file could not be opened or read.
+    pub unreadable: bool,
+}
+
+impl EventDrops {
+    pub fn is_empty(&self) -> bool {
+        self.before_window == 0
+            && self.over_limit == 0
+            && self.oversized == 0
+            && self.malformed == 0
+            && self.incomplete == 0
+            && !self.unreadable
+    }
+
+    /// A short, sanitized description for a frame or expanded row.
+    pub fn summary(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if self.unreadable {
+            parts.push("activity unreadable".to_string());
+        }
+        if self.before_window > 0 {
+            parts.push(format!(
+                "dropped {} KiB before the read window",
+                self.before_window.div_ceil(1024)
+            ));
+        }
+        if self.over_limit > 0 {
+            parts.push(format!("dropped {} older records", self.over_limit));
+        }
+        if self.oversized > 0 {
+            parts.push(format!("dropped {} oversized records", self.oversized));
+        }
+        if self.malformed > 0 {
+            parts.push(format!("dropped {} malformed records", self.malformed));
+        }
+        if self.incomplete > 0 {
+            parts.push(format!("dropped {} incomplete records", self.incomplete));
+        }
+        Some(parts.join("; "))
+    }
+}
+
+/// One task as the side pane read it. A task that fails to load is isolated instead of
+/// turning the whole list into an empty or failed state. The view dominates the enum on
+/// purpose: this is the row the side pane consumes, not a hot collection of tiny values.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum TaskRead {
+    View {
+        view: TaskView,
+        /// `None` means a bounded git call failed, so merge readiness is unknown.
+        ready: Option<bool>,
+        dropped: EventDrops,
+        /// The worktree scan hit its entry cap before it could find the latest mtime.
+        activity_unknown: bool,
+    },
+    Unavailable { id: String, reason: String },
+}
+
+impl TaskRead {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::View { view, .. } => &view.id,
+            Self::Unavailable { id, .. } => id,
+        }
+    }
+
+    pub fn view(&self) -> Option<&TaskView> {
+        match self {
+            Self::View { view, .. } => Some(view),
+            Self::Unavailable { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct Readiness {
+    ready: Option<bool>,
+    blockers: Vec<String>,
+    next: Option<String>,
 }
 
 /// The public JSON task object. Optional facts are null until known.
@@ -461,6 +595,632 @@ pub fn collect(ctx: &Ctx, id: Option<&str>, depth: Depth) -> Result<Vec<TaskView
             Ok(view)
         })
         .collect()
+}
+
+/// Read every task in this checkout with explicit budgets. A missing task store is an
+/// error, never an empty list; one unreadable task is isolated as `Unavailable`.
+pub fn read_tasks(ctx: &Ctx, budget: Budget) -> Result<Vec<TaskRead>> {
+    let ids = list_task_ids(ctx)?;
+    Ok(ids
+        .into_iter()
+        .map(|id| match Task::load(ctx, &id) {
+            Ok(task) => read_task(ctx, &task, budget),
+            Err(error) => TaskRead::Unavailable {
+                id,
+                reason: format!("{error:#}"),
+            },
+        })
+        .collect())
+}
+
+/// List task folders without the lossy `task_ids` behaviour. A missing, unreadable
+/// or unlistable store is an outage, not an empty task list.
+fn list_task_ids(ctx: &Ctx) -> Result<Vec<String>> {
+    let entries = fs::read_dir(&ctx.dhome).with_context(|| {
+        format!(
+            "listing task state in {}; restore it or check permissions",
+            ctx.dhome.display()
+        )
+    })?;
+    let mut ids = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| {
+            format!("listing task state in {}; check permissions", ctx.dhome.display())
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(['_', '.']) {
+            continue;
+        }
+        let file_type = entry.file_type().with_context(|| {
+            format!("reading task state entry {}; check permissions", entry.path().display())
+        })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        // Keep the existing definition of a task (a SPEC.md), but an unreadable SPEC
+        // still names a task we must isolate, not silently omit.
+        match fs::metadata(entry.path().join("SPEC.md")) {
+            Ok(metadata) if metadata.is_file() => ids.push(name),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => ids.push(name),
+        }
+    }
+    ids.sort();
+    Ok(ids)
+}
+
+fn read_task(ctx: &Ctx, t: &Task, budget: Budget) -> TaskRead {
+    let live = read_live(t).unwrap_or_default();
+    let phase = phase(t, live.as_ref());
+    let alive = live.as_ref().is_some_and(LiveState::alive);
+    let active = live.as_ref().filter(|state| state.phase != "done");
+    let round = t.last_round();
+    let outcome = if phase == "done" {
+        round.map(|round| match round.status {
+            RoundStatus::Failed => "failed_to_start",
+            RoundStatus::Questions => "questions",
+            RoundStatus::Done if round.quota => "quota",
+            RoundStatus::Done if round.research => "research",
+            RoundStatus::Done => match round.checks.as_ref().map(|checks| checks.outcome) {
+                Some(CheckOutcome::Pass) => "pass",
+                Some(CheckOutcome::Fail) => "fail",
+                Some(CheckOutcome::CheckError) => "check error",
+                Some(CheckOutcome::NoCommands) => "no_checks",
+                None => "no_changes",
+            },
+            RoundStatus::Running => unreachable!("running round is interrupted"),
+        })
+        .map(str::to_string)
+    } else {
+        None
+    };
+    let started_at = live.as_ref().map(|state| state.started_at.clone());
+    let start = started_at.as_deref().and_then(parse_timestamp).unwrap_or(0);
+    let now = now_secs();
+    let scan = latest_mtime_bounded(&t.wt, budget.max_entries);
+    let mut activity_unknown = scan.truncated;
+    let activity = if scan.truncated {
+        None
+    } else {
+        Some(scan.latest.unwrap_or(0).max(start)).filter(|seconds| *seconds != 0)
+    };
+    let stall_secs = std::env::var("DELEGATE_STALL_SECS")
+        .ok()
+        .and_then(|seconds| seconds.parse().ok())
+        .unwrap_or(300);
+    let Readiness {
+        ready: readiness_ready,
+        blockers: readiness_blockers,
+        next: readiness_next,
+    } = bounded_readiness(ctx, t, &budget);
+    let next = if alive {
+        None
+    } else {
+        match (phase.as_str(), outcome.as_deref()) {
+            ("interrupted", _) => Some(format!(
+                "delegate run {} or delegate discard {}",
+                t.id, t.id
+            )),
+            (_, Some("questions")) => Some(format!(
+                "answer the questions in the spec, then delegate run {}",
+                t.id
+            )),
+            (_, Some("pass")) if readiness_ready == Some(true) => {
+                Some(format!("delegate merge {}", t.id))
+            }
+            (_, Some("pass" | "check error")) => readiness_next,
+            (_, Some("quota")) => Some(format!(
+                "delegate run {} (retry after the quota resets)",
+                t.id
+            )),
+            (_, Some("research" | "no_changes")) => Some(format!("delegate discard {}", t.id)),
+            _ => Some(format!("delegate run {}", t.id)),
+        }
+    };
+    let spec_text = fs::read_to_string(&t.spec).unwrap_or_default();
+    let mut view = TaskView {
+        id: t.id.clone(),
+        title: spec::display_title(&spec_text, &t.id),
+        goal: spec::goal(&spec_text)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+            .to_string(),
+        session: t.state.owner.as_ref().map(|owner| owner.session.clone()),
+        session_name: t.state.owner.as_ref().map_or_else(
+            || "by hand".into(),
+            |owner| {
+                Path::new(&owner.dir)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            },
+        ),
+        origin: t.state.origin.clone(),
+        instance: t.state.instance.clone(),
+        phase,
+        outcome,
+        worker: active
+            .and_then(|state| state.worker.clone())
+            .or_else(|| round.and_then(|round| round.worker.clone())),
+        tier: active.map_or_else(
+            || round.map_or_else(|| "custom".into(), crate::task::Round::tier_label),
+            |state| state.tier.clone(),
+        ),
+        pid: live.as_ref().filter(|state| state.alive()).map(|state| state.pid),
+        started_at,
+        last_activity_at: activity.map(timestamp),
+        stalled: alive
+            && live.as_ref().is_some_and(|state| {
+                matches!(state.phase.as_str(), "questions" | "implement")
+            })
+            && activity.is_some_and(|seconds| now.saturating_sub(seconds) > stall_secs),
+        changed_files: if budget.details && t.wt.join(".git").exists() {
+            changed_files_bounded(ctx, t, &budget).0
+        } else {
+            vec![]
+        },
+        steps: vec![],
+        steps_available: false,
+        ready_to_merge: readiness_ready.unwrap_or(false),
+        merge_blockers: readiness_blockers,
+        next,
+        log: t.dir.join("run.log").display().to_string(),
+        log_tail: if budget.details {
+            tail(&t.dir.join("run.log"))
+        } else {
+            String::new()
+        },
+        elapsed_secs: if start == 0 {
+            0
+        } else {
+            let end = live
+                .as_ref()
+                .filter(|state| state.phase == "done")
+                .and_then(|state| parse_timestamp(&state.heartbeat_at))
+                .unwrap_or(now);
+            end.saturating_sub(start)
+        },
+        activity_age_secs: activity.map_or(0, |seconds| now.saturating_sub(seconds)),
+    };
+    let mut events = crate::harness::events::collect_tail(
+        &t.dir.join("events.jsonl"),
+        budget.event_bytes,
+        budget.event_records,
+        budget.event_record_bytes,
+    );
+    view.steps_available = !events.steps.is_empty();
+    let step_activity = events
+        .steps
+        .iter()
+        .filter_map(|step| step["at"].as_str().and_then(parse_timestamp))
+        .max();
+    if let Some(step_activity) = step_activity
+        && activity.is_none_or(|activity| step_activity > activity)
+    {
+        activity_unknown = false;
+        view.last_activity_at = Some(timestamp(step_activity));
+        view.activity_age_secs = now.saturating_sub(step_activity);
+        view.stalled = view.pid.is_some()
+            && matches!(view.phase.as_str(), "questions" | "implement")
+            && view.activity_age_secs > stall_secs;
+    }
+    if events.steps.len() > budget.steps {
+        events.steps.drain(..events.steps.len() - budget.steps);
+    }
+    view.steps = events.steps;
+    if let Some(pid) = view.pid {
+        view.next = view
+            .stalled
+            .then(|| format!("delegate status {}  ·  kill {pid}", view.id));
+    }
+    TaskRead::View {
+        view,
+        ready: readiness_ready,
+        dropped: events.dropped,
+        activity_unknown,
+    }
+}
+
+fn bounded_readiness(ctx: &Ctx, t: &Task, budget: &Budget) -> Readiness {
+    let mut readiness = Readiness::default();
+    let block = |readiness: &mut Readiness, message: String, command: String| {
+        if readiness.blockers.is_empty() {
+            readiness.next = Some(command);
+        }
+        readiness.blockers.push(message);
+    };
+    if let Err(error) = ensure_idle(t) {
+        block(
+            &mut readiness,
+            format!("{error:#}"),
+            format!("delegate status {}", t.id),
+        );
+        readiness.ready = Some(false);
+        return readiness;
+    }
+    if t.last_round().is_some_and(|round| round.status == RoundStatus::Running) {
+        block(
+            &mut readiness,
+            format!("{}: the last round did not finish", t.id),
+            format!("delegate run {}", t.id),
+        );
+        readiness.ready = Some(false);
+        return readiness;
+    }
+    let Some(implemented) = t.last_done() else {
+        block(
+            &mut readiness,
+            format!("{} has no implemented round", t.id),
+            format!("delegate run {}", t.id),
+        );
+        readiness.ready = Some(false);
+        return readiness;
+    };
+    let base = if let Some(base) = &t.state.base {
+        base.clone()
+    } else {
+        let Ok(base) = bounded_git(
+            &ctx.root,
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+            budget.git_timeout,
+        ) else {
+            readiness.ready = None;
+            return readiness;
+        };
+        base
+    };
+    let Ok(current) = bounded_git(
+        &ctx.root,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        budget.git_timeout,
+    ) else {
+        readiness.ready = None;
+        return readiness;
+    };
+    if current != base {
+        block(
+            &mut readiness,
+            format!("check out {base} first"),
+            format!("git checkout {base}"),
+        );
+    }
+    let Ok(dirty) = bounded_git(
+        &ctx.root,
+        &["status", "--porcelain", "--untracked-files=no"],
+        budget.git_timeout,
+    ) else {
+        readiness.ready = None;
+        return readiness;
+    };
+    if !dirty.is_empty() {
+        block(
+            &mut readiness,
+            format!("commit or stash changes in {} first", ctx.root.display()),
+            "git stash".into(),
+        );
+    }
+    let range = format!("{base}...{}", t.branch);
+    let Ok(paths) = bounded_git(
+        &ctx.root,
+        &["diff", "--name-only", &range],
+        budget.git_timeout,
+    ) else {
+        readiness.ready = None;
+        return readiness;
+    };
+    let paths = paths
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<String>>();
+    if paths.is_empty() {
+        block(
+            &mut readiness,
+            format!("{} has no changes to merge (use: delegate discard {})", t.branch, t.id),
+            format!("delegate discard {}", t.id),
+        );
+    }
+    let Ok(head) = bounded_git(
+        &ctx.root,
+        &["rev-parse", &t.branch],
+        budget.git_timeout,
+    ) else {
+        readiness.ready = None;
+        return readiness;
+    };
+    match &implemented.checks {
+        Some(checks) if checks.commit != head => block(
+            &mut readiness,
+            "acceptance checks haven't run on the final commit (run: delegate check)".into(),
+            format!("delegate check {}", t.id),
+        ),
+        None => block(
+            &mut readiness,
+            "acceptance checks haven't run (run: delegate check)".into(),
+            format!("delegate check {}", t.id),
+        ),
+        Some(checks) => match checks.outcome {
+            CheckOutcome::Pass => {}
+            CheckOutcome::NoCommands => block(
+                &mut readiness,
+                "the spec has no runnable acceptance commands".into(),
+                format!("add acceptance commands to {}, then delegate check {}", t.spec.display(), t.id),
+            ),
+            CheckOutcome::Fail => block(
+                &mut readiness,
+                "acceptance checks failed".into(),
+                format!("delegate run {}", t.id),
+            ),
+            CheckOutcome::CheckError => block(
+                &mut readiness,
+                "an acceptance check is broken".into(),
+                format!("fix the check, then delegate check {}", t.id),
+            ),
+        },
+    }
+    let review = t.state.review.as_ref().filter(|review| review.commit == head);
+    match project_rules(&ctx.root) {
+        Ok(rules) => match rules.matching(&paths) {
+            Ok(matching) => {
+                for rule in matching {
+                    if let Some(min) = rule.min_tier
+                        && implemented.tier.is_none_or(|used| used < min)
+                    {
+                        block(
+                            &mut readiness,
+                            format!("rule {} needs tier >= {min}", rule.label()),
+                            format!("delegate run {} --tier {min}", t.id),
+                        );
+                    }
+                    if rule.review == Some(ReviewRule::Always) && review.is_none() {
+                        block(
+                            &mut readiness,
+                            format!("rule {} needs a review of the final commit", rule.label()),
+                            format!("delegate review {}", t.id),
+                        );
+                    }
+                }
+            }
+            Err(error) => block(
+                &mut readiness,
+                format!("cannot evaluate project rules: {error:#}"),
+                format!("fix .delegate.toml, then delegate status {}", t.id),
+            ),
+        },
+        Err(error) => block(
+            &mut readiness,
+            format!("cannot read project rules: {error:#}"),
+            format!("fix .delegate.toml, then delegate status {}", t.id),
+        ),
+    }
+    if let Some(review) = review
+        && review.high != Some(0)
+    {
+        block(
+            &mut readiness,
+            format!(
+                "review found {} high-severity issue(s)",
+                review.high.map_or_else(|| "unknown".into(), |count| count.to_string())
+            ),
+            format!("delegate run {}", t.id),
+        );
+    }
+    if fs::read(&t.spec).is_err() {
+        block(
+            &mut readiness,
+            format!("{} cannot be read", t.spec.display()),
+            format!("restore {}", t.spec.display()),
+        );
+    }
+    readiness.ready = Some(readiness.blockers.is_empty());
+    readiness
+}
+
+fn project_rules(root: &Path) -> Result<ProjectRules> {
+    let path = root.join(".delegate.toml");
+    match fs::read_to_string(&path) {
+        Ok(text) => toml::from_str(&text).with_context(|| format!("parsing {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ProjectRules::default()),
+        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+#[allow(dead_code)] // The message keeps debugging useful even when readiness only says unknown.
+#[derive(Debug)]
+enum GitError {
+    Timeout,
+    Failed(String),
+}
+
+fn bounded_git(cwd: &Path, args: &[&str], timeout: Duration) -> std::result::Result<String, GitError> {
+    let deadline = Instant::now().checked_add(timeout).unwrap_or_else(Instant::now);
+    let mut child = Command::new("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| GitError::Failed(format!("running git: {error}")))?;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(child.stdout.take());
+                drop(child.stderr.take());
+                return Err(GitError::Failed(format!("waiting for git: {error}")));
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            // Do not wait for EOF here: a killed shell's descendants may still hold
+            // the pipes open. Readiness is already unknown, so no output is needed.
+            drop(child.stdout.take());
+            drop(child.stderr.take());
+            return Err(GitError::Timeout);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| GitError::Failed(format!("reading git output: {error}")))?;
+    if !output.status.success() {
+        return Err(GitError::Failed(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
+}
+
+fn changed_files_bounded(
+    ctx: &Ctx,
+    t: &Task,
+    budget: &Budget,
+) -> (Vec<ChangedFile>, bool) {
+    let base = if let Some(base) = &t.state.base {
+        base.clone()
+    } else {
+        let Ok(base) = bounded_git(
+            &ctx.root,
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+            budget.git_timeout,
+        ) else {
+            return (Vec::new(), true);
+        };
+        base
+    };
+    let Ok(merge_base) = bounded_git(
+        &t.wt,
+        &["merge-base", &base, "HEAD"],
+        budget.git_timeout,
+    ) else {
+        return (Vec::new(), true);
+    };
+    let Ok(diff) = bounded_git(
+        &t.wt,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--numstat",
+            "-z",
+            &merge_base,
+            "--",
+            ".",
+            ":(exclude).task/**",
+        ],
+        budget.git_timeout,
+    ) else {
+        return (Vec::new(), true);
+    };
+    let mut files = Vec::new();
+    for entry in diff.split('\0').filter(|entry| !entry.is_empty()) {
+        let mut fields = entry.splitn(3, '\t');
+        let added = fields.next().and_then(|count| count.parse().ok()).unwrap_or(0);
+        let removed = fields.next().and_then(|count| count.parse().ok()).unwrap_or(0);
+        if let Some(path) = fields.next() {
+            files.push(ChangedFile {
+                path: path.into(),
+                added,
+                removed,
+            });
+        }
+    }
+    let Ok(untracked) = bounded_git(
+        &t.wt,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+        budget.git_timeout,
+    ) else {
+        return (files, true);
+    };
+    let mut truncated = false;
+    for path in untracked
+        .split('\0')
+        .filter(|path| !path.is_empty() && !path.starts_with(".task/"))
+    {
+        if files.len() >= budget.max_entries {
+            truncated = true;
+            break;
+        }
+        let file = t.wt.join(path);
+        let added = match fs::symlink_metadata(&file) {
+            Ok(metadata) if metadata.is_symlink() => 1,
+            Ok(metadata) if metadata.is_file() => {
+                if metadata.len() > 5 * 1024 * 1024 {
+                    0
+                } else {
+                    fs::read(&file).map_or(0, |bytes| {
+                        if bytes.contains(&0) {
+                            0
+                        } else {
+                            bytes.split_inclusive(|byte| *byte == b'\n').count() as u64
+                        }
+                    })
+                }
+            }
+            _ => 0,
+        };
+        files.push(ChangedFile {
+            path: path.into(),
+            added,
+            removed: 0,
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    (files, truncated)
+}
+
+#[derive(Debug, Default)]
+struct Scan {
+    latest: Option<u64>,
+    truncated: bool,
+}
+
+fn latest_mtime_bounded(root: &Path, max_entries: usize) -> Scan {
+    let mut latest = None;
+    let mut pending = vec![root.to_path_buf()];
+    let mut seen = 0_usize;
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+        {
+            seen += 1;
+            if seen > max_entries {
+                return Scan {
+                    latest,
+                    truncated: true,
+                };
+            }
+            if entry.file_name() == ".git" || entry.file_name() == ".task" {
+                continue;
+            }
+            if let Ok(metadata) = fs::symlink_metadata(entry.path()) {
+                if metadata.is_dir() {
+                    pending.push(entry.path());
+                } else if let Ok(time) = metadata.modified() {
+                    let seconds = time.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                    latest = Some(latest.map_or(seconds, |old| old.max(seconds)));
+                }
+            }
+        }
+    }
+    Scan {
+        latest,
+        truncated: false,
+    }
 }
 
 /// Resolve live phases before round outcomes, including interrupted check/review.
@@ -1526,6 +2286,156 @@ mod tests {
         }
         child.wait()?;
         assert!(zombie, "child did not become a zombie");
+        Ok(())
+    }
+
+    fn test_ctx(root: &Path) -> Ctx {
+        Ctx {
+            root: root.join("repo"),
+            dhome: root.join("tasks"),
+            gitdir: root.join("repo/.git"),
+        }
+    }
+
+    fn write_task(ctx: &Ctx, id: &str) -> Result<Task> {
+        let task = Task::load(ctx, id)?;
+        fs::create_dir_all(&task.dir)?;
+        fs::write(&task.spec, format!("# Task {id}: Read me\n"))?;
+        Ok(task)
+    }
+
+    #[test]
+    fn an_unlistable_store_is_an_error_not_an_empty_list() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-unlistable-{}", uuid::Uuid::new_v4()));
+        let ctx = test_ctx(&root);
+        fs::create_dir_all(&ctx.root)?;
+        fs::write(&ctx.dhome, "not a task folder")?;
+        assert!(read_tasks(&ctx, Budget::default()).is_err());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn one_corrupt_task_is_isolated_and_the_rest_still_read() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-corrupt-{}", uuid::Uuid::new_v4()));
+        let ctx = test_ctx(&root);
+        fs::create_dir_all(&ctx.dhome)?;
+        write_task(&ctx, "t001")?;
+        write_task(&ctx, "t002")?;
+        fs::write(ctx.dhome.join("t002/STATE.json"), "{not json")?;
+        let reads = read_tasks(&ctx, Budget::default())?;
+        assert_eq!(reads.len(), 2);
+        assert!(matches!(&reads[0], TaskRead::View { view, .. } if view.id == "t001"));
+        assert!(matches!(&reads[1], TaskRead::Unavailable { id, .. } if id == "t002"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_hundred_thousand_worktree_files_stop_at_the_entry_budget() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-many-files-{}", uuid::Uuid::new_v4()));
+        let ctx = test_ctx(&root);
+        fs::create_dir_all(&ctx.dhome)?;
+        let task = write_task(&ctx, "t001")?;
+        fs::create_dir_all(&task.wt)?;
+        for index in 0..100_000 {
+            File::create(task.wt.join(format!("f{index}")))?;
+        }
+        let started = Instant::now();
+        let reads = read_tasks(
+            &ctx,
+            Budget {
+                details: false,
+                ..Budget::default()
+            },
+        )?;
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        let TaskRead::View {
+            activity_unknown, ..
+        } = &reads[0]
+        else {
+            panic!("the task should still be readable");
+        };
+        assert!(*activity_unknown);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    fn done_task(ctx: &Ctx) -> Result<()> {
+        let mut task = write_task(ctx, "t001")?;
+        task.state.base = Some("main".into());
+        task.state.rounds.push(crate::task::Round {
+            number: 1,
+            tier: Some(crate::config::Tier::Standard),
+            worker: Some("pi:test".into()),
+            status: RoundStatus::Done,
+            research: false,
+            exit: Some(0),
+            quota: false,
+            checks: Some(crate::task::Checks {
+                outcome: CheckOutcome::Pass,
+                commit: "deadbeef".into(),
+            }),
+        });
+        task.save()?;
+        Ok(())
+    }
+
+    #[test]
+    fn stalled_git_child() {
+        let Ok(root) = std::env::var("DELEGATE_TEST_STALL_GIT_ROOT") else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let ctx = test_ctx(&root);
+        let started = Instant::now();
+        let reads = read_tasks(
+            &ctx,
+            Budget {
+                details: false,
+                git_timeout: Duration::from_millis(100),
+                ..Budget::default()
+            },
+        )
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        let TaskRead::View { view, ready, .. } = &reads[0] else {
+            panic!("the task should still be readable");
+        };
+        assert_eq!(view.id, "t001");
+        assert_eq!(*ready, None);
+    }
+
+    #[test]
+    fn stalled_git_on_path_leaves_readiness_unknown() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("delegate-stalled-git-{}", uuid::Uuid::new_v4()));
+        let ctx = test_ctx(&root);
+        fs::create_dir_all(&ctx.dhome)?;
+        done_task(&ctx)?;
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin)?;
+        let script = bin.join("git");
+        fs::write(&script, "#!/bin/sh\nsleep 30\n")?;
+        let mut permissions = fs::metadata(&script)?.permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        fs::set_permissions(&script, permissions)?;
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+        let path = std::env::join_paths(paths)?;
+        let exe = std::env::current_exe()?;
+        let status = Command::new(exe)
+            .args([
+                "--exact",
+                "status::tests::stalled_git_child",
+                "--nocapture",
+            ])
+            .env("PATH", path)
+            .env("DELEGATE_TEST_STALL_GIT_ROOT", &root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        assert!(status.success());
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 }
