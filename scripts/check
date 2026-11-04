@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Project gate: clippy (all + pedantic are errors) and the unit tests for the delegate crate.
-# Works inside a task's sandbox too, where mise can't write its usual state folder.
+# Project gate: eval-infrastructure tests, clippy (all + pedantic are errors) and the
+# unit tests for the delegate crate. Works inside a task's sandbox too, where mise can't
+# write its usual state folder.
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/../delegate"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+python3 -B -m unittest discover -s evals/tests -p 'test_*.py' -v
+cd "$root/delegate"
 export MISE_STATE_DIR="${MISE_STATE_DIR:-$HOME/.cache/mise-state}" MISE_TRUSTED_CONFIG_PATHS="$PWD"
 mise exec -- cargo clippy --all-targets -q
 mise exec -- cargo test -q
