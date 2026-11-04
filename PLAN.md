@@ -90,13 +90,18 @@
   `docs/research/codex-s146-spec-review.md`. t130's time/precedence ambiguities are
   resolved by an explicit contract truth table; its scope now wires Python check-tests
   into scripts/check and documents evals/tests. Decision 036 records approved boundaries.
-- First implementation wave: t130 only, explicit --tier standard. Stop on GPT selection
-  or step-up; verify the non-GPT Worker trailer after merge. No model/config override.
-  The oversized t131 task state is discarded, replaced by a blocked smaller draft.
-  Later live work is split into t132 preparation/stub, t133 pure evidence readers and
-  t131 final loop/cleanup. Those waves need concrete redacted interface fixtures,
-  working pinned provisioning/budgets, component APIs and independent spec review
-  before any worker starts. S145 unchanged; no product patch.
+- t130 merged as 6039a94 after two DeepSeek standard rounds. Verified merge trailer:
+  `Worker: pi:opencode-go/deepseek-v4.1-flash@max` (non-GPT). Pure oracle, 31 Python
+  tests and standing scripts/check gate delivered; 321 Rust tests/clippy also pass.
+  Initial independent implementation review found 1 high namespace bug; lead probes
+  found actual-pane binding/exit-edge defects. All fixed; final independent review
+  0 high/0 medium/0 low (`docs/research/codex-s146-oracle-review.md`). Lead's 25
+  opaque-pane-renaming/adversarial probes pass. Offline evidence only, no S146 verdict.
+- No active task state remains. Oversized t131 state discarded; smaller draft blocked.
+  NEXT PHASE: lead prepares concrete redacted interface fixtures, working pinned
+  provisioning/budgets and component APIs for t132 preparation/stub and t133 pure
+  evidence-reader specs. Independent review before that live wave starts. t131 final
+  loop/cleanup follows their merges. S145 unchanged; no Codex/Herdr product patch.
 - Later gates: patched-build policy/delivery, safe authenticated S145 check and
   concurrent/resume/mixed-version scenarios are explicit planned rows. GPT-authored
   check components block the current GPT-only deep remedy pool: request independent
@@ -137,7 +142,6 @@
 |----|------|------|--------|------------|------|------------|-------|
 | t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex shared-daemon attribution remedy or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
-| t130 | Pure S146 trace oracle + adversarial checks + standing test gate | codex-check-1 | ready | completed independent spec review + ambiguity corrections | standard | oracle unit tests + scripts/check; contributes to S146, not live acceptance | explicit --tier standard; stop on GPT selection/step-up; non-GPT merge Worker trailer required before live wave |
 | t132 | Local SSE stub, fresh profile and pinned provisioning/hook validation | codex-check-2 | todo | concrete fixtures + working provision preflight + split spec review | deep | offline preparation/safety tests; no authenticated access | split out of oversized t131; needs exact component API and budget |
 | t133 | Pure rollout/PID/proc evidence readers | codex-check-2 | todo | lead-redacted real-format fixtures + split spec review | standard | fixture-driven binding/continuity/ownership tests | separate files from t132; no process control; parser APIs precede t131 |
 | t131 | S146 final owner loop, signals/cleanup and wrapper | codex-check-3 | todo | merged t130/t132/t133 + concrete API fixtures + spec review | deep | resource tests + asserted no-opt-in skip + genuine lead-run wrong-pane baseline FAIL | explicit --tier deep; checks_by t130 only after its Worker trailer exists; blocked staged draft replaces oversized spec |

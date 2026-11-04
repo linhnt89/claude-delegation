@@ -110,8 +110,10 @@ supported driver or reviewed security boundary.
 ## Next gate
 
 The user approved S146 as a credential-free sibling with genuine hooks and real
-shared-daemon attribution; scenario is now agreed. S145 remains intact. Oracle/driver
-specs are staged in `docs/task-specs/`, with the detailed proposed contract in
-`codex-s146-check-contract.md`. Renewed independent plan-review authorization is
-required before that implementation wave. No further one-off Opus invocation or
+shared-daemon attribution; scenario is now agreed. S145 remains intact. The authorized
+spec review completed and t130's pure oracle/31 infrastructure tests are merged
+(6039a94), with a final zero-findings implementation review. The oversized live task
+was split; redacted real-format fixtures, exact component APIs, pinned provisioning
+and independent split-spec review still precede live implementation. See
+`codex-s146-check-contract.md` and PLAN.md. No further one-off Opus invocation or
 product/schema patch is implied.

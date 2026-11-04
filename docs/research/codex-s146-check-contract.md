@@ -3,22 +3,22 @@
 S146 is agreed. The actual t130/t131 specs received the authorized independent Opus
 review (`codex-s146-spec-review.md`); this revision addresses its oracle ambiguities
 and splits the later driver into smaller waves. No product/protocol changes. S145
-stays untouched. t130 is the first implementation wave; live packages remain blocked
-until the fixtures/provisioning preflight and their split specs are complete.
+stays untouched. t130 is merged (6039a94), with 31 offline tests in the standing gate
+and a final zero-findings independent review. Live packages remain blocked until
+the fixtures/provisioning preflight and their split specs are complete.
 
 ## Packages and gates
 
-- t130: pure trace oracle/adversarial tests and standing test gate, explicitly
-  `--tier standard`, no live processes/profiles. Stop on a GPT author/step-up;
-  record actual selected family before merging.
+- t130: merged pure trace oracle/adversarial tests and standing test gate. Non-GPT
+  DeepSeek author verified by merge Worker trailer. No live processes/profiles.
 - t132: local SSE stub, fresh profile/provisioning and genuine hook validation.
 - t133: pure rollout/PID/proc evidence readers, tested against lead-redacted fixtures.
 - t131: single-owner live loop, signals/cleanup, wrapper and docs, explicitly
   `--tier deep`; depends on merged t130/t132/t133 and their actual Worker trailers.
   `checks_by: t130` enforces oracle/driver family separation; never start while t130
   is unmerged, because the runner otherwise only warns and runs without the rule.
-- Specs are staged in `docs/task-specs/`. Only t130 is currently implementation-ready;
-  do not run the superseded oversized t131 spec. The later-wave specs/fixtures need
+- Specs are staged in `docs/task-specs/`. t130 is complete; no later task is ready.
+  Do not run the superseded oversized t131 spec. The later-wave specs/fixtures need
   completion before any live task starts. Credential-free live opt-in in a worker
   sandbox is permitted only after the lead validates its explicit pinned binary paths,
   provisioning input and sandbox access; no credentials or sandbox escape allowed.
