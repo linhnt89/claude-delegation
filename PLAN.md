@@ -59,7 +59,21 @@
   inherited init `.claude` ancestry behavior; crash-interrupted backup rename needs manual
   recovery (no journal).
 
-## Waiting for you
+## Codex phase handoff (scope approved)
+- User approved extending the remedy into Codex itself and one independent Opus plan
+  review, temporarily through `pi:github-copilot/claude-opus-5.5@high`. Use a one-off
+  `delegate plan-review --planner gpt --worker pi:github-copilot/claude-opus-5.5@high`;
+  do not change `workers.toml` or silently substitute another reviewer/provider.
+- Next session: redesign the S145 check and scope the smallest caller-context remedy
+  against pinned Codex/Herdr source, write reviewable specs, then run the approved
+  independent plan review before deep implementation. Codex target approval is not
+  blanket approval for ownership/schema changes; settle the exact contract first.
+- Rejected t129 draft and latest offline reproducers are retained privately at
+  `/var/tmp/ho-codex.OAzcs8/rejected-t129/` while available. Treat them as unsafe
+  diagnostic input, never apply the draft wholesale. Workers must not access the
+  authenticated temporary profile. No task is currently active.
+
+## Investigation baseline
 - Authenticated isolated Codex tracing found a real attribution bug: Codex 0.166.0's
   reused app-server/hook context retained the first pane's Herdr environment. A fresh
   private daemon reports the first interactive session correctly; a distinct second
@@ -68,9 +82,9 @@
   and Herdr daemons were stopped; no personal profile/daemon was changed.
   User approved S145 and continuing through checks/investigation and a bounded fix.
   Pinned Codex source confirms hooks snapshot the shared server process environment,
-  not each TUI caller's. No safe production patch has been chosen: a new context field,
-  TUI-local reporting or launch adapter requires an architecture/target decision after
-  t129; alternatively explicitly approve a Pi/Claude-only native spike. Details:
+  not each TUI caller's. Codex itself is now an approved remedy target; no safe patch
+  or exact caller-context contract has been chosen yet. A Pi/Claude-only native spike
+  has not been approved as an alternative. Details:
   `docs/research/herdr-observer-live-identity.md`. No production fallback or
   ownership/schema change has been authorized.
 - t129's opt-in S145 check draft was discarded after repeated independent review still
@@ -81,19 +95,19 @@
 - Deeper corrective work needs a non-GPT plan reviewer. All configured standard/deep
   plan-review candidates are GPT; independent planning attempts refused that set.
   No worker config was changed, no deep implementation started, and no task state remains.
-  Need approval for a one-off non-GPT reviewer (e.g. the earlier Claude Opus reviewer),
-  plus an explicit Codex/caller-context remedy architecture/target decision.
+  The user has now approved one-off Claude Opus via GitHub Copilot and the Codex
+  remedy target. The exact caller-context architecture still needs design and review.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex shared-daemon attribution remedy or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
-| t128 | Codex shared-daemon attribution regression and bounded remedy | observer-codex | todo | safe S145 check + independent plan review + remedy design | deep | S145 through real authenticated isolated Codex/Herdr; no wrong-pane attribution | t129 discarded as unsafe; reviewer-family/architecture approval needed; blocks full Codex native gate |
+| t128 | Codex shared-daemon attribution regression and bounded remedy | observer-codex | todo | safe S145 check + independent plan review + remedy design | deep | S145 through real authenticated isolated Codex/Herdr; no wrong-pane attribution | t129 discarded as unsafe; Codex target + one-off Copilot Opus review approved; contract/design pending; blocks full Codex native gate |
 | t127 | Production observer identity/instance/attempt contract | observer-contract | todo | prototype evidence + user design | deep | reconcile decisions 009/031/035; stable task instances and per-fallback attempt identity without weakened P030/P032 | design first; no production schema changes authorized by the prototype; blocks full property completion |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
 
-## Codex remedy constraints (broader design not authorized)
+## Codex remedy constraints (Codex target approved; exact design pending)
 - User approved S145 and autonomous continuation through checks/investigation and
   a bounded fix. t129's check draft was discarded as unsafe; no accepted automated
   check or product patch has landed. Redesign the check before another implementation.
@@ -156,9 +170,9 @@
   caller-scoped context change, Codex-TUI-local reporting, or a Herdr launch adapter
   using real thread responses. Existing reviewed SessionStart path has no caller
   hook-environment field. This blocks a safe product remedy and full Codex native
-  coverage. A safe S145 check also needs independent plan review beyond the current
-  all-GPT candidate set. No schema changes or new external production target have
-  been authorized.
+  coverage. Codex is now an approved external target, and one-off Copilot Opus plan
+  review is approved beyond the all-GPT configured set. No exact transport/schema
+  change or production identity fallback has been authorized yet.
 - Production observer identity fallback when no conversation ID is reported remains open.
   Agreed invariants prohibit guessing ownership and require attribution to survive pane reuse
   and resume. Draft prototype uses captured real identity or explicit unknown, not a fallback policy.
