@@ -34,7 +34,8 @@ says how to use it.
 - Rows keep t124's attention order. The selection starts on the first row.
 - `↑`/`↓` move the selection over this lead's tasks, then the collapsed groups.
 - `enter` expands or collapses the selected task: delegate's steps from t124's
-  `read_tasks` with a 50-step budget, worker, tier, changed files and `next`. "No activity yet"
+  `read_tasks` with `Budget { steps: 50, ..Default::default() }`. Merged t124 added
+  `details` (default true) for changed files and readiness, and its frames pass `false`, worker, tier, changed files and `next`. "No activity yet"
   if there are no steps.
 - `tab` moves to the next group; `q` quits (t124's exit path).
 - Selection is keyed by (task id, instance). A selected task that disappears shows "task
