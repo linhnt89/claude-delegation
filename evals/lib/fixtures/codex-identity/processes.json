@@ -1,0 +1,34 @@
+{
+  "daemon.pid": {
+    "record": {
+      "pid": 4001,
+      "processStartTime": "Wed Nov  4 00:00:00 2026",
+      "processIdentity": {"bootId":"00000000-0000-4000-8000-000000000001","startTicks":14001},
+      "executableIdentity": {
+        "digest":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+        "path_digest":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+      }
+    },
+    "proc": {
+      "stat":"4001 (codex) S 1 4000 4000 0 0 4194304 5580 5533 0 3 2 4 1 1 20 0 36 0 14001 887865344 72477 18446744073709551615 0 0 0 0 0 0 0 4096 17475 0 0 0 17 8 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+      "exe":"/RUN/home/.codex/packages/app-server-daemon/releases/0.166.0-x86_64-unknown-linux-musl/bin/codex",
+      "cmdline":"/RUN/home/.codex/packages/app-server-daemon/releases/0.166.0-x86_64-unknown-linux-musl/bin/codex\u0000app-server\u0000--listen\u0000unix://\u0000--analytics-default-enabled\u0000--managed-daemon\u0000",
+      "codex_home":"/RUN/home/.codex",
+      "boot_id":"00000000-0000-4000-8000-000000000001"
+    }
+  },
+  "daemon-updater.pid": {
+    "record": {
+      "pid":4002,
+      "processStartTime":"Wed Nov  4 00:00:00 2026",
+      "processIdentity":{"bootId":"00000000-0000-4000-8000-000000000001","startTicks":14002}
+    },
+    "proc": {
+      "stat":"4002 (codex) S 1 4000 4000 0 0 4194304 3584 0 0 0 6 9 0 0 20 0 22 0 14002 754614272 13453 18446744073709551615 0 0 0 0 0 0 0 4096 17472 0 0 0 17 4 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+      "exe":"/RUN/home/.codex/packages/app-server-daemon/releases/0.166.0-x86_64-unknown-linux-musl/bin/codex",
+      "cmdline":"/RUN/home/.codex/packages/app-server-daemon/releases/0.166.0-x86_64-unknown-linux-musl/bin/codex\u0000app-server\u0000daemon\u0000pid-update-loop\u0000",
+      "codex_home":"/RUN/home/.codex",
+      "boot_id":"00000000-0000-4000-8000-000000000001"
+    }
+  }
+}

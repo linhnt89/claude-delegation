@@ -59,6 +59,11 @@ All tests except the deliberately opted-in live gate are credential- and network
 
 Lead preflight: `daemon update --from-cli --yes` on an empty private profile fails
 with 'no daemon package is selected'; do not rely on it as initial provisioning.
+Fresh `app-server daemon start` succeeds, installing 0.166.0 from the pinned CLI;
+managed and CLI executable SHA-256 match. Details and a proposed budget are in
+`docs/research/codex-s146-provision-preflight.md`. This does not enable worker live
+opt-in: sandbox access, remaining interface fixtures and independent split-spec
+review are still blocking. t132/t133 blocked drafts now stage their component APIs.
 Allow only initial private preparation start/stop before A. Verify the selected
 managed executable's canonical path lies under the run-owned package root and its
 version matches 0.166.0. Record its digest. Fully stop/reap the initial daemon and

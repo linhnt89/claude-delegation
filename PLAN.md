@@ -98,10 +98,20 @@
   0 high/0 medium/0 low (`docs/research/codex-s146-oracle-review.md`). Lead's 25
   opaque-pane-renaming/adversarial probes pass. Offline evidence only, no S146 verdict.
 - No active task state remains. Oversized t131 state discarded; smaller draft blocked.
-  NEXT PHASE: lead prepares concrete redacted interface fixtures, working pinned
-  provisioning/budgets and component APIs for t132 preparation/stub and t133 pure
-  evidence-reader specs. Independent review before that live wave starts. t131 final
-  loop/cleanup follows their merges. S145 unchanged; no Codex/Herdr product patch.
+  Lead preparation advanced: redacted real rollout/PID/proc fixtures now live under
+  `evals/lib/fixtures/codex-identity/`; t132/t133 blocked spec drafts stage component
+  boundaries/APIs. Fresh credential-free provisioning succeeds with `app-server daemon
+  start`, installs 0.166.0 from the pinned CLI and yields the same executable SHA-256.
+  Cleanup verified no remaining private-profile processes, including the updater;
+  no auth.json created. Details/budget proposal: `docs/research/codex-s146-provision-preflight.md`.
+- NEXT PHASE: capture remaining real Herdr persistent-socket, hook-trust, SSE and
+  serving-rollout-fd fixtures; finalize t132 stub IO/file-acquisition and t133/t131
+  acquisition contracts. Obtain approval for another one-off non-GPT spec review
+  (previous Opus invocations consumed), then independent review before workers start.
+  Worker live opt-in remains disabled pending sandbox preflight. t131 final loop/cleanup
+  follows component merges. S145 unchanged; no Codex/Herdr product patch.
+  `scripts/check` passes (31 Python tests, 321 Rust tests, clippy clean); new fixtures
+  are interface preparation, not an automated S146 verdict.
 - Later gates: patched-build policy/delivery, safe authenticated S145 check and
   concurrent/resume/mixed-version scenarios are explicit planned rows. GPT-authored
   check components block the current GPT-only deep remedy pool: request independent
@@ -142,8 +152,8 @@
 |----|------|------|--------|------------|------|------------|-------|
 | t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex shared-daemon attribution remedy or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
-| t132 | Local SSE stub, fresh profile and pinned provisioning/hook validation | codex-check-2 | todo | concrete fixtures + working provision preflight + split spec review | deep | offline preparation/safety tests; no authenticated access | split out of oversized t131; needs exact component API and budget |
-| t133 | Pure rollout/PID/proc evidence readers | codex-check-2 | todo | lead-redacted real-format fixtures + split spec review | standard | fixture-driven binding/continuity/ownership tests | separate files from t132; no process control; parser APIs precede t131 |
+| t132 | Local SSE stub, fresh profile and pinned provisioning/hook validation | codex-check-2 | todo | remaining hook/SSE fixtures + final IO/file APIs + split spec review | deep | offline preparation/safety tests; no authenticated access | blocked draft staged; fresh pinned start preflight works; budget proposed, worker live opt-in disabled |
+| t133 | Pure rollout/PID/proc evidence readers | codex-check-2 | todo | real serving-fd fixture + final acquisition contract + split spec review | standard | fixture-driven binding/continuity/ownership tests | blocked API draft and redacted rollout/PID/proc fixtures staged; no process control; parser APIs precede t131 |
 | t131 | S146 final owner loop, signals/cleanup and wrapper | codex-check-3 | todo | merged t130/t132/t133 + concrete API fixtures + spec review | deep | resource tests + asserted no-opt-in skip + genuine lead-run wrong-pane baseline FAIL | explicit --tier deep; checks_by t130 only after its Worker trailer exists; blocked staged draft replaces oversized spec |
 | t134 | Pinned external Codex build and patch delivery | codex-remedy-prep | todo | approved remedy contract | deep | reproducible baseline/patched artifact digests and worker-runnable source tests | no product implementation until exact contract approved |
 | t135 | Safe authenticated S145 check | codex-auth-check | todo | reviewed S146 components + separately isolated user login | deep | honest auth gate through real integration, no credential exposure | no authenticated profile currently retained; needs independent spec review |
