@@ -24,8 +24,8 @@
 - Completed: approved context committed on main; t123 headless adapter merged; lead-run
   private live adapter gate verified Pi/Claude capture, two live task origins, wrapped retry
   identity and retirement. Codex is still unknown without credentials, not passing coverage.
-- Next gate: resolve safe Codex identity evidence or explicitly approve a Pi/Claude-only
-  bounded native spike. Then scope t124 native GPUI patch with test-only read/action hooks.
+- Next gate: resolve reproduced Codex shared-daemon stale-pane attribution (see
+  Waiting for you), or explicitly approve a Pi/Claude-only bounded native spike. Then scope t124 native GPUI patch with test-only read/action hooks.
   t125's full properties also depend on t127's production identity/attempt contract.
   Do not equate synthetic fixtures, stand-ins or HUMAN output with feature acceptance.
 - Prototype attribution is a private sidecar, never a production owner/schema change.
@@ -59,18 +59,42 @@
   recovery (no journal).
 
 ## Waiting for you
-- Codex supplied no conversation identity in isolated credential-free startup probes.
-  Before t124, choose a safe authenticated isolated probe (no copying personal credentials),
-  or explicitly scope the native spike to verified Pi/Claude leads with Codex shown unknown.
-  No credential access, production fallback or ownership/schema change has been authorized.
+- Authenticated isolated Codex tracing found a real attribution bug: Codex 0.166.0's
+  reused app-server/hook context retained the first pane's Herdr environment. A fresh
+  private daemon reports the first interactive session correctly; a distinct second
+  pane's session reports to the first pane, replacing its identity while the second
+  stays unknown. Both prompts completed; the real hook API returned OK. Private Codex
+  and Herdr daemons were stopped; no personal profile/daemon was changed.
+  User approved S145 and continuing through checks/investigation and a bounded fix. Next: review the upstream Codex/Herdr boundary and scope
+  a safe remedy; alternatively explicitly approve a Pi/Claude-only native spike. Details: `docs/research/herdr-observer-live-identity.md`.
+  No production fallback or ownership/schema change has been authorized.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
-| t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex evidence or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
+| t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex shared-daemon attribution remedy or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
+| t129 | Opt-in real Codex shared-daemon regression check | observer-codex-check | ready | S145 approved | standard | live S145 fails on baseline; offline safety checks pass | worker must not access credentials; lead runs authenticated gate |
+| t128 | Codex shared-daemon attribution regression and bounded remedy | observer-codex | todo | t129 + upstream source review | deep | S145 through real authenticated isolated Codex/Herdr; no wrong-pane attribution | draft scope below; exact patch location not yet established; blocks full Codex native gate |
 | t127 | Production observer identity/instance/attempt contract | observer-contract | todo | prototype evidence + user design | deep | reconcile decisions 009/031/035; stable task instances and per-fallback attempt identity without weakened P030/P032 | design first; no production schema changes authorized by the prototype; blocks full property completion |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
+
+## Proposed Codex remedy scope (not an implementation authorization)
+- User approved S145 and autonomous continuation through checks/investigation and
+  a bounded fix. It is not yet a passing automated check; t129 writes its opt-in check.
+- Trace the pinned Codex client → shared app-server → SessionStart hook environment
+  boundary. Identify where the current caller's pane context is lost before choosing
+  a patch location in Codex or Herdr. Do not assume Herdr's API acknowledgement means
+  ownership was correct, or derive ownership from whichever pane is focused.
+- Desired bounded remedy: current-launch/thread-scoped Herdr context reaches the real
+  hook without leaking one caller's context into another. Preserve normal shared-daemon
+  use, existing conversation identities, delegate execution ownership and public schemas.
+- Reject daemon restarts per launch, credential copying, one authenticated profile per
+  pane, synthetic identities, weaker attribution guards or unknown-as-success as fixes.
+  If a safe context channel requires a protocol/schema change, stop for explicit design.
+- Establish the agreed S145 failure before implementation, then require the same check
+  to pass without diagnostic destination/payload overrides. Add concurrency/resume tests
+  before claiming broader production coverage. No native UI work is unblocked yet.
 
 ## Known, not fixed
 - A later round can get an older `REVIEW.patch`: the runner never copies the newest review

@@ -42,6 +42,9 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
   product verdicts; an isolated real observer is still needed for validation.
 - User approved derived properties P030–P033 on 2026-11-04. No property checks or hidden
   observer scenarios exist yet; production identity fallback and retention remain open.
+- User approved S145 and proceeding through checks/investigation on 2026-11-04.
+  It covers the lead-reproduced Codex shared-daemon wrong-pane identity report.
+  Its opt-in live check is pending; exploratory evidence is not an `evals/run` verdict.
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->
