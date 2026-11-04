@@ -156,6 +156,9 @@ A new caller-context protocol/schema still requires explicit user design approva
   for change after reporting the stall (t118).
 
 ## Open questions
+- Later: herdr-app + a delegate mod could beat the Sheprd setup (native clickable rows,
+  task panel beside the lead) but needs a herdr-core migration and loses resume-safe
+  identity. See `docs/research/herdr-app-delegate-mod.md`; revisit as a decision amending 035.
 - Does a Pi lead's `path` identity survive resume unchanged? S142's resume step depends
   on it; verify in the S137–S144 walkthroughs.
 - Side pane scope: one checkout (the lead's cwd). Leads delegating into several
