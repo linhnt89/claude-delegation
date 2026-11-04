@@ -50,9 +50,15 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 - User approved S146 on 2026-11-04: credential-free sibling using real Codex/Herdr,
   genuine SessionStart hooks and one shared daemon, with only model replies stubbed
   locally. Exploratory probes reproduce the wrong-pane report without credentials;
-  pure oracle and 31 infrastructure tests are merged after independent review.
-  The live driver still needs split specs/interface fixtures; no scenario check exists
-  yet. S146 does not replace authenticated S145 or concurrent/resume/native acceptance.
+  pure oracle, preparation/stub and evidence readers are merged after independent
+  review (193 infrastructure tests on main). No live scenario check or accepted
+  automated verdict exists. S146 does not replace authenticated S145 or
+  concurrent/resume/native acceptance.
+- User approved decision 037: prioritize a bounded Pi/Claude native observer and
+  defer Codex check/remedy work. Codex attribution is unsupported/unknown, never
+  guessed. S137–S146/P030–P033 intent is unchanged; reduced-harness evidence must
+  not be reported as full observer/property acceptance. Map native-slice checks
+  explicitly during t124 scoping.
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->

@@ -350,6 +350,14 @@ Only the used subset is shown; arbitrary display labels do not participate.
 
 ## Later opt-in private live gate — NOT RUN here
 
+Current scope: decision 037 approves a bounded Pi/Claude-only native spike. The lead
+subsequently recorded Pi/Claude live identity/adapter evidence in
+`docs/research/herdr-observer-live-identity.md`; Codex attribution is known unsafe
+and explicitly unsupported/unknown, with its check/remedy deferred. Do not make
+Codex repair a prerequisite for that reduced spike or claim all-harness acceptance.
+The broader example below is historical t123 guidance, not permission to restart
+Codex work or weaken the supported-harness live gate.
+
 The lead must run this gate **after t123 and before scoping t124**. Prior research
 observed actual Pi TUI and Claude startup in isolation; credential-free Codex stayed
 unknown. This task does not repeat, upgrade or broaden that evidence. Stop before

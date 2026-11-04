@@ -1,5 +1,8 @@
 # Task t131: S146 final sampling loop and owned cleanup
 
+DEFERRED by decision 037. Task state discarded without running. This retained spec
+is not authorization to restart Codex work; reprioritize explicitly first.
+
 checks_by: t130
 size: long
 

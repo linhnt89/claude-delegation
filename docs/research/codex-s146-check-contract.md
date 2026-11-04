@@ -1,4 +1,9 @@
-# S146 check contract — proposed implementation boundary
+# S146 check contract — deferred implementation boundary
+
+Decision 037 pauses this Codex wave in favor of the Pi/Claude native observer.
+Preserve merged helpers, but do not start/recreate t138/t131 or treat this document
+as current implementation authorization. S145/S146 intent and safety gates remain
+unchanged; no accepted automated live verdict exists.
 
 S146 is agreed. The actual t130/t131 specs received the authorized independent Opus
 review (`codex-s146-spec-review.md`); this revision addresses its oracle ambiguities
@@ -7,8 +12,9 @@ stays untouched. t130 is merged (6039a94), with 31 offline tests in the standing
 and a final zero-findings independent review. Authorized combined split-spec review
 completed (`codex-s146-split-review.md`); lead corrections extracted t138 and closed
 fixture/API gaps. t132 preparation and t133 evidence readers are now merged after
-independent reviews; t138 is running. The final t131/live gate still depends on
-merged resources. Concrete interfaces/preflight: codex-s146-live-interfaces.md.
+independent reviews. Unreviewed t138 was archived/discarded on the scope change;
+t131 never ran and its task state was discarded. A future final live gate would
+still depend on reviewed merged resources. Concrete interfaces/preflight: codex-s146-live-interfaces.md.
 
 ## Packages and gates
 

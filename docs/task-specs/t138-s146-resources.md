@@ -1,5 +1,9 @@
 # Task t138: Trusted S146 acquisition and bounded one-shot RPC resources
 
+DEFERRED by decision 037. Unreviewed task draft archived privately, then discarded;
+no resource code merged. This retained spec is not authorization to restart. If
+reprioritized, fix the runner-unrecognized `Tests / acceptance` heading before use.
+
 size: medium
 
 ## Goal
