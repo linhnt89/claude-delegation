@@ -65,16 +65,20 @@
   pane's session reports to the first pane, replacing its identity while the second
   stays unknown. Both prompts completed; the real hook API returned OK. Private Codex
   and Herdr daemons were stopped; no personal profile/daemon was changed.
-  User approved S145 and continuing through checks/investigation and a bounded fix. Next: review the upstream Codex/Herdr boundary and scope
-  a safe remedy; alternatively explicitly approve a Pi/Claude-only native spike. Details: `docs/research/herdr-observer-live-identity.md`.
-  No production fallback or ownership/schema change has been authorized.
+  User approved S145 and continuing through checks/investigation and a bounded fix.
+  Pinned Codex source confirms hooks snapshot the shared server process environment,
+  not each TUI caller's. No safe production patch has been chosen: a new context field,
+  TUI-local reporting or launch adapter requires an architecture/target decision after
+  t129; alternatively explicitly approve a Pi/Claude-only native spike. Details:
+  `docs/research/herdr-observer-live-identity.md`. No production fallback or
+  ownership/schema change has been authorized.
 
 ## Next
 | id | task | wave | status | depends on | tier | acceptance | notes |
 |----|------|------|--------|------------|------|------------|-------|
 | t124 | Isolated native GPUI sidebar/dashboard patch | observer-2 | todo | t123 + private live identity gate | deep | two lead groups, lead preserved on task selection, read-only lifecycle; opt-in pinned build/native evidence | blocked on Codex shared-daemon attribution remedy or explicit reduced spike scope; include test-only GPUI read/action hooks; no daemon protocol change |
 | t125 | Independent observer property checks | observer-3 | todo | t123, t124, t127 | standard | P030–P033 through approved GPUI read/action hooks, with seeded action sequences | max four properties; scope/coverage gaps must be resolved before writing; family independent from implementation |
-| t129 | Opt-in real Codex shared-daemon regression check | observer-codex-check | ready | S145 approved | standard | live S145 fails on baseline; offline safety checks pass | worker must not access credentials; lead runs authenticated gate |
+| t129 | Opt-in real Codex shared-daemon regression check | observer-codex-check | running | S145 approved | standard | live S145 fails on baseline; offline safety checks pass | worker must not access credentials; lead runs authenticated gate |
 | t128 | Codex shared-daemon attribution regression and bounded remedy | observer-codex | todo | t129 + upstream source review | deep | S145 through real authenticated isolated Codex/Herdr; no wrong-pane attribution | draft scope below; exact patch location not yet established; blocks full Codex native gate |
 | t127 | Production observer identity/instance/attempt contract | observer-contract | todo | prototype evidence + user design | deep | reconcile decisions 009/031/035; stable task instances and per-fallback attempt identity without weakened P030/P032 | design first; no production schema changes authorized by the prototype; blocks full property completion |
 | t025 | Codex workers bypass bwrap (`harness.rs`), so they can read the hidden set and the data folder today | – | todo | – | deep | a Codex variant of S048 (to write with the user) | needs a design: bwrap around Codex, or Codex's own read limits |
@@ -137,6 +141,12 @@
   for a change (t118, 2026-11-02).
 
 ## Open questions
+- Codex shared-daemon remediation boundary: explicitly choose an upstream Codex
+  caller-scoped context change, Codex-TUI-local reporting, or a Herdr launch adapter
+  using real thread responses. Existing reviewed SessionStart path has no caller
+  hook-environment field. This blocks a safe product remedy and full Codex native
+  coverage; t129 regression work proceeds independently. No schema changes or new
+  external production target have been authorized.
 - Production observer identity fallback when no conversation ID is reported remains open.
   Agreed invariants prohibit guessing ownership and require attribution to survive pane reuse
   and resume. Draft prototype uses captured real identity or explicit unknown, not a fallback policy.

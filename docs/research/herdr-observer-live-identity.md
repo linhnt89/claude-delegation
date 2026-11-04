@@ -117,6 +117,41 @@ change production fallback rules, or treat the single-pane result as S137/P030/P
 acceptance. Next: define a regression scenario for this actual two-pane reuse case
 before scoping any implementation, and review the Codex/Herdr attribution boundary.
 
+## Pinned source-level localization (2026-11-04)
+
+Read-only upstream checkout: `openai/codex` tag `rust-v0.166.0`, peeled commit
+`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`. Herdr source remains pinned at
+`2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01`.
+
+- Codex `codex-rs/hooks/src/registry.rs`, `Hooks::new`, constructs its session
+  environment with `std::env::vars_os()`. `Hooks::reconfigured` preserves it.
+- `codex-rs/hooks/src/engine/command_runner.rs`, `build_command`, replays that
+  snapshot into hook subprocesses, followed by hook-specific overrides. This
+  explains why a new thread's correct payload can accompany an old pane environment.
+- `codex-rs/core/src/session/mod.rs`, `build_hooks_config`, supplies hook sources,
+  trust and shell configuration, not the current TUI's Herdr launch context.
+- `codex-rs/tui/src/app_server_session.rs`, `thread_start_params_with_reviewer` and
+  `thread_resume_params_from_config`, build the daemon requests. The reviewed
+  `ThreadStartParams` / `ThreadResumeParams` in
+  `codex-rs/app-server-protocol/src/protocol/v2/thread.rs` have no dedicated
+  caller hook-environment field. Shell-tool environment policy is not equivalent
+  to the hook runtime snapshot and must not be assumed to repair attribution.
+- Herdr `src/integration/assets/codex/herdr-agent-state.sh` takes the conversation
+  id from the real SessionStart payload but the pane/socket from inherited env.
+  Both individually valid values can therefore describe different conversations.
+- Herdr `src/app/api/panes.rs`, `handle_pane_report_agent_session` /
+  `report_agent_resume`, can return `type=ok` without proving correct caller
+  ownership. API success cannot serve as the regression oracle.
+
+No production patch is chosen. The proper boundary needs explicit caller-scoped
+context associated with a real conversation, not daemon-global environment. A new
+Codex transport field, a Codex-TUI-local reporter, or a per-launch protocol adapter
+would each broaden the currently authorized Herdr hook-only investigation and needs
+an explicit architecture/target decision. None has been implemented, and absence of
+a dedicated field is not a proof that every existing extension channel is unusable.
+The check may proceed independently; a successful single-pane probe does not unblock
+native Codex coverage.
+
 The earlier Pi/Claude adapter gate establishes transport, wrapped retry and retirement.
 None of these probes establishes native sidebar/rendering, per-fallback attempt
 markers, hidden observer properties, or full S137–S144/P030–P033 acceptance.
