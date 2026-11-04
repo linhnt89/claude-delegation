@@ -2,16 +2,18 @@
 //! sidebar tokens that make those tasks visible beside the conversation.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::io::{self, IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::flag;
 
@@ -24,6 +26,88 @@ const KEYS: [&str; 5] = ["dlg_t1", "dlg_t2", "dlg_t3", "dlg_t4", "dlg_more"];
 const REPORT_SOURCE: &str = "delegate:watch";
 const MAX_TOKEN_CHARS: usize = 80;
 const DEFAULT_WIDTH: usize = 100;
+const DETAIL_STEPS: usize = 50;
+const BESIDE_COMMAND: &str = "exec \"$DELEGATE_BIN\" watch --lead-pane \"$DELEGATE_LEAD_PANE\"";
+const DEFAULT_AGENT_ROWS: &str = "[\"state_icon\", \"machine\", \"workspace\", \"tab\"],\n    [\"agent\"],";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelectionKey {
+    id: String,
+    instance: Option<String>,
+}
+
+impl SelectionKey {
+    fn of(task: &TaskRead, memory: &HashMap<String, Memory>) -> Self {
+        match task {
+            TaskRead::View { view, .. } => Self {
+                id: view.id.clone(),
+                instance: view.instance.clone(),
+            },
+            TaskRead::Unavailable { id, .. } => Self {
+                id: id.clone(),
+                instance: memory.get(id).and_then(|memory| memory.instance.clone()),
+            },
+        }
+    }
+
+    fn of_view(view: &TaskView) -> Self {
+        Self {
+            id: view.id.clone(),
+            instance: view.instance.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Selection {
+    Task(SelectionKey),
+    Group(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Key {
+    Up,
+    Down,
+    Enter,
+    Tab,
+    Quit,
+}
+
+#[derive(Debug, Default)]
+struct KeyParser {
+    escape: u8,
+}
+
+impl KeyParser {
+    fn push(&mut self, byte: u8) -> Option<Key> {
+        match (self.escape, byte) {
+            (0, 0x1b) => {
+                self.escape = 1;
+                None
+            }
+            (1, b'[') => {
+                self.escape = 2;
+                None
+            }
+            (2, b'A') => {
+                self.escape = 0;
+                Some(Key::Up)
+            }
+            (2, b'B') => {
+                self.escape = 0;
+                Some(Key::Down)
+            }
+            (1 | 2, _) => {
+                self.escape = 0;
+                None
+            }
+            (_, b'\r' | b'\n') => Some(Key::Enter),
+            (_, b'\t') => Some(Key::Tab),
+            (_, b'q' | 0x03) => Some(Key::Quit),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 enum LeadState {
@@ -32,9 +116,16 @@ enum LeadState {
 }
 
 #[derive(Debug)]
+struct DetailRead {
+    key: SelectionKey,
+    tasks: std::result::Result<Vec<TaskRead>, String>,
+}
+
+#[derive(Debug)]
 struct Refresh {
     lead: LeadState,
     tasks: std::result::Result<Vec<TaskRead>, String>,
+    detail: Option<DetailRead>,
     finished: Instant,
 }
 
@@ -66,8 +157,9 @@ pub fn run(ctx: &Ctx, pane: &str, interval_seconds: f64) -> Result<()> {
     } else {
         None
     };
+    let keys = Arc::new(Mutex::new(Vec::new()));
     if interactive && terminal_guard.is_some() {
-        spawn_key_reader(Arc::clone(&stop));
+        spawn_key_reader(Arc::clone(&stop), Arc::clone(&keys));
     }
     let socket = std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from);
     let reader_ctx = Ctx {
@@ -75,12 +167,7 @@ pub fn run(ctx: &Ctx, pane: &str, interval_seconds: f64) -> Result<()> {
         dhome: ctx.dhome.clone(),
         gitdir: ctx.gitdir.clone(),
     };
-    let receiver = spawn_reader(
-        socket.clone(),
-        pane.to_string(),
-        reader_ctx,
-        interval,
-    );
+    let (receiver, detail_tx) = spawn_reader(socket.clone(), pane.to_string(), reader_ctx, interval);
     let ttl = interval.saturating_mul(3);
     let mut viewer = Viewer {
         socket,
@@ -89,17 +176,148 @@ pub fn run(ctx: &Ctx, pane: &str, interval_seconds: f64) -> Result<()> {
         ttl,
         ttl_ms: ttl_ms(ttl),
         terminal,
+        interactive,
         width: output_width(terminal),
         stop,
+        keys,
         seq: 0,
         memory: HashMap::new(),
         lead: LeadState::Unavailable,
         tasks: None,
         tasks_ok: false,
+        selected: None,
+        expanded: None,
+        vanished: None,
+        detail: None,
+        detail_requested: None,
+        detail_tx: Some(detail_tx),
     };
     let stdout = io::stdout();
     let mut output = stdout.lock();
     viewer.report_loop(&receiver, &mut output)
+}
+
+/// A lead pane that `--beside` may split, and the socket to ask.
+#[derive(Debug)]
+struct BesideTarget {
+    socket: PathBuf,
+    pane: String,
+}
+
+fn beside_target(env: &origin::Env) -> Result<BesideTarget> {
+    if env.sandboxed {
+        bail!(
+            "run `delegate watch --beside` from a Herdr lead pane, not inside a worker sandbox"
+        );
+    }
+    let Some(socket) = env.socket.as_deref() else {
+        bail!(
+            "run `delegate watch --beside` from a Herdr lead pane (HERDR_PANE_ID and HERDR_SOCKET_PATH must be set)"
+        );
+    };
+    let Some(pane) = env.pane_id.as_deref().and_then(OsStr::to_str) else {
+        bail!(
+            "run `delegate watch --beside` from a Herdr lead pane (HERDR_PANE_ID and HERDR_SOCKET_PATH must be set)"
+        );
+    };
+    if pane.is_empty() || pane.chars().any(origin::forbidden_display_char) {
+        bail!("run `delegate watch --beside` from a Herdr lead pane with a valid pane id");
+    }
+    Ok(BesideTarget {
+        socket: socket.to_path_buf(),
+        pane: pane.to_string(),
+    })
+}
+
+/// Refuse early when `--beside` was not launched from a Herdr lead pane.
+pub(crate) fn check_beside_environment() -> Result<()> {
+    beside_target(&origin::Env::from_process()).map(|_| ())
+}
+
+/// Split the lead pane and type the fixed side-pane command into the new pane.
+pub(crate) fn run_beside(ctx: &Ctx) -> Result<()> {
+    let target = beside_target(&origin::Env::from_process())?;
+    let executable = std::env::current_exe()
+        .context("finding the delegate executable; run the installed binary")?;
+    if !executable.is_absolute() {
+        bail!("finding the delegate executable; the path is not absolute");
+    }
+    let executable = executable
+        .to_str()
+        .context("finding the delegate executable; the path is not UTF-8")?;
+    let pane = open_beside(&target, &ctx.root, Path::new(executable))?;
+    println!("{pane}");
+    Ok(())
+}
+
+fn open_beside(target: &BesideTarget, cwd: &Path, executable: &Path) -> Result<String> {
+    let executable = executable
+        .to_str()
+        .context("the delegate executable path is not UTF-8")?;
+    let env = [
+        ("DELEGATE_LEAD_PANE", target.pane.clone()),
+        ("DELEGATE_BIN", executable.to_string()),
+    ];
+    let pane = origin::pane_split(&target.socket, &target.pane, cwd, &env)
+        .map_err(|error| anyhow!("Herdr refused to split the lead pane: {error}"))?;
+    if pane == target.pane {
+        bail!("Herdr split the lead pane but returned the same pane; no command was typed");
+    }
+    origin::pane_send_input(&target.socket, &pane, BESIDE_COMMAND, &["Enter"]).map_err(
+        |error| anyhow!("Herdr split the pane as {pane} but could not start the side pane: {error}"),
+    )?;
+    Ok(pane)
+}
+
+/// The `[ui.sidebar.agents]` layout that draws the reporter's four task rows.
+pub(crate) fn sidebar_config() -> String {
+    let rules = [
+        ("failed", "#f38ba8"),
+        ("blocked", "#f38ba8"),
+        ("interrupted", "#f38ba8"),
+        ("unavailable", "#f38ba8"),
+        ("stalled", "#f9e2af"),
+        ("ready", "#a6e3a1"),
+        ("running", "#89b4fa"),
+        ("checking", "#89b4fa"),
+    ];
+    let mut rule_text = String::new();
+    for (index, (state, colour)) in rules.iter().enumerate() {
+        if index > 0 {
+            rule_text.push_str(", ");
+        }
+        let _ = write!(
+            rule_text,
+            "{{ starts_with = \"{state}\", fg = \"{colour}\" }}"
+        );
+    }
+    let mut task_rows = String::new();
+    for key in &KEYS[..4] {
+        let _ = writeln!(
+            task_rows,
+            "    [{{ token = \"${key}\", rules = [{rule_text}] }}],"
+        );
+    }
+    task_rows.push_str("    [\"$dlg_more\"],\n");
+    format!(
+        "[ui.sidebar.agents]\n\
+         [ui.sidebar.agents.rows_by_agent]\n\
+         pi = [\n\
+         \x20   {DEFAULT_AGENT_ROWS}\n\
+         {task_rows}\
+         ]\n\
+         claude = [\n\
+         \x20   {DEFAULT_AGENT_ROWS}\n\
+         {task_rows}\
+         ]\n"
+    )
+}
+
+pub(crate) fn print_sidebar_config() {
+    println!(
+        "Paste this into Herdr's config.toml; delegate never writes it.\n\n{}",
+        sidebar_config()
+    );
 }
 
 struct Viewer {
@@ -109,22 +327,34 @@ struct Viewer {
     ttl: Duration,
     ttl_ms: u64,
     terminal: bool,
+    interactive: bool,
     width: usize,
     stop: Arc<AtomicBool>,
+    keys: Arc<Mutex<Vec<Key>>>,
     seq: u64,
     memory: HashMap<String, Memory>,
     lead: LeadState,
     tasks: Option<GoodTasks>,
     tasks_ok: bool,
+    selected: Option<Selection>,
+    expanded: Option<SelectionKey>,
+    vanished: Option<SelectionKey>,
+    detail: Option<DetailRead>,
+    detail_requested: Option<SelectionKey>,
+    detail_tx: Option<Sender<Option<SelectionKey>>>,
 }
 
 impl Viewer {
     fn report_loop(&mut self, receiver: &Receiver<Refresh>, output: &mut impl Write) -> Result<()> {
         let mut next_report = Instant::now();
+        let mut redraw = true;
         loop {
             loop {
                 match receiver.try_recv() {
-                    Ok(refresh) => self.apply(refresh),
+                    Ok(refresh) => {
+                        self.apply(refresh);
+                        redraw = redraw || self.interactive;
+                    }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         self.send(&cleared());
@@ -132,18 +362,17 @@ impl Viewer {
                     }
                 }
             }
+            if self.handle_keys() {
+                redraw = true;
+            }
             if self.stop.load(Ordering::SeqCst) {
                 self.send(&cleared());
                 return Ok(());
             }
             let now = Instant::now();
-            if now >= next_report {
+            let due = now >= next_report;
+            if due {
                 self.send(&self.tokens(now));
-                let frame = self.frame(now);
-                output
-                    .write_all(&frame)
-                    .context("writing watch output; check the terminal or output destination")?;
-                output.flush()?;
                 next_report = next_report
                     .checked_add(self.interval)
                     .unwrap_or_else(|| now + self.interval);
@@ -151,11 +380,22 @@ impl Viewer {
                     next_report = now + self.interval;
                 }
             }
+            if due || redraw {
+                let frame = self.frame(now);
+                output
+                    .write_all(&frame)
+                    .context("writing watch output; check the terminal or output destination")?;
+                output.flush()?;
+                redraw = false;
+            }
             let wait = next_report
                 .saturating_duration_since(Instant::now())
                 .min(Duration::from_millis(50));
             match receiver.recv_timeout(wait) {
-                Ok(refresh) => self.apply(refresh),
+                Ok(refresh) => {
+                    self.apply(refresh);
+                    redraw = redraw || self.interactive;
+                }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     self.send(&cleared());
@@ -163,6 +403,36 @@ impl Viewer {
                 }
             }
         }
+    }
+
+    fn handle_keys(&mut self) -> bool {
+        let mut keys = Vec::new();
+        if let Ok(mut pending) = self.keys.lock() {
+            std::mem::swap(&mut keys, &mut pending);
+        }
+        let mut redraw = false;
+        for key in keys {
+            match key {
+                Key::Up => {
+                    self.move_selection(false);
+                    redraw = true;
+                }
+                Key::Down => {
+                    self.move_selection(true);
+                    redraw = true;
+                }
+                Key::Enter => {
+                    self.toggle_expanded();
+                    redraw = true;
+                }
+                Key::Tab => {
+                    self.next_group();
+                    redraw = true;
+                }
+                Key::Quit => self.stop.store(true, Ordering::SeqCst),
+            }
+        }
+        redraw
     }
 
     fn apply(&mut self, refresh: Refresh) {
@@ -184,6 +454,9 @@ impl Viewer {
             }
             Err(_) => self.tasks_ok = false,
         }
+        self.detail = refresh.detail;
+        self.reconcile_selection();
+        self.sync_detail_request();
     }
 
     fn send(&mut self, tokens: &[Option<String>; 5]) {
@@ -239,7 +512,219 @@ impl Viewer {
         out
     }
 
-    fn frame(&self, now: Instant) -> Vec<u8> {
+    fn known_lead(&self) -> bool {
+        matches!(
+            &self.lead,
+            LeadState::Known(PaneLead::Supported(Origin::Supported { .. }))
+        )
+    }
+
+    fn key_of(&self, task: &TaskRead) -> SelectionKey {
+        SelectionKey::of(task, &self.memory)
+    }
+
+    fn nav_entries(&self) -> Vec<Selection> {
+        let mut entries = Vec::new();
+        if self.known_lead() {
+            for task in self.this_lead() {
+                entries.push(Selection::Task(self.key_of(task)));
+            }
+            for label in ["other leads", "Codex (unsupported)", "unknown lead"] {
+                entries.push(Selection::Group(label.into()));
+            }
+        } else {
+            for (label, tasks) in self.grouped() {
+                entries.push(Selection::Group(label));
+                for task in tasks {
+                    entries.push(Selection::Task(self.key_of(task)));
+                }
+            }
+        }
+        entries
+    }
+
+    fn selected_index(&self, entries: &[Selection]) -> Option<usize> {
+        entries
+            .iter()
+            .position(|entry| Some(entry) == self.selected.as_ref())
+    }
+
+    fn reconcile_selection(&mut self) {
+        let entries = self.nav_entries();
+        if entries.is_empty() {
+            if let Some(Selection::Task(key)) = &self.selected {
+                self.vanished = Some(key.clone());
+            }
+            self.expanded = None;
+            return;
+        }
+        match self.selected.clone() {
+            Some(Selection::Task(key)) => {
+                if entries
+                    .iter()
+                    .any(|entry| matches!(entry, Selection::Task(known) if known == &key))
+                {
+                    self.vanished = None;
+                } else {
+                    self.vanished = Some(key);
+                    self.expanded = None;
+                }
+            }
+            Some(Selection::Group(label)) => {
+                if !entries
+                    .iter()
+                    .any(|entry| matches!(entry, Selection::Group(known) if known == &label))
+                {
+                    self.selected = Some(entries[0].clone());
+                    self.vanished = None;
+                    self.expanded = None;
+                }
+            }
+            None => {
+                self.selected = Some(entries[0].clone());
+                self.vanished = None;
+            }
+        }
+        if let Some(expanded) = &self.expanded
+            && (self.vanished.is_some()
+                || !matches!(&self.selected, Some(Selection::Task(key)) if key == expanded)
+                || !self.task_is_view(expanded))
+        {
+            self.expanded = None;
+        }
+    }
+
+    fn move_selection(&mut self, down: bool) {
+        let entries = self.nav_entries();
+        if entries.is_empty() {
+            self.selected = None;
+            self.vanished = None;
+            self.expanded = None;
+            self.detail = None;
+            return;
+        }
+        let Some(index) = self.selected_index(&entries) else {
+            self.selected = Some(entries[0].clone());
+            self.vanished = None;
+            self.expanded = None;
+            self.detail = None;
+            return;
+        };
+        let next = if down {
+            (index + 1).min(entries.len() - 1)
+        } else {
+            index.saturating_sub(1)
+        };
+        self.selected = Some(entries[next].clone());
+        self.vanished = None;
+        self.expanded = None;
+        self.detail = None;
+    }
+
+    fn task(&self, key: &SelectionKey) -> Option<&TaskRead> {
+        let good = self.tasks.as_ref()?;
+        good.tasks
+            .iter()
+            .find(|task| self.key_of(task) == *key)
+    }
+
+    fn task_is_view(&self, key: &SelectionKey) -> bool {
+        matches!(self.task(key), Some(TaskRead::View { .. }))
+    }
+
+    fn toggle_expanded(&mut self) {
+        let Some(Selection::Task(key)) = self.selected.clone() else {
+            return;
+        };
+        if self.vanished.is_some() || !self.task_is_view(&key) {
+            self.expanded = None;
+            self.detail = None;
+            return;
+        }
+        self.expanded = if self.expanded.as_ref() == Some(&key) {
+            None
+        } else {
+            Some(key)
+        };
+        self.detail = None;
+    }
+
+    fn group_spans(&self) -> Vec<(usize, usize, Selection)> {
+        let mut spans = Vec::new();
+        if self.known_lead() {
+            let tasks = self.this_lead().len();
+            let entries = self.nav_entries();
+            if tasks > 0 {
+                spans.push((0, tasks - 1, entries[0].clone()));
+            }
+            for (offset, label) in ["other leads", "Codex (unsupported)", "unknown lead"]
+                .into_iter()
+                .enumerate()
+            {
+                let index = tasks + offset;
+                spans.push((index, index, Selection::Group(label.into())));
+            }
+        } else {
+            let mut index = 0;
+            for (label, tasks) in self.grouped() {
+                let last = index + tasks.len();
+                spans.push((index, last, Selection::Group(label)));
+                index = last + 1;
+            }
+        }
+        spans
+    }
+
+    fn next_group(&mut self) {
+        let entries = self.nav_entries();
+        let spans = self.group_spans();
+        if spans.is_empty() {
+            return;
+        }
+        let current = self
+            .selected_index(&entries)
+            .and_then(|index| spans.iter().position(|(first, last, _)| index >= *first && index <= *last));
+        let next = current.map_or(0, |index| (index + 1) % spans.len());
+        self.selected = Some(spans[next].2.clone());
+        self.vanished = None;
+        self.expanded = None;
+        self.detail = None;
+    }
+
+    fn sync_detail_request(&mut self) {
+        let desired = if self.vanished.is_none()
+            && let Some(Selection::Task(key)) = &self.selected
+            && let Some(expanded) = &self.expanded
+            && key == expanded
+            && self.task_is_view(key)
+        {
+            Some(key.clone())
+        } else {
+            None
+        };
+        if desired == self.detail_requested {
+            return;
+        }
+        self.detail_requested.clone_from(&desired);
+        if let Some(sender) = &self.detail_tx {
+            let _ = sender.send(desired);
+        }
+    }
+
+    fn detail_task(&self) -> Option<&TaskRead> {
+        let key = self.expanded.as_ref()?;
+        if self.vanished.as_ref() == Some(key) {
+            return None;
+        }
+        let detail = self.detail.as_ref()?;
+        if &detail.key != key {
+            return None;
+        }
+        let tasks = detail.tasks.as_ref().ok()?;
+        tasks.iter().find(|task| self.key_of(task) == *key)
+    }
+
+    fn plain_text(&self, now: Instant) -> String {
         let mut frame = String::new();
         push_line(&mut frame, &self.header(), self.width);
         push_line(
@@ -297,6 +782,15 @@ impl Viewer {
             ),
             self.width,
         );
+        frame
+    }
+
+    fn frame(&self, now: Instant) -> Vec<u8> {
+        let frame = if self.interactive {
+            self.interactive_text(now)
+        } else {
+            self.plain_text(now)
+        };
         let mut bytes = frame.into_bytes();
         if self.terminal {
             let mut redrawn = Vec::with_capacity(bytes.len() + 16);
@@ -311,6 +805,142 @@ impl Viewer {
             bytes = redrawn;
         }
         bytes
+    }
+
+    fn interactive_text(&self, now: Instant) -> String {
+        let mut frame = String::new();
+        push_line(&mut frame, &self.header(), self.width);
+        push_line(
+            &mut frame,
+            &format!("health · {}", self.health(now)),
+            self.width,
+        );
+        if let Some(key) = &self.vanished {
+            push_line(
+                &mut frame,
+                &format!("! task no longer available · {}", key.id),
+                self.width,
+            );
+        }
+        let lead_known = self.known_lead();
+        if self.tasks.is_none() {
+            push_line(
+                &mut frame,
+                "tasks unavailable; no successful read yet",
+                self.width,
+            );
+        } else if lead_known {
+            let this_lead = self.this_lead();
+            if this_lead.is_empty() {
+                push_line(&mut frame, "no tasks for this lead", self.width);
+            }
+            for task in &this_lead {
+                self.push_interactive_task(&mut frame, task);
+            }
+            let (other, codex, unknown, unknown_unavailable) = self.counts();
+            self.push_group(&mut frame, "other leads", other);
+            self.push_group(&mut frame, "Codex (unsupported)", codex);
+            self.push_group(&mut frame, "unknown lead", unknown);
+            if unknown_unavailable > 0 {
+                self.push_group(&mut frame, "unknown lead · unavailable", unknown_unavailable);
+            }
+        } else {
+            let groups = self.grouped();
+            if groups.is_empty() {
+                push_line(&mut frame, "no tasks", self.width);
+            }
+            for (label, tasks) in groups {
+                let line = self.marked(&Selection::Group(label.clone()), &label);
+                push_line(&mut frame, &line, self.width);
+                for task in tasks.iter().take(12) {
+                    self.push_interactive_task(&mut frame, task);
+                }
+                if tasks.len() > 12 {
+                    push_line(
+                        &mut frame,
+                        &format!("  … {} more", tasks.len() - 12),
+                        self.width,
+                    );
+                }
+            }
+        }
+        frame
+    }
+
+    fn push_interactive_task(&self, frame: &mut String, task: &TaskRead) {
+        let key = SelectionKey::of(task, &self.memory);
+        let line = self.marked(&Selection::Task(key.clone()), &row(task));
+        push_line(frame, &line, self.width);
+        self.push_activity(frame, task);
+        if self.vanished.is_none()
+            && self.expanded.as_ref() == Some(&key)
+            && let Some(detail) = self.detail_task()
+        {
+            self.push_detail(frame, detail);
+        } else if self.expanded.as_ref() == Some(&key) {
+            push_line(frame, "  activity: loading…", self.width);
+        }
+    }
+
+    fn push_group(&self, frame: &mut String, label: &str, count: usize) {
+        let line = self.marked(&Selection::Group(label.to_string()), &format!("{label} · {count}"));
+        push_line(frame, &line, self.width);
+    }
+
+    fn marked(&self, selection: &Selection, text: &str) -> String {
+        if self.selected.as_ref() == Some(selection) {
+            format!("> {text}")
+        } else {
+            format!("  {text}")
+        }
+    }
+
+    fn push_detail(&self, frame: &mut String, task: &TaskRead) {
+        match task {
+            TaskRead::Unavailable { reason, .. } => {
+                push_line(frame, &format!("  unavailable · {reason}"), self.width);
+            }
+            TaskRead::View { view, ready, .. } => {
+                push_line(
+                    frame,
+                    &format!("  worker · {}", view.worker.as_deref().unwrap_or("-")),
+                    self.width,
+                );
+                push_line(frame, &format!("  tier · {}", view.tier), self.width);
+                let readiness = match ready {
+                    Some(true) => "ready",
+                    Some(false) => "not ready",
+                    None => "unknown",
+                };
+                push_line(frame, &format!("  readiness · {readiness}"), self.width);
+                for file in &view.changed_files {
+                    push_line(
+                        frame,
+                        &format!("  file · {} +{} -{}", file.path, file.added, file.removed),
+                        self.width,
+                    );
+                }
+                if let Some(next) = &view.next {
+                    push_line(frame, &format!("  next · {next}"), self.width);
+                }
+                if view.steps.is_empty() {
+                    push_line(frame, "  No activity yet", self.width);
+                }
+                for step in &view.steps {
+                    push_line(
+                        frame,
+                        &format!(
+                            "  step · {}  {}  {}  {}",
+                            step["at"].as_str().and_then(|at| at.get(11..19)).unwrap_or("--:--:--"),
+                            step["kind"].as_str().unwrap_or(""),
+                            step["target"].as_str().unwrap_or(""),
+                            step["result"].as_str().unwrap_or("")
+                        ),
+                        self.width,
+                    );
+                }
+            }
+        }
     }
 
     fn push_activity(&self, frame: &mut String, task: &TaskRead) {
@@ -564,9 +1194,11 @@ fn spawn_reader(
     pane: String,
     ctx: Ctx,
     interval: Duration,
-) -> Receiver<Refresh> {
+) -> (Receiver<Refresh>, Sender<Option<SelectionKey>>) {
     let (sender, receiver) = mpsc::channel();
+    let (detail_sender, detail_receiver) = mpsc::channel();
     thread::spawn(move || {
+        let mut detail_key: Option<SelectionKey> = None;
         loop {
             let lead = socket.as_deref().map_or(LeadState::Unavailable, |socket| {
                 match origin::pane_lead(socket, &pane) {
@@ -583,39 +1215,71 @@ fn spawn_reader(
                 },
             )
             .map_err(|error| format!("{error:#}"));
+            let detail = detail_key.clone().and_then(|key| {
+                let selected = tasks.as_ref().is_ok_and(|tasks| {
+                    tasks.iter().any(|task| {
+                        matches!(task, TaskRead::View { view, .. } if SelectionKey::of_view(view) == key)
+                    })
+                });
+                selected.then(|| DetailRead {
+                    key: key.clone(),
+                    tasks: status::read_tasks(
+                        &ctx,
+                        Budget {
+                            steps: DETAIL_STEPS,
+                            ..Budget::default()
+                        },
+                    )
+                    .map_err(|error| format!("{error:#}")),
+                })
+            });
             let finished = Instant::now();
             if sender
                 .send(Refresh {
                     lead,
                     tasks,
+                    detail,
                     finished,
                 })
                 .is_err()
             {
                 return;
             }
-            thread::sleep(interval);
+            match detail_receiver.recv_timeout(interval) {
+                Ok(key) => detail_key = key,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+            while let Ok(key) = detail_receiver.try_recv() {
+                detail_key = key;
+            }
         }
     });
-    receiver
+    (receiver, detail_sender)
 }
 
-fn is_quit_key(byte: u8) -> bool {
-    byte == b'q' || byte == 0x03
-}
-
-fn spawn_key_reader(stop: Arc<AtomicBool>) {
+fn spawn_key_reader(stop: Arc<AtomicBool>, keys: Arc<Mutex<Vec<Key>>>) {
     thread::spawn(move || {
         let mut stdin = io::stdin();
+        let mut parser = KeyParser::default();
         let mut byte = [0_u8; 1];
         loop {
             match stdin.read(&mut byte) {
                 Ok(0) | Err(_) => return,
-                Ok(_) if is_quit_key(byte[0]) => {
-                    stop.store(true, Ordering::SeqCst);
-                    return;
+                Ok(_) => {
+                    let Some(key) = parser.push(byte[0]) else {
+                        continue;
+                    };
+                    if key == Key::Quit {
+                        stop.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    if let Ok(mut pending) = keys.lock()
+                        && pending.len() < 16
+                    {
+                        pending.push(key);
+                    }
                 }
-                Ok(_) => {}
             }
         }
     });
@@ -740,6 +1404,14 @@ mod tests {
                                 info["agent_session"] = identity;
                             }
                             json!({"id": id, "result": {"type": "pane_info", "pane": info}})
+                        } else if method == "pane.split" {
+                            json!({
+                                "id": id,
+                                "result": {
+                                    "type": "pane_info",
+                                    "pane": {"pane_id": "w1:p101", "workspace_id": "w1"}
+                                }
+                            })
                         } else {
                             json!({"id": id, "result": {"type": "ok"}})
                         };
@@ -854,13 +1526,21 @@ mod tests {
             ttl,
             ttl_ms: ttl_ms(ttl),
             terminal: false,
+            interactive: false,
             width: 100,
             stop: Arc::new(AtomicBool::new(false)),
+            keys: Arc::new(Mutex::new(Vec::new())),
             seq: 0,
             memory: HashMap::new(),
             lead,
             tasks,
             tasks_ok,
+            selected: None,
+            expanded: None,
+            vanished: None,
+            detail: None,
+            detail_requested: None,
+            detail_tx: None,
         }
     }
 
@@ -906,6 +1586,239 @@ mod tests {
             agent: "codex".into(),
         });
         assert_eq!(viewer.tokens(now), cleared());
+    }
+
+    fn key(id: &str) -> SelectionKey {
+        SelectionKey {
+            id: id.into(),
+            instance: Some(format!("{id}-instance")),
+        }
+    }
+
+    fn known_lead() -> LeadState {
+        LeadState::Known(PaneLead::Supported(supported(
+            "pi",
+            "/sessions/lead-a.jsonl",
+        )))
+    }
+
+    #[test]
+    fn keys_parse_arrows_enter_tab_and_quit() {
+        let mut parser = KeyParser::default();
+        for byte in [0x1b, b'['] {
+            assert_eq!(parser.push(byte), None);
+        }
+        assert_eq!(parser.push(b'A'), Some(Key::Up));
+        for byte in [0x1b, b'['] {
+            assert_eq!(parser.push(byte), None);
+        }
+        assert_eq!(parser.push(b'B'), Some(Key::Down));
+        assert_eq!(parser.push(b'\r'), Some(Key::Enter));
+        assert_eq!(parser.push(b'\t'), Some(Key::Tab));
+        assert_eq!(parser.push(b'q'), Some(Key::Quit));
+        assert_eq!(parser.push(0x03), Some(Key::Quit));
+    }
+
+    #[test]
+    fn selection_starts_on_the_first_row_then_moves_to_collapsed_groups() {
+        let now = Instant::now();
+        let lead = known_lead();
+        let tasks = vec![
+            view("t1", "implement", None, false),
+            view("t2", "done", Some("pass"), true),
+            view("t3", "not_started", None, false),
+        ];
+        let mut viewer = viewer(
+            None,
+            lead.clone(),
+            Some(GoodTasks { tasks, at: now }),
+            true,
+            Duration::from_secs(6),
+        );
+        viewer.reconcile_selection();
+        assert_eq!(viewer.selected, Some(Selection::Task(key("t2"))));
+        viewer.move_selection(true);
+        assert_eq!(viewer.selected, Some(Selection::Task(key("t1"))));
+        viewer.move_selection(true);
+        assert_eq!(viewer.selected, Some(Selection::Task(key("t3"))));
+        viewer.move_selection(true);
+        assert_eq!(viewer.selected, Some(Selection::Group("other leads".into())));
+        viewer.next_group();
+        assert_eq!(
+            viewer.selected,
+            Some(Selection::Group("Codex (unsupported)".into()))
+        );
+        viewer.next_group();
+        assert_eq!(viewer.selected, Some(Selection::Group("unknown lead".into())));
+        viewer.next_group();
+        assert_eq!(viewer.selected, Some(Selection::Task(key("t2"))));
+    }
+
+    #[test]
+    fn enter_expands_and_collapses_the_selected_task() {
+        let now = Instant::now();
+        let lead = known_lead();
+        let tasks = vec![view("t1", "implement", None, false)];
+        let mut viewer = viewer(
+            None,
+            lead,
+            Some(GoodTasks { tasks, at: now }),
+            true,
+            Duration::from_secs(6),
+        );
+        viewer.reconcile_selection();
+        let (sender, receiver) = mpsc::channel();
+        viewer.detail_tx = Some(sender);
+        viewer.toggle_expanded();
+        assert_eq!(viewer.expanded, Some(key("t1")));
+        viewer.sync_detail_request();
+        assert_eq!(receiver.try_recv().unwrap(), Some(key("t1")));
+        viewer.toggle_expanded();
+        assert_eq!(viewer.expanded, None);
+        viewer.sync_detail_request();
+        assert_eq!(receiver.try_recv().unwrap(), None);
+    }
+
+    #[test]
+    fn a_vanished_selection_is_not_replaced() {
+        let now = Instant::now();
+        let lead = known_lead();
+        let tasks = vec![
+            view("t1", "implement", None, false),
+            view("t2", "implement", None, false),
+        ];
+        let mut viewer = viewer(
+            None,
+            lead.clone(),
+            Some(GoodTasks { tasks, at: now }),
+            true,
+            Duration::from_secs(6),
+        );
+        viewer.reconcile_selection();
+        assert_eq!(viewer.selected, Some(Selection::Task(key("t1"))));
+        viewer.apply(Refresh {
+            lead,
+            tasks: Ok(vec![view("t2", "implement", None, false)]),
+            detail: None,
+            finished: now,
+        });
+        assert_eq!(viewer.vanished, Some(key("t1")));
+        assert_eq!(viewer.selected, Some(Selection::Task(key("t1"))));
+        viewer.interactive = true;
+        let frame = String::from_utf8(viewer.frame(now)).unwrap();
+        assert!(frame.contains("task no longer available"));
+        assert!(!frame.contains('\u{1b}'), "the frame carries terminal controls");
+    }
+
+    #[test]
+    fn beside_splits_the_lead_and_types_only_the_fixed_command() {
+        let fixture = fixture();
+        let target = BesideTarget {
+            socket: fixture.path.clone(),
+            pane: "w1:p1".into(),
+        };
+        let pane = open_beside(
+            &target,
+            Path::new("/tmp/checkout"),
+            Path::new("/opt/delegate/bin/delegate"),
+        )
+        .unwrap();
+        assert_eq!(pane, "w1:p101");
+        let requests = fixture.requests.lock().unwrap();
+        let split = requests
+            .iter()
+            .find(|request| request["method"] == "pane.split")
+            .unwrap();
+        let params = &split["params"];
+        assert_eq!(params["target_pane_id"], "w1:p1");
+        assert_eq!(params["direction"], "right");
+        assert_eq!(params["focus"], false);
+        assert_eq!(params["cwd"], "/tmp/checkout");
+        assert_eq!(params["env"]["DELEGATE_LEAD_PANE"], "w1:p1");
+        assert_eq!(params["env"]["DELEGATE_BIN"], "/opt/delegate/bin/delegate");
+        let inputs: Vec<&Value> = requests
+            .iter()
+            .filter(|request| request["method"] == "pane.send_input")
+            .collect();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0]["params"]["pane_id"], "w1:p101");
+        assert_eq!(inputs[0]["params"]["text"], BESIDE_COMMAND);
+        assert_eq!(inputs[0]["params"]["keys"], json!(["Enter"]));
+        assert!(
+            requests.iter().all(|request| request["method"] != "pane.send_input"
+                || request["params"]["pane_id"] != "w1:p1"),
+            "input reached the lead pane"
+        );
+    }
+
+    #[test]
+    fn beside_refuses_without_a_herdr_lead_pane() {
+        let socket = PathBuf::from("/tmp/herdr.sock");
+        let cases = [
+            origin::Env {
+                sandboxed: false,
+                socket: None,
+                pane_id: Some("w1:p1".into()),
+                claude_session: None,
+            },
+            origin::Env {
+                sandboxed: false,
+                socket: Some(socket.clone()),
+                pane_id: None,
+                claude_session: None,
+            },
+            origin::Env {
+                sandboxed: true,
+                socket: Some(socket.clone()),
+                pane_id: Some("w1:p1".into()),
+                claude_session: None,
+            },
+        ];
+        for env in cases {
+            let error = beside_target(&env).unwrap_err().to_string();
+            assert!(error.to_lowercase().contains("herdr"), "{error}");
+        }
+    }
+
+    #[test]
+    fn sidebar_config_parses_and_colours_state_first() {
+        let value: toml::Value = toml::from_str(&sidebar_config()).unwrap();
+        let agents = value["ui"]["sidebar"]["agents"]["rows_by_agent"]
+            .as_table()
+            .unwrap();
+        for agent in ["pi", "claude"] {
+            let rows = agents[agent].as_array().unwrap();
+            assert_eq!(rows[0].as_array().unwrap()[0].as_str(), Some("state_icon"));
+            assert_eq!(rows[1].as_array().unwrap()[0].as_str(), Some("agent"));
+            let tokens: Vec<&toml::Value> = rows
+                .iter()
+                .flat_map(|row| row.as_array().unwrap())
+                .collect();
+            for want in ["$dlg_t1", "$dlg_t2", "$dlg_t3", "$dlg_t4", "$dlg_more"] {
+                assert!(
+                    tokens.iter().any(|token| {
+                        token.as_str() == Some(want)
+                            || token.get("token").and_then(toml::Value::as_str) == Some(want)
+                    }),
+                    "{agent} lacks {want}"
+                );
+            }
+            for token in tokens {
+                let Some(table) = token.as_table() else {
+                    continue;
+                };
+                let Some(rules) = table.get("rules").and_then(toml::Value::as_array) else {
+                    continue;
+                };
+                for rule in rules {
+                    let rule = rule.as_table().unwrap();
+                    assert_eq!(
+                        rule.keys().filter(|key| *key != "fg").collect::<Vec<_>>(),
+                        vec!["starts_with"]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -966,6 +1879,7 @@ mod tests {
         viewer.apply(Refresh {
             lead: lead.clone(),
             tasks: Ok(vec![task]),
+            detail: None,
             finished: now,
         });
         assert_eq!(viewer.tokens(now)[0].as_deref(), Some("running · t1"));
@@ -976,6 +1890,7 @@ mod tests {
                 id: "t1".into(),
                 reason: "bad STATE.json".into(),
             }]),
+            detail: None,
             finished: now,
         });
         assert_eq!(viewer.tokens(now)[0].as_deref(), Some("unavailable · t1"));
@@ -988,6 +1903,7 @@ mod tests {
         viewer.apply(Refresh {
             lead: lead.clone(),
             tasks: Ok(vec![reused]),
+            detail: None,
             finished: now,
         });
         assert_eq!(
@@ -1000,6 +1916,7 @@ mod tests {
         viewer.apply(Refresh {
             lead,
             tasks: Ok(Vec::new()),
+            detail: None,
             finished: now,
         });
         assert!(viewer.memory.is_empty(), "memory is dropped with the listing");
@@ -1121,10 +2038,11 @@ mod tests {
 
     #[test]
     fn every_exit_trigger_shares_one_flag_and_has_a_final_clear() {
-        assert!(is_quit_key(b'q'));
-        assert!(is_quit_key(0x03));
-        assert!(!is_quit_key(b'Q'));
-        assert!(!is_quit_key(b'x'));
+        let mut parser = KeyParser::default();
+        assert_eq!(parser.push(b'q'), Some(Key::Quit));
+        assert_eq!(parser.push(0x03), Some(Key::Quit));
+        assert_eq!(parser.push(b'Q'), None);
+        assert_eq!(parser.push(b'x'), None);
 
         let fixture = fixture();
         let (sender, receiver) = mpsc::channel();
@@ -1205,7 +2123,7 @@ mod tests {
         assert!(cut(&"x".repeat(100), 10).ends_with('…'));
     }
 
-    fn signal_test_ctx(root: &std::path::Path) -> Ctx {
+    fn signal_test_ctx(root: &Path) -> Ctx {
         Ctx {
             root: root.join("repo"),
             dhome: root.join("tasks"),

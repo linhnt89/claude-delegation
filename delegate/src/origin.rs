@@ -226,6 +226,69 @@ pub(crate) fn report_metadata(
     Ok(())
 }
 
+/// Split a pane to the right, leaving focus where it is. Returns the new pane id.
+pub(crate) fn pane_split(
+    socket: &Path,
+    target_pane_id: &str,
+    cwd: &Path,
+    env: &[(&str, String)],
+) -> Result<String, &'static str> {
+    if !valid_pane_id(target_pane_id) {
+        return Err("invalid Herdr pane id");
+    }
+    let cwd = cwd.to_str().ok_or("the checkout path is not UTF-8")?;
+    if !valid_text(cwd) {
+        return Err("the checkout path is unsafe");
+    }
+    let mut variables = serde_json::Map::new();
+    for (key, value) in env {
+        if !valid_text(key) || !valid_text(value) {
+            return Err("invalid pane environment");
+        }
+        variables.insert((*key).into(), Value::String(value.clone()));
+    }
+    let params = json!({
+        "target_pane_id": target_pane_id,
+        "direction": "right",
+        "focus": false,
+        "cwd": cwd,
+        "env": Value::Object(variables),
+    });
+    let value = exchange(socket, "pane.split", &params)?;
+    let result = &value["result"];
+    if result.get("type").and_then(Value::as_str) != Some("pane_info") {
+        return Err("Herdr did not return pane_info");
+    }
+    let pane = result["pane"]["pane_id"]
+        .as_str()
+        .ok_or("Herdr returned no pane id")?;
+    if !valid_pane_id(pane) {
+        return Err("Herdr returned an invalid pane id");
+    }
+    Ok(pane.to_string())
+}
+
+/// Type text and key presses into one pane. Callers never aim this at the lead pane.
+pub(crate) fn pane_send_input(
+    socket: &Path,
+    pane: &str,
+    text: &str,
+    keys: &[&str],
+) -> Result<(), &'static str> {
+    if !valid_pane_id(pane) {
+        return Err("invalid Herdr pane id");
+    }
+    if !valid_text(text) || keys.iter().any(|key| !valid_text(key)) {
+        return Err("invalid pane input");
+    }
+    let params = json!({"pane_id": pane, "text": text, "keys": keys});
+    let value = exchange(socket, "pane.send_input", &params)?;
+    if value["result"]["type"].as_str() != Some("ok") {
+        return Err("Herdr did not acknowledge the input");
+    }
+    Ok(())
+}
+
 fn exchange(socket: &Path, method: &str, params: &Value) -> Result<Value, &'static str> {
     if !socket.is_absolute() {
         return Err("Herdr socket path is not absolute");
@@ -424,6 +487,10 @@ fn valid_text(text: &str) -> bool {
     !text.is_empty()
         && text.chars().count() <= MAX_FIELD_CHARS
         && !text.chars().any(forbidden_identity_char)
+}
+
+fn valid_pane_id(pane: &str) -> bool {
+    valid_text(pane)
 }
 
 fn forbidden_identity_char(c: char) -> bool {
