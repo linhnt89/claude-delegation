@@ -29,6 +29,10 @@ Captured methods/fields:
 - pane.get: `{pane_id}`, result.type pane_info, result.pane.agent_session contains
   qualified identity when present. Absent or null agent_session on a successful,
   correctly bound pane response is explicit unknown; malformed identity is error.
+- workspace.close `{workspace_id:<returned actual id>,close_group:false}` returns
+  correlated result `{type:"ok"}`, NOT workspace_closed. A separate fresh lead
+  private-Herdr-only capture confirmed it; pinned handle_workspace_close source
+  agrees. No model turn/auth in that capture; owned server terminated/reaped.
 - pane.send_keys `{pane_id,keys:["C-c"]}` for cancellation. A_exit requires observed
   actual TUI child exit and shell return, not a successful send-keys acknowledgement.
 
@@ -127,6 +131,12 @@ subreaper before spawning any child; adopted descendants can be enumerated/reape
 without inspecting arbitrary personal process environments. The independent review
 and all lead corrections are in codex-s146-split-review.md. Resource primitives are
 extracted to t138; it follows t133, then t131 assembles merged components.
+
+ProcessHandle requires the active module-owned Subreaper and verified same-uid,
+stable descendant membership BEFORE any environ/argv read. No active owner or no
+membership fails closed. Subreaper creation rejects preexisting children; standalone
+live driver starts with none. This closes the constructor's ownership precondition
+without accepting caller-supplied owner assertions.
 
 Workers use offline synthetic processes/loopback only, NOT real binaries, profile
 provisioning, personal data or sandbox escape. Lead runs reviewed unchanged driver

@@ -104,3 +104,20 @@ subprocess integration tests have short hard deadlines; full module suite target
 <5s normal, no timing correctness assertion against loaded-machine wall time.
 No live S146 verdict claimed. Stop for contract ambiguity. Runner commits; report
 family/tests/limits/doc conflicts, no raw private evidence.
+
+## Answers
+1. Lead captured actual pinned Herdr workspace.close now: request params
+   `{workspace_id: <actual returned id>, close_group: false}`; success result is
+   exactly `{type: 'ok'}`, correlated by envelope id, with no echoed workspace field.
+   Error envelope is failure. Fixture: herdr-api.json.workspace_close. Source agrees:
+   pinned src/app/api/workspaces.rs handle_workspace_close encodes ResponseResult::Ok.
+   Never infer a workspace_closed RPC result from its separate event name.
+2. Require ONE active module-tracked Subreaper before ProcessHandle construction.
+   Constructor Subreaper fails closed if any preexisting children exist (baseline
+   standalone driver has none), rather than trying to adopt unrelated harness work.
+   ProcessHandle must find PID in that active owner's verified descendant set before
+   reading environ/argv. Membership requires same uid and stable parent/start chain;
+   detached children reparented to this subreaper remain owned. No active Subreaper
+   or no verified membership => ResourceError before env access. No constructor API
+   argument change or caller-provided ownership assertion. Test this in isolated
+   synthetic child processes; no arbitrary personal environ scanning.

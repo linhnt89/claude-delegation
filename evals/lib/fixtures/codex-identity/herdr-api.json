@@ -8,5 +8,6 @@
   "hook_review":{"type":"pane_read","read":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","source":"visible","format":"text","text":"\n  Hooks need review\n  1 hook is new or changed.\n  Hooks can run outside the sandbox after you trust them.\n\n\n› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n\n  enter confirm · esc skip\n","revision":0,"truncated":false}},
   "hook_review_read_params":{"pane_id":"w1:p1","source":"visible","strip_ansi":true},
   "hook_review_approval_params":{"pane_id":"w1:p1","text":"2","keys":["Enter"]},
-  "qualified_identity_projection":{"agent":"codex","kind":"id","source":"herdr:codex","value":"thread-A"}
+  "qualified_identity_projection":{"agent":"codex","kind":"id","source":"herdr:codex","value":"thread-A"},
+  "workspace_close":{"request":{"id":"close","method":"workspace.close","params":{"workspace_id":"w1","close_group":false}},"response":{"id":"close","result":{"type":"ok"}}}
 }
