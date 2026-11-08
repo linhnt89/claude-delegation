@@ -1,7 +1,7 @@
 # 039: The side pane may use signal-hook, isolates unreadable tasks, and ships in two tasks
 
 - Date: 2026-11-04
-- Status: accepted
+- Status: accepted; parked by 040
 
 <!-- Append-only. Never edit an accepted decision's substance: write a new one that
      supersedes it, and update only this Status line. Keep it under a page. -->

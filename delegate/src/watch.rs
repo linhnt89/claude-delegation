@@ -26,7 +26,7 @@ pub fn run(ctx: &Ctx, id: Option<&str>, interval: f64) -> Result<()> {
     }
 }
 
-pub(crate) fn refresh_interval(seconds: f64) -> Result<Duration> {
+fn refresh_interval(seconds: f64) -> Result<Duration> {
     let interval = Duration::try_from_secs_f64(seconds)
         .context("invalid watch interval; use a finite positive number of seconds")?;
     if interval.is_zero() {
@@ -74,8 +74,6 @@ mod tests {
             goal: String::new(),
             session: None,
             session_name: "by hand".into(),
-            origin: None,
-            instance: None,
             phase: "interrupted".into(),
             outcome: None,
             worker: Some("pi:test".into()),

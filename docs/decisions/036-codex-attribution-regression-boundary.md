@@ -1,7 +1,7 @@
 # 036: Codex attribution regression boundaries
 
 - Date: 2026-11-04
-- Status: accepted
+- Status: accepted; parked by 040
 
 ## Context
 Real Codex 0.166.0 conversations sharing a managed app-server reproduced a stale

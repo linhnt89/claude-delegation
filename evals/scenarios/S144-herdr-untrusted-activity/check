@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' 'HUMAN WALKTHROUGH — use an isolated Herdr session, never production conversations.'
-python3 -c 'import os, pathlib; print((pathlib.Path(os.environ["EVALS_SCENARIO"]) / "scenario.md").read_text())'
-printf '%s\n' 'Needs human validation against the real observer; printed instructions are not a product pass.'
-exit 2

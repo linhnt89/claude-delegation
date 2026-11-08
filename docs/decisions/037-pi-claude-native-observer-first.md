@@ -1,7 +1,7 @@
 # 037: Build the bounded Pi/Claude native observer before Codex support
 
 - Date: 2026-11-04
-- Status: accepted; amended by 038 (real tasks, no Sheprd patch)
+- Status: accepted; amended by 038 (real tasks, no Sheprd patch); parked by 040
 
 ## Context
 The goal in decision 035 is a native task dashboard beside the lead conversation,

@@ -1,7 +1,7 @@
 # 035: Observe delegated tasks in Herdr, grouped by lead session
 
 - Date: 2026-11-04
-- Status: accepted
+- Status: accepted; parked by 040
 
 ## Context
 The kit supports leads using different models and harnesses. Users running those

@@ -913,9 +913,9 @@
     }
   },
   {
-    "id": "590672a569b0",
+    "id": "e01bdc769597",
     "files": {
-      ".agents/skills/delegate/SKILL.md": "191cb4dc1666c2bec1b0dfe2977680b150ca395ac820e1d74715d321c31d83a3",
+      ".agents/skills/delegate/SKILL.md": "c7cacacd9ce24e8a03b40ed360b466c38216b76322f6ed1fdac65156e8b44cf7",
       ".agents/skills/distill/SKILL.md": "bc2e6187774a8c845198968d615d270726d16d00480b1e7f736023175b4d2b2d",
       ".agents/skills/evaluate/SKILL.md": "f72a732c723c2d63001a34cb8096d9a23a7ec030bf496080427ee8c466d29683",
       ".claude/skills/delegate": "6173f7fec1e45f3544dc363727022a1e45b0dab855c9a41567cbb05ed16176df",
@@ -945,9 +945,9 @@
     }
   },
   {
-    "id": "e01bdc769597",
+    "id": "590672a569b0",
     "files": {
-      ".agents/skills/delegate/SKILL.md": "c7cacacd9ce24e8a03b40ed360b466c38216b76322f6ed1fdac65156e8b44cf7",
+      ".agents/skills/delegate/SKILL.md": "191cb4dc1666c2bec1b0dfe2977680b150ca395ac820e1d74715d321c31d83a3",
       ".agents/skills/distill/SKILL.md": "bc2e6187774a8c845198968d615d270726d16d00480b1e7f736023175b4d2b2d",
       ".agents/skills/evaluate/SKILL.md": "f72a732c723c2d63001a34cb8096d9a23a7ec030bf496080427ee8c466d29683",
       ".claude/skills/delegate": "6173f7fec1e45f3544dc363727022a1e45b0dab855c9a41567cbb05ed16176df",

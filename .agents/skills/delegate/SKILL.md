@@ -118,18 +118,6 @@ For the user: `delegate watch` in a terminal, and the `/delegate-pane` mod (inst
 `delegate init`): a row above the prompt with every session's counts, and a side pane that
 opens when they ask. Both show the same status live.
 
-### Watch beside the lead (Herdr)
-When the user leads from Pi or Claude inside Herdr:
-
-- Run `delegate watch --beside` from the lead's pane. It opens a read-only pane to the
-  right; `↑`/`↓` select a task, `enter` expands its steps, worker, tier, changed files
-  and next action, `tab` moves to the next group, and `q` quits.
-- Run `delegate watch --sidebar-config` once and paste the printed `[ui.sidebar.agents]`
-  table into Herdr's `config.toml`. Delegate never writes that file.
-- The sidebar rows read `<state> · <id>` in attention order, at most four, then
-  `+N more`. Clicking a row focuses the lead, not the task, and rows exist only while
-  the side pane runs.
-
 ## 5. Review
 Run `delegate review <id>` when the risk calls for it: `deep` tasks, public API or schema
 changes, anything a `.delegate.toml` rule marks `review = "always"`, or when your own look

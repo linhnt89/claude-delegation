@@ -4,10 +4,8 @@ mod checkout;
 mod commands;
 mod config;
 mod harness;
-mod herdr_view;
 mod init;
 mod migration;
-mod origin;
 mod prompts;
 mod quota;
 mod setup;
@@ -149,21 +147,6 @@ enum Cmd {
         id: Option<String>,
         #[arg(long, default_value_t = 2.0)]
         interval: f64,
-        /// Report this lead pane's tasks as Herdr sidebar tokens (Pi/Claude only)
-        #[arg(long, value_name = "PANE", conflicts_with = "id")]
-        lead_pane: Option<String>,
-        /// Open a side pane to the right of this Herdr lead pane
-        #[arg(
-            long,
-            conflicts_with_all = ["id", "lead_pane", "sidebar_config"]
-        )]
-        beside: bool,
-        /// Print the Herdr sidebar layout that draws this lead's task rows
-        #[arg(
-            long,
-            conflicts_with_all = ["id", "lead_pane", "beside"]
-        )]
-        sidebar_config: bool,
     },
     /// Claude Code status line: one line of running tasks on stdin's project
     Statusline,
@@ -202,15 +185,6 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
     if let Cmd::Quota { json } = &cmd {
         commands::quota(*json)?;
         return Ok(ExitCode::SUCCESS);
-    }
-    // The sidebar layout is static: it needs no checkout, and must work before setup.
-    if matches!(&cmd, Cmd::Watch { sidebar_config: true, .. }) {
-        herdr_view::print_sidebar_config();
-        return Ok(ExitCode::SUCCESS);
-    }
-    // Refuse --beside before checkout discovery so its message names the real problem.
-    if matches!(&cmd, Cmd::Watch { beside: true, .. }) {
-        herdr_view::check_beside_environment()?;
     }
     // Inside the worker sandbox nothing of the vault is read, synced or named: one gate here.
     let sandboxed = vault::sandboxed();
@@ -340,24 +314,7 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode> {
             dry_run,
         ),
         Cmd::Status { id, json } => status::run(&ctx, id.as_deref(), json),
-        Cmd::Watch {
-            id,
-            interval,
-            lead_pane,
-            beside,
-            sidebar_config,
-        } => {
-            if sidebar_config {
-                herdr_view::print_sidebar_config();
-                Ok(())
-            } else if beside {
-                herdr_view::run_beside(&ctx)
-            } else if let Some(pane) = lead_pane {
-                herdr_view::run(&ctx, &pane, interval)
-            } else {
-                watch::run(&ctx, id.as_deref(), interval)
-            }
-        }
+        Cmd::Watch { id, interval } => watch::run(&ctx, id.as_deref(), interval),
         Cmd::List => commands::list(&ctx, !sandboxed),
         Cmd::Merge {
             id,

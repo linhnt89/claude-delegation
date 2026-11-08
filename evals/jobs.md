@@ -34,45 +34,11 @@ Small personal repos and work codebases alike. Two kinds of user drive `delegate
 - A retry after failed checks gets a stronger model, and the runner hands it the failing
   check output (decision 001). Fails today; planned as t003.
 
-## Herdr observer evaluation (decision 035)
-- User approved S137–S144 for J8 on 2026-11-04: model-neutral conversation attribution,
-  task selection preserving the lead, retries, read-only lifecycle, reconnect, identity
-  boundaries, task-id reuse, and untrusted activity.
-- Their executable checks print human walkthroughs and exit 2. They are not automated
-  product verdicts; an isolated real observer is still needed for validation.
-- User approved derived properties P030–P033 on 2026-11-04. No property checks or hidden
-  observer scenarios exist yet; production identity fallback and retention remain open.
-- User approved S145 and proceeding through checks/investigation on 2026-11-04.
-  It covers the lead-reproduced Codex shared-daemon wrong-pane identity report.
-  Its opt-in live check is pending: t129's draft reproduced the failure in lead-run
-  live tests but was discarded after safety/oracle review. No accepted automated
-  check exists; exploratory evidence is not feature acceptance.
-- User approved S146 on 2026-11-04: credential-free sibling using real Codex/Herdr,
-  genuine SessionStart hooks and one shared daemon, with only model replies stubbed
-  locally. Exploratory probes reproduce the wrong-pane report without credentials;
-  pure oracle, preparation/stub and evidence readers are merged after independent
-  review (193 infrastructure tests on main). No live scenario check or accepted
-  automated verdict exists. S146 does not replace authenticated S145 or
-  concurrent/resume/native acceptance.
-- User approved decision 037: prioritize a bounded Pi/Claude native observer and
-  defer Codex check/remedy work. Codex attribution is unsupported/unknown, never
-  guessed. S137–S146/P030–P033 intent is unchanged; reduced-harness evidence must
-  not be reported as full observer/property acceptance. Map native-slice checks
-  explicitly during t124 scoping.
-- User approved decision 038 and S147/S148 on 2026-11-04: `delegate new` records the
-  Herdr lead's origin (Pi/Claude supported, Codex unsupported, workers get no `HERDR_*`),
-  and a `delegate watch --beside` side pane puts only its lead's tasks in the sidebar,
-  clearing them on a conversation change. Their approved failure paths became S149/S150
-  (same wording) and are hidden. All four checks use the stand-in Herdr socket
-  (`evals/lib/herdr_standin.py`, modelled on the lead's private probe). They fail until
-  t139/t124 are built. The lead validated the S148/S150 checks against a throwaway
-  contract-following fake, and against broken variants that the checks rejected.
-- Decision 039 (user's choice after plan review): unreadable tasks are isolated, so hidden
-  S150 now also expects `unavailable · <id>`, and makes its outage an unlistable task store.
-- User approved S151 (t140) on 2026-11-04: `--beside` launch, keyboard inspection, inert
-  task text, terminal restore, sidebar snippet. Its launch bullet was reworded to match
-  Herdr 0.9.5 (a fixed typed command; paths go through the split's cwd and env).
-  Checks never reach the lead's real Herdr: `common.sh` unsets every `HERDR_*`.
+## Herdr observer evaluation (parked by decision 040)
+S137–S148, S151, hidden S149/S150 and properties P030–P033 were approved for the
+Herdr/Sheprd observer and side pane, then parked with that work. They live under the
+`archive/herdr-sheprd` tag (hidden ones in the vault's history); see
+`docs/parked/herdr-sheprd.md` before bringing any back.
 
 ## Hidden
 <!-- Ids only; content lives in <repo>.delegate/_evals/hidden/scenarios/. -->
@@ -89,3 +55,4 @@ Added for decision 031 (new feature: fails until built): J6 P028.
 Added for decisions 032, 033 (new feature: fails until built): J1 P029.
 Added for decision 034 (new feature: fails until built): J1 S136.
 Added for decision 038 (new feature: fails until built): J8 S149 S150.
+Retired by decision 040 (in git history, out of the vault): J8 S149 S150.

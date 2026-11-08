@@ -48,7 +48,7 @@ unset DELEGATE_HOME DELEGATE_WORKERS DELEGATE_SANDBOX DELEGATE_SANDBOXED XDG_DAT
 # Nothing a check starts (delegate, workers, a Claude under test) may find the hidden set
 # or write into this run's results.
 unset EVALS_HIDDEN EVALS_RESULTS
-# Nor may anything reach the Herdr session the lead runs in: checks use evals/lib/herdr.sh.
+# Nor may anything reach the Herdr session the lead runs in.
 for v in $(compgen -e | grep '^HERDR_'); do unset "$v"; done
 export GIT_AUTHOR_NAME=Eval GIT_AUTHOR_EMAIL=eval@example.test
 export GIT_COMMITTER_NAME=Eval GIT_COMMITTER_EMAIL=eval@example.test

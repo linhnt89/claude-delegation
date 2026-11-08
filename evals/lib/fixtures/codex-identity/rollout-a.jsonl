@@ -1,5 +1,0 @@
-{"timestamp":"2026-11-04T05:59:39.728Z","type":"session_meta","payload":{"session_id":"thread-A","id":"thread-A","timestamp":"2026-11-04T05:59:39.708Z","cwd":"/RUN/checkout","cli_version":"0.166.0","model_provider":"local"}}
-{"timestamp":"2026-11-04T05:59:39.728Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-A","root_turn_id":"turn-A","started_at":1793771979}}
-{"timestamp":"2026-11-04T05:59:39.759Z","type":"response_item","payload":{"type":"message","id":"user-message-A","role":"user","content":[{"type":"input_text","text":"Reply with LOCAL_STUB_OK. Do not use tools."}]}}
-{"timestamp":"2026-11-04T05:59:39.772Z","type":"response_item","payload":{"type":"message","id":"assistant-message-A","role":"assistant","content":[{"type":"output_text","text":"LOCAL_STUB_OK"}]}}
-{"timestamp":"2026-11-04T05:59:39.776Z","type":"event_msg","payload":{"type":"task_complete","root_turn_id":"turn-A","turn_id":"turn-A","last_agent_message":"LOCAL_STUB_OK","started_at":1793771979,"completed_at":1793771979}}
